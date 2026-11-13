@@ -2,7 +2,7 @@ const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
-const { randomUUID, timingSafeEqual } = require('node:crypto');
+const { randomUUID, randomBytes, timingSafeEqual } = require('node:crypto');
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
@@ -35,12 +35,25 @@ try {
 }
 
 const PORT = Number(process.env.PORT) || 8000;
-const JWT_SECRET = process.env.JWT_SECRET || 'velosupply-development-secret-change-me';
-if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
-  throw new Error('JWT_SECRET must be set in production');
+const generatedDefaults = {};
+if (!process.env.JWT_SECRET) {
+  if (process.env.NODE_ENV === 'production') throw new Error('JWT_SECRET must be set in production');
+  process.env.JWT_SECRET = randomBytes(32).toString('base64url');
+  generatedDefaults.JWT_SECRET = process.env.JWT_SECRET;
 }
-if (process.env.NODE_ENV === 'production' && !process.env.CORS_ORIGIN) {
-  throw new Error('CORS_ORIGIN must be set in production');
+if (!process.env.CORS_ORIGIN) {
+  if (process.env.NODE_ENV === 'production') throw new Error('CORS_ORIGIN must be set in production');
+  process.env.CORS_ORIGIN = 'http://localhost:5173';
+  generatedDefaults.CORS_ORIGIN = process.env.CORS_ORIGIN;
+}
+const JWT_SECRET = process.env.JWT_SECRET;
+if (Object.keys(generatedDefaults).length) {
+  process.stdout.write(JSON.stringify({
+    ts: new Date().toISOString(),
+    level: 'WARN',
+    msg: 'Generated development defaults. Save these values in backend/.env to keep sessions stable across restarts.',
+    defaults: generatedDefaults
+  }) + '\n');
 }
 
 const app = express();
@@ -631,11 +644,21 @@ app.post('/api/simulation/trigger', requireRoles('admin', 'operator'), validate(
 }));
 
 app.use((_req, res) => res.status(404).json({ error: 'Route not found' }));
-app.use((error, _req, res, _next) => {
-  console.error(`[api-error] ${error.stack || error.message}`);
+app.use((error, req, res, _next) => {
   const status = error instanceof SyntaxError && error.status === 400
     ? 400
     : Number.isInteger(error.status) && error.status >= 400 && error.status < 600 ? error.status : 500;
+  process.stdout.write(JSON.stringify({
+    ts: new Date().toISOString(),
+    level: status >= 500 ? 'ERROR' : 'WARN',
+    msg: 'API request failed',
+    route: req.originalUrl?.split('?')[0] || req.path,
+    status,
+    userId: req.user?.id || null,
+    reqId: req.requestId || null,
+    error: status === 500 ? undefined : error.message,
+    ...(status === 500 && process.env.NODE_ENV !== 'production' ? { details: error.message } : {})
+  }) + '\\n');
   res.status(status).json({
     error: status === 500 ? 'Internal server error' : error.message,
     ...(status === 500 && process.env.NODE_ENV !== 'production' ? { details: error.message } : {})
