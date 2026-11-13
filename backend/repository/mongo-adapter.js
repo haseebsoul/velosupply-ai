@@ -1,5 +1,7 @@
 'use strict';
 
+const { AsyncLocalStorage } = require('node:async_hooks');
+const { randomUUID } = require('node:crypto');
 const {
   COLLECTION_NAMES,
   INDEXES,
@@ -53,6 +55,7 @@ class MongoAdapter {
     this.client = options.client;
     this.database = options.database;
     this.legacyCollectionName = options.legacyCollectionName || 'application_state';
+    this.transactionContext = new AsyncLocalStorage();
     this.lastCollectionJson = new Map();
     this.lastMetadataJson = null;
     this.migration = null;
@@ -76,7 +79,7 @@ class MongoAdapter {
     try {
       let result;
       await session.withTransaction(async () => {
-        result = await callback({ session, repository: this });
+        result = await this.transactionContext.run(session, () => callback({ session, repository: this }));
       });
       return result;
     } finally {
@@ -203,14 +206,20 @@ class MongoAdapter {
     this.lastMetadataJson = metadataJson;
   }
 
+  transactionOptions(options = {}) {
+    const session = options.session || this.transactionContext.getStore();
+    return session ? { ...options, session } : options;
+  }
+
   async findById(name, id, options = {}) {
-    const document = await this.collection(name).findOne({ _id: String(id) }, { session: options.session });
+    const document = await this.collection(name).findOne({ _id: String(id) }, this.transactionOptions(options));
     return document ? fromMongoDocument(name, document) : null;
   }
 
   async find(name, filter = {}, options = {}) {
     const findOptions = {};
-    if (options.session) findOptions.session = options.session;
+    const effectiveOptions = this.transactionOptions(options);
+    if (effectiveOptions.session) findOptions.session = effectiveOptions.session;
     if (options.projection) findOptions.projection = options.projection;
     let cursor = this.collection(name).find(filter, findOptions);
     if (options.sort) cursor = cursor.sort(options.sort);
@@ -222,7 +231,8 @@ class MongoAdapter {
 
   async insert(name, record, options = {}) {
     const document = toMongoDocument(name, record);
-    await this.collection(name).insertOne(document, { session: options.session });
+    if (!document.id) document.id = String(document._id);
+    await this.collection(name).insertOne(document, this.transactionOptions(options));
     return fromMongoDocument(name, document);
   }
 
@@ -232,18 +242,18 @@ class MongoAdapter {
     await this.collection(name).updateOne(
       { _id: String(id) },
       { $set: cleanChanges, $setOnInsert: { _id: String(id) } },
-      { upsert: Boolean(options.upsert), session: options.session }
+      { upsert: Boolean(options.upsert), ...this.transactionOptions(options) }
     );
     return this.findById(name, id, options);
   }
 
   async remove(name, id, options = {}) {
-    const result = await this.collection(name).deleteOne({ _id: String(id) }, { session: options.session });
+    const result = await this.collection(name).deleteOne({ _id: String(id) }, this.transactionOptions(options));
     return result.deletedCount || 0;
   }
 
   async count(name, filter = {}, options = {}) {
-    return this.collection(name).countDocuments(filter, { session: options.session });
+    return this.collection(name).countDocuments(filter, this.transactionOptions(options));
   }
 }
 
