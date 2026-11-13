@@ -516,7 +516,7 @@ function tickTelemetry() {
 server.on('upgrade', (request, socket, head) => {
   const origin = request.headers.origin;
   if (origin && !allowedOrigins.has(origin)) {
-    socket.write('HTTP/1.1 403 Forbidden\\r\\n\\r\\n');
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
     socket.destroy();
     return;
   }
