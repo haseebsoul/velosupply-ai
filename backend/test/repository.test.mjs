@@ -211,10 +211,10 @@ describe('collection repository adapters', () => {
     const database = new FakeDatabase();
     const legacyState = {
       schemaVersion: 2, dataMode: 'production',
-      users: [{ id: 'USER-1', email: 'legacy@example.com', passwordHash: '$2b$hash' }],
+      users: [{ id: 'USER-1', email: 'legacy@example.com', role: 'user', passwordHash: '$2b$hash' }],
       products: [{ id: 'PROD-1', sku: 'SKU-1', stock: 7, warehouse_hub: 'HUB-1' }],
-      warehouses: [{ id: 'HUB-1', name: 'Hub 1' }],
-      orders: [], logs: [], newsletter: [], rewardClaims: [],
+      warehouses: [{ id: 'HUB-1', code: 'HUB-1', name: 'Hub 1' }],
+      orders: [{ id: 'ORD-1', buyerId: 'USER-1', items: [{ productId: 'PROD-1', quantity: 2 }] }], logs: [], newsletter: [], rewardClaims: [],
       metrics: { efficiencyScore: 0 }, telemetry: { tick: 0 }
     };
     database.collection('application_state').documents.set('primary', {
@@ -227,12 +227,20 @@ describe('collection repository adapters', () => {
     expect(await adapter.count('users')).toBe(1);
     expect(await adapter.count('products')).toBe(1);
     expect(await adapter.count('stock')).toBe(1);
+    expect(await adapter.count('stockMovements')).toBe(0);
+    expect(await adapter.count('orderItems')).toBe(1);
     const backup = await adapter.findById('migrationBackups', 'legacy:application_state:primary');
     expect(backup.sourceDocument.state.users[0].passwordHash).toBe('$2b$hash');
 
     const hydrated = await adapter.readState();
     expect(hydrated.users[0].passwordHash).toBe('$2b$hash');
     expect(hydrated.products[0].stock).toBe(7);
+    expect(hydrated.products[0].originWarehouseId).toBe('HUB-1');
+    expect(hydrated.users[0].role).toBe('buyer');
+    expect(hydrated.users[0].filerStatus).toBe('unverified');
+    expect(hydrated.orders[0].userId).toBe('USER-1');
+    expect(hydrated.orderItems).toHaveLength(1);
+    expect(hydrated.orderItems[0].priceStatus).toBe('legacy_unavailable');
     expect(hydrated.dataMode).toBe('production');
 
     const reloaded = createMongoAdapter({ client: new FakeClient(), database });
