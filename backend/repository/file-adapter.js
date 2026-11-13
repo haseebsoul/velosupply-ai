@@ -10,6 +10,7 @@ const {
   getAtPath,
   setAtPath,
   normalizeStateShape,
+  recordsForState,
   documentId,
   matchesFilter
 } = require('./collection-map');
@@ -74,9 +75,11 @@ function createFileAdapter(options) {
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       try {
         state = normalizeStateShape(JSON.parse(await fs.readFile(filePath, 'utf8')));
+        state.stock = recordsForState(state, 'stock');
       } catch (error) {
         if (error.code !== 'ENOENT') throw error;
         state = normalizeStateShape(await loadInitial());
+        state.stock = recordsForState(state, 'stock');
         await flush();
       }
       return adapter;
@@ -89,6 +92,7 @@ function createFileAdapter(options) {
 
     async writeState(nextState) {
       const next = normalizeStateShape(nextState);
+      next.stock = recordsForState(next, 'stock');
       await serializeWrite(() => { state = next; });
     },
 
