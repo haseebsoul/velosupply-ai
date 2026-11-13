@@ -39,6 +39,9 @@ const JWT_SECRET = process.env.JWT_SECRET || 'velosupply-development-secret-chan
 if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
   throw new Error('JWT_SECRET must be set in production');
 }
+if (process.env.NODE_ENV === 'production' && !process.env.CORS_ORIGIN) {
+  throw new Error('CORS_ORIGIN must be set in production');
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -188,7 +191,12 @@ function telemetryEvent(event = {}) {
     timestamp: new Date().toISOString(),
     metrics: refreshMetrics(),
     warehouses: db.warehouses,
-    ...(event.order ? { order: event.order } : {})
+    ...(event.order ? { order: {
+      id: event.order.id,
+      status: event.order.status,
+      total: event.order.total,
+      warehouse_hub: event.order.warehouse_hub
+    } } : {})
   };
 }
 
@@ -380,6 +388,9 @@ app.post('/api/auth/login', sre.rateLimit({ limit: 10, windowMs: 60_000, name: '
 }));
 
 async function register(req, res) {
+  if (req.body.role === 'admin' && db.users.some((entry) => entry.role === 'admin')) {
+    return res.status(409).json({ error: 'ADMIN_EXISTS' });
+  }
   if (req.body.role === 'admin' || req.body.role === 'operator') {
     const roleName = req.body.role;
     const keyName = roleName === 'admin' ? 'ADMIN_REGISTRATION_KEY' : 'OPERATOR_REGISTRATION_KEY';
@@ -495,7 +506,13 @@ app.post('/api/rewards/:offerId/claim', asyncRoute(async (req, res) => {
   await persist();
   res.status(201).json({ claim });
 }));
-app.get('/api/orders', (_req, res) => res.json(db.orders));
+app.get('/api/orders', (req, res) => {
+  if (req.user.role === 'admin' || req.user.role === 'operator') return res.json(db.orders);
+  const ownOrders = db.orders.filter((order) =>
+    order.buyerId === req.user.id || String(order.customerEmail || '').toLowerCase() === req.user.email
+  );
+  res.json(ownOrders);
+});
 app.get('/api/logs', (_req, res) => res.json(db.logs));
 app.get('/api/threats', (_req, res) => {
   const products = db.products.filter((product) => product.stock <= product.reorder_threshold).map((product) => ({
