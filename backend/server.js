@@ -299,7 +299,7 @@ const newsletterSchema = z.object({
 const registerSchema = z.object({
   name: z.string().trim().min(2).max(100),
   email: z.string().trim().email().transform((value) => value.toLowerCase()),
-  password: z.string().min(8).max(128),
+  password: z.string().min(8).max(128).regex(/[A-Z]/, 'Password must contain an uppercase letter').regex(/[0-9]/, 'Password must contain a number'),
   role: z.enum(['admin', 'operator', 'user']).default('user'),
   registrationInviteCode: z.string().max(200).optional()
 }).strict();
