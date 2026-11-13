@@ -71,16 +71,13 @@ function createDomainRepositories(adapter) {
     }
   };
 
-  const DELIVERY_FEES_PKR = {
-    Karachi: 350,
-    Lahore: 400,
-    Islamabad: 450,
-    Rawalpindi: 450,
-    Faisalabad: 500,
-    Multan: 550,
-    Peshawar: 650,
-    Quetta: 900
-  };
+  function activeTariffRule(rows, code, now) {
+    return rows
+      .filter((rule) => rule.code === code &&
+        (!rule.effectiveFrom || Date.parse(rule.effectiveFrom) <= now) &&
+        (!rule.effectiveTo || Date.parse(rule.effectiveTo) >= now))
+      .sort((a, b) => Number(b.version) - Number(a.version))[0] || null;
+  }
 
   const orders = {
     async createWithItems(orderInput, itemInputs) {
@@ -88,14 +85,20 @@ function createDomainRepositories(adapter) {
       const city = requiredString(orderInput.city, 'city');
       if (!Array.isArray(itemInputs) || !itemInputs.length) throw new TypeError('At least one order item is required');
 
-      const settings = await adapter.find('settings', { key: { $in: ['gstPct', 'deliveryFeeTable'] } });
-      const gstSetting = settings.find((entry) => entry.key === 'gstPct');
-      const deliverySetting = settings.find((entry) => entry.key === 'deliveryFeeTable');
-      const gstPct = gstSetting ? Number(gstSetting.value) : 18;
-      if (!Number.isFinite(gstPct) || gstPct < 0 || gstPct > 100) throw new TypeError('gstPct setting must be between 0 and 100');
-      const deliveryFees = deliverySetting && deliverySetting.value && typeof deliverySetting.value === 'object'
-        ? { ...DELIVERY_FEES_PKR, ...deliverySetting.value }
-        : DELIVERY_FEES_PKR;
+      const now = Date.now();
+      const tariffRows = await adapter.find('tariffRules', {});
+      const gstRule = activeTariffRule(tariffRows, 'PK-GST', now);
+      const deliveryRule = activeTariffRule(tariffRows, 'PK-DELIVERY-' + city.toUpperCase(), now);
+      const thresholdRule = activeTariffRule(tariffRows, 'PK-FREE-DELIVERY-THRESHOLD', now);
+      if (!gstRule || !deliveryRule || !thresholdRule) {
+        throw new Error('Current sourced tariff rules are required before a PKR quote can be created');
+      }
+      const gstPct = Number(gstRule.ratePct);
+      const deliveryFeePkr = Number(deliveryRule.amountPkr);
+      const freeDeliveryThresholdPkr = Number(thresholdRule.amountPkr);
+      if (!Number.isSafeInteger(gstPct) || gstPct < 0 || gstPct > 100) throw new TypeError('GST tariff ratePct must be an integer from 0 to 100');
+      if (!Number.isSafeInteger(deliveryFeePkr) || deliveryFeePkr < 0) throw new TypeError('Delivery tariff amountPkr must be a non-negative integer');
+      if (!Number.isSafeInteger(freeDeliveryThresholdPkr) || freeDeliveryThresholdPkr < 0) throw new TypeError('Free-delivery threshold must be a non-negative integer');
       if (!Object.prototype.hasOwnProperty.call(deliveryFees, city)) throw new TypeError('Unsupported delivery city: ' + city);
 
       const items = itemInputs.map((item) => {
@@ -118,9 +121,8 @@ function createDomainRepositories(adapter) {
 
       const subtotalExMinor = items.reduce((sum, item) => sum + item.lineExMinor, 0);
       const gstMinor = items.reduce((sum, item) => sum + item.lineGstMinor, 0);
-      const deliveryFeePkr = subtotalExMinor > 15000000 ? 0 : Number(deliveryFees[city]);
-      if (!Number.isSafeInteger(deliveryFeePkr) || deliveryFeePkr < 0) throw new TypeError('Delivery fee must be a non-negative whole PKR amount');
-      const deliveryFeeMinor = deliveryFeePkr * 100;
+      const chargedDeliveryFeePkr = subtotalExMinor > freeDeliveryThresholdPkr * 100 ? 0 : deliveryFeePkr;
+      const deliveryFeeMinor = chargedDeliveryFeePkr * 100;
       const totalMinor = subtotalExMinor + gstMinor + deliveryFeeMinor;
       if (![subtotalExMinor, gstMinor, deliveryFeeMinor, totalMinor].every(Number.isSafeInteger)) throw new TypeError('PKR order totals exceed the safe integer range');
 
@@ -135,7 +137,7 @@ function createDomainRepositories(adapter) {
         currency: 'PKR',
         totalMinor,
         items: items.map(({ sku, name, qty, unitPriceMinor }) => ({ sku, name, qty, unitPriceMinor })),
-        price: { currency: 'PKR', subtotalExMinor, gstMinor, deliveryFeeMinor, totalMinor },
+        price: { currency: 'PKR', subtotalExMinor, gstMinor, deliveryFeeMinor, totalMinor, simulated: [gstRule, deliveryRule, thresholdRule].some((rule) => rule.source === 'demo-estimate') },
         paymentState: orderInput.paymentState || 'pending',
         status: orderInput.status || 'PLACED',
         hubs: Array.isArray(orderInput.hubs) ? orderInput.hubs : [],
