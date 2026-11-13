@@ -1,13 +1,14 @@
-const fs = require('node:fs/promises');
+require('./config');
 const http = require('node:http');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, timingSafeEqual } = require('node:crypto');
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { WebSocketServer, WebSocket } = require('ws');
 const { z } = require('zod');
-const { DB_PATH, seedDatabase, productStatus } = require('./seed');
+const { connectState, persistState, closeState } = require('./database');
+const { productStatus } = require('./seed');
 
 const PORT = Number(process.env.PORT) || 8000;
 const JWT_SECRET = process.env.JWT_SECRET || 'velosupply-development-secret-change-me';
@@ -18,24 +19,25 @@ if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
 const app = express();
 const server = http.createServer(app);
 const websocketServer = new WebSocketServer({ noServer: true });
+const allowedOrigins = new Set(
+  (process.env.CORS_ORIGINS || 'http://localhost:5173')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+);
 let db;
 let writeQueue = Promise.resolve();
 
 app.disable('x-powered-by');
-app.use(cors());
+app.use(cors({
+  origin(origin, callback) {
+    callback(null, !origin || allowedOrigins.has(origin));
+  }
+}));
 app.use(express.json({ limit: '1mb' }));
 
 function persist() {
-  writeQueue = writeQueue.catch(() => {}).then(async () => {
-    const temporaryPath = `${DB_PATH}.${process.pid}.${randomUUID()}.tmp`;
-    await fs.writeFile(temporaryPath, `${JSON.stringify(db, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-    try {
-      await fs.rename(temporaryPath, DB_PATH);
-    } catch (error) {
-      await fs.rm(temporaryPath, { force: true });
-      throw error;
-    }
-  });
+  writeQueue = writeQueue.catch(() => {}).then(() => persistState(db));
   return writeQueue;
 }
 
@@ -83,9 +85,7 @@ function telemetryEvent(event = {}) {
     level: event.level || 'INFO',
     message: event.message || 'Network heartbeat received.',
     timestamp: new Date().toISOString(),
-    metrics: refreshMetrics(),
-    warehouses: db.warehouses,
-    ...(event.order ? { order: event.order } : {})
+    metrics: refreshMetrics()
   };
 }
 
@@ -174,9 +174,12 @@ const newsletterSchema = z.object({
 }).strict();
 const registerSchema = z.object({
   name: z.string().trim().min(2).max(100),
-  email: z.string().trim().email().transform((value) => value.toLowerCase()),
-  password: z.string().min(4).max(128)
+  email: z.string().trim().email().max(254).transform((value) => value.toLowerCase()),
+  password: z.string().min(8).max(128),
+  role: z.enum(['admin', 'operator', 'user']).default('user'),
+  inviteCode: z.string().trim().max(100).optional()
 }).strict();
+const adminCreateSchema = registerSchema.omit({ inviteCode: true });
 const checkoutSchema = z.object({
   customerName: z.string().trim().min(2).max(100),
   customerEmail: z.string().trim().email().max(254),
@@ -196,6 +199,35 @@ const restockSchema = z.object({
 const roleSchema = z.object({
   role: z.enum(['admin', 'operator', 'user'])
 }).strict();
+
+function inviteMatches(provided, expected) {
+  if (typeof provided !== 'string' || typeof expected !== 'string' || !provided || !expected) return false;
+  const candidate = Buffer.from(provided);
+  const secret = Buffer.from(expected);
+  return candidate.length === secret.length && timingSafeEqual(candidate, secret);
+}
+
+async function createUserAccount({ name, email, password, role }) {
+  const normalizedEmail = email.trim().toLowerCase();
+  if (db.users.some((entry) => entry.email === normalizedEmail)) return null;
+
+  const passwordHash = await bcrypt.hash(password, 12);
+  // Re-check after the asynchronous hash so concurrent sign-ups cannot race the duplicate check.
+  if (db.users.some((entry) => entry.email === normalizedEmail)) return null;
+
+  const user = {
+    id: `USER-${randomUUID()}`,
+    name: name.trim(),
+    email: normalizedEmail,
+    role,
+    passwordHash,
+    createdAt: new Date().toISOString()
+  };
+  db.users.push(user);
+  addLog(`Account registered for ${user.email}.`, 'INFO', 'USER', { userId: user.id, role: user.role });
+  await persist();
+  return user;
+}
 const simulationSchema = z.object({
   scenario: z.enum(['port_congestion', 'demand_spike', 'auto_rebalance']),
   params: z.object({
@@ -247,20 +279,24 @@ app.post('/api/auth/login', validate(loginSchema), asyncRoute(async (req, res) =
 }));
 
 async function register(req, res) {
-  if (db.users.some((entry) => entry.email === req.body.email)) {
-    return res.status(409).json({ error: 'Email already registered' });
+  const role = req.body.role || 'user';
+  const expectedInvite = role === 'admin'
+    ? process.env.ADMIN_INVITE_CODE
+    : role === 'operator'
+      ? process.env.OPERATOR_INVITE_CODE
+      : null;
+
+  if (role !== 'user' && !inviteMatches(req.body.inviteCode, expectedInvite)) {
+    return res.status(403).json({
+      error: role === 'admin'
+        ? 'Administrator registration requires a valid administrator invitation code'
+        : 'Operations registration requires a valid operations invitation code'
+    });
   }
-  const user = {
-    id: `USER-${randomUUID()}`,
-    name: req.body.name,
-    email: req.body.email,
-    role: 'user',
-    passwordHash: await bcrypt.hash(req.body.password, 10),
-    createdAt: new Date().toISOString()
-  };
-  db.users.push(user);
-  addLog(`Account registered for ${user.email}.`, 'INFO', 'USER', { userId: user.id });
-  await persist();
+
+  const user = await createUserAccount(req.body);
+  if (!user) return res.status(409).json({ error: 'Email already registered' });
+
   const token = jwt.sign({ sub: user.id, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
   res.status(201).json({ token, user: safeUser(user) });
 }
@@ -321,10 +357,15 @@ app.use('/api', authenticate);
 app.get('/api/auth/me', (req, res) => res.json({ user: safeUser(req.user) }));
 app.post('/api/auth/logout', (_req, res) => res.json({ success: true }));
 
-app.get('/api/warehouses', (_req, res) => res.json(db.warehouses));
-app.get('/api/orders', (_req, res) => res.json(db.orders));
-app.get('/api/logs', (_req, res) => res.json(db.logs));
-app.get('/api/threats', (_req, res) => {
+app.get('/api/warehouses', requireRoles('admin', 'operator'), (_req, res) => res.json(db.warehouses));
+app.get('/api/orders', (req, res) => {
+  const orders = req.user.role === 'user'
+    ? db.orders.filter((order) => order.customerEmail.toLowerCase() === req.user.email.toLowerCase())
+    : db.orders;
+  res.json(orders);
+});
+app.get('/api/logs', requireRoles('admin', 'operator'), (_req, res) => res.json(db.logs));
+app.get('/api/threats', requireRoles('admin', 'operator'), (_req, res) => {
   const products = db.products.filter((product) => product.stock <= product.reorder_threshold).map((product) => ({
     id: product.id,
     type: 'inventory',
@@ -341,6 +382,12 @@ app.get('/api/threats', (_req, res) => {
   }));
   res.json([...products, ...warehouses]);
 });
+
+app.post('/api/admin/users', requireRoles('admin'), validate(adminCreateSchema), asyncRoute(async (req, res) => {
+  const user = await createUserAccount(req.body);
+  if (!user) return res.status(409).json({ error: 'Email already registered' });
+  res.status(201).json({ user: safeUser(user) });
+}));
 
 app.get('/api/admin/users', requireRoles('admin'), (_req, res) => {
   res.json(db.users.map(safeUser));
@@ -464,10 +511,16 @@ function tickTelemetry() {
     message: `Network heartbeat ${db.telemetry.tick}: ${db.warehouses.filter((hub) => hub.status === 'online').length} fulfillment nodes online.`
   });
   broadcast(event);
-  persist().catch((error) => console.error('[persistence-error]', error));
 }
 
 server.on('upgrade', (request, socket, head) => {
+  const origin = request.headers.origin;
+  if (origin && !allowedOrigins.has(origin)) {
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+
   let pathname;
   try {
     pathname = new URL(request.url, 'http://localhost').pathname;
@@ -492,7 +545,7 @@ websocketServer.on('connection', (websocket) => {
 });
 
 async function start() {
-  db = await seedDatabase();
+  db = await connectState();
   if (!Array.isArray(db.newsletter)) db.newsletter = [];
   refreshMetrics();
   server.listen(PORT, () => console.log(`VeloSupply API listening on http://localhost:${PORT}`));
@@ -507,4 +560,16 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server, start, refreshMetrics };
+async function stop() {
+  if (server.listening) {
+    await new Promise((resolve) => server.close(resolve));
+  }
+  await closeState();
+}
+
+if (require.main === module) {
+  process.once('SIGINT', () => stop().finally(() => process.exit(0)));
+  process.once('SIGTERM', () => stop().finally(() => process.exit(0)));
+}
+
+module.exports = { app, server, start, stop, refreshMetrics };

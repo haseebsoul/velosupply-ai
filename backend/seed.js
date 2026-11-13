@@ -47,14 +47,27 @@ function productStatus(stock, threshold) {
   return 'optimal';
 }
 
-async function createSeedData() {
-  const passwordHash = await bcrypt.hash('1234', 10);
+async function createSeedData(options = {}) {
+  const bootstrapAdmin = options.bootstrapAdmin;
+  const passwordHash = await bcrypt.hash(
+    bootstrapAdmin?.password || '1234',
+    options.production ? 12 : 10
+  );
   const now = new Date();
-  const users = [
-    { id: 'USER-001', name: 'Haseeb Khan', email: 'admin@velosupply.ai', role: 'admin', passwordHash, createdAt: now.toISOString() },
-    { id: 'USER-002', name: 'Sarah Chen', email: 'operator@velosupply.ai', role: 'operator', passwordHash, createdAt: now.toISOString() },
-    { id: 'USER-003', name: 'Marcus Vance', email: 'buyer@velosupply.ai', role: 'user', passwordHash, createdAt: now.toISOString() }
-  ];
+  const users = bootstrapAdmin
+    ? [{
+        id: 'USER-001',
+        name: bootstrapAdmin.name.trim(),
+        email: bootstrapAdmin.email.trim().toLowerCase(),
+        role: 'admin',
+        passwordHash,
+        createdAt: now.toISOString()
+      }]
+    : [
+        { id: 'USER-001', name: 'Haseeb Khan', email: 'admin@velosupply.ai', role: 'admin', passwordHash, createdAt: now.toISOString() },
+        { id: 'USER-002', name: 'Sarah Chen', email: 'operator@velosupply.ai', role: 'operator', passwordHash, createdAt: now.toISOString() },
+        { id: 'USER-003', name: 'Marcus Vance', email: 'buyer@velosupply.ai', role: 'user', passwordHash, createdAt: now.toISOString() }
+      ];
   const products = productDefinitions.map(([sku, name, category, description, price, stock, threshold, velocity], index) => {
     const warehouse = warehouses[index % warehouses.length];
     return {
@@ -68,7 +81,7 @@ async function createSeedData() {
       updatedAt: now.toISOString()
     };
   });
-  const orders = Array.from({ length: 12 }, (_, index) => {
+  const orders = options.production ? [] : Array.from({ length: 12 }, (_, index) => {
     const product = products[index * 2];
     const quantity = index % 3 + 1;
     return {
@@ -96,7 +109,7 @@ async function createSeedData() {
     message: 'VeloSupply AI network initialized; all services operational.',
     timestamp: now.toISOString()
   }];
-  for (let index = 0; index < 19; index += 1) {
+  for (let index = 0; !options.production && index < 19; index += 1) {
     const order = orders[index % orders.length];
     const product = products[index % products.length];
     const messages = [
@@ -135,6 +148,25 @@ async function createSeedData() {
     },
     telemetry: { tick: 0, updatedAt: now.toISOString() }
   };
+}
+
+async function createInitialSeedData() {
+  if (process.env.NODE_ENV !== 'production') return createSeedData();
+
+  const name = process.env.BOOTSTRAP_ADMIN_NAME?.trim();
+  const email = process.env.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase();
+  const password = process.env.BOOTSTRAP_ADMIN_PASSWORD || '';
+
+  if (!name || name.length < 2 || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 16) {
+    throw new Error(
+      'For a new production database, set BOOTSTRAP_ADMIN_NAME, BOOTSTRAP_ADMIN_EMAIL, and BOOTSTRAP_ADMIN_PASSWORD (16+ characters) before starting the API.'
+    );
+  }
+
+  return createSeedData({
+    production: true,
+    bootstrapAdmin: { name, email, password }
+  });
 }
 
 async function writeAtomic(filePath, data) {
@@ -206,12 +238,17 @@ async function seedDatabase(options = {}) {
   if (!options.force) {
     try {
       const current = JSON.parse(await fs.readFile(filePath, 'utf8'));
-      if (hasCurrentSchema(current)) return current;
+      if (hasCurrentSchema(current)) {
+        if (process.env.NODE_ENV !== 'production') return current;
+        current.users = (await createInitialSeedData()).users;
+        await writeAtomic(filePath, current);
+        return current;
+      }
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
     }
   }
-  const data = await createSeedData();
+  const data = await createInitialSeedData();
   await writeAtomic(filePath, data);
   return data;
 }
@@ -225,4 +262,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { DB_PATH, DB_SCHEMA_VERSION, seedDatabase, productStatus, hasCurrentSchema };
+module.exports = { DB_PATH, DB_SCHEMA_VERSION, seedDatabase, productStatus, hasCurrentSchema, createSeedData, createInitialSeedData };
