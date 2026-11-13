@@ -13,7 +13,7 @@ const schema = z.object({
   name: z.string().trim().min(2, 'Enter at least 2 characters').max(100, 'Name is too long'),
   email: z.string().trim().email('Enter a valid email').max(254, 'Email is too long'),
   role: z.enum(['admin', 'operator', 'user']),
-  password: z.string().min(8, 'Use at least 8 characters').max(128, 'Password is too long'),
+  password: z.string().min(8, 'Use at least 8 characters').max(128, 'Password is too long').regex(/[A-Z]/, 'Add at least one uppercase letter').regex(/[0-9]/, 'Add at least one number'),
   confirmPassword: z.string(),
   registrationInviteCode: z.string().optional()
 }).superRefine((values, context) => {
