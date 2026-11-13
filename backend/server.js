@@ -46,6 +46,12 @@ let mongoClient = null;
 let stateCollection = null;
 let writeQueue = Promise.resolve();
 
+const rewardOffers = [
+  { id: 'priority-routing', title: 'Priority carrier allocation', description: 'Reserve preferred routing capacity during regional demand peaks.', points: 150, minimumScore: 400 },
+  { id: 'supplier-access', title: 'Supplier early access', description: 'Get first access to replenishment windows from participating suppliers.', points: 250, minimumScore: 650 },
+  { id: 'resilience-review', title: 'Network resilience review', description: 'Unlock a guided review of inventory risk and warehouse resilience.', points: 100, minimumScore: 250 }
+];
+
 app.disable('x-powered-by');
 const allowedOrigins = (process.env.CORS_ORIGIN || '').split(',').map((origin) => origin.trim()).filter(Boolean);
 app.use(cors({ origin: allowedOrigins.length ? allowedOrigins : process.env.NODE_ENV === 'production' ? false : true }));
@@ -111,6 +117,8 @@ async function loadDatabaseState() {
   );
   return seededState;
 }
+function metricsScore() { return Number(db.metrics?.efficiencyScore || 0); }
+
 function safeUser(user) {
   const { passwordHash, ...result } = user;
   return result;
@@ -412,6 +420,24 @@ app.get('/api/auth/me', (req, res) => res.json({ user: safeUser(req.user) }));
 app.post('/api/auth/logout', (_req, res) => res.json({ success: true }));
 
 app.get('/api/warehouses', (_req, res) => res.json(db.warehouses));
+app.get('/api/rewards', (req, res) => {
+  const claims = (db.rewardClaims || []).filter((claim) => claim.userId === req.user.id);
+  res.json({ offers: rewardOffers, claims });
+});
+app.post('/api/rewards/:offerId/claim', asyncRoute(async (req, res) => {
+  const offer = rewardOffers.find((entry) => entry.id === req.params.offerId);
+  if (!offer) return res.status(404).json({ error: 'Reward offer not found' });
+  if (metricsScore() < offer.minimumScore) {
+    return res.status(403).json({ error: 'Your efficiency score does not yet meet this offer threshold' });
+  }
+  const alreadyClaimed = (db.rewardClaims || []).some((claim) => claim.userId === req.user.id && claim.offerId === offer.id);
+  if (alreadyClaimed) return res.status(409).json({ error: 'You have already claimed this offer' });
+  const claim = { id: `CLAIM-${randomUUID()}`, userId: req.user.id, offerId: offer.id, title: offer.title, points: offer.points, claimedAt: new Date().toISOString() };
+  db.rewardClaims.push(claim);
+  addLog(`Reward claimed: ${offer.title}.`, 'INFO', 'REWARD', { userId: req.user.id, offerId: offer.id });
+  await persist();
+  res.status(201).json({ claim });
+}));
 app.get('/api/orders', (_req, res) => res.json(db.orders));
 app.get('/api/logs', (_req, res) => res.json(db.logs));
 app.get('/api/threats', (_req, res) => {
@@ -584,6 +610,7 @@ websocketServer.on('connection', (websocket) => {
 async function start() {
   db = await loadDatabaseState();
   if (!Array.isArray(db.newsletter)) db.newsletter = [];
+  if (!Array.isArray(db.rewardClaims)) db.rewardClaims = [];
   refreshMetrics();
   server.listen(PORT, () => console.log(`VeloSupply API listening on http://localhost:${PORT}`));
   const timer = setInterval(tickTelemetry, 2000);
