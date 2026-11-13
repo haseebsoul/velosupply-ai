@@ -1,5 +1,7 @@
 'use strict';
 
+const { createHash } = require('node:crypto');
+
 const STATE_PATHS = {
   users: ['users'],
   products: ['products'],
@@ -131,8 +133,20 @@ function deleteAtPath(value, path) {
 
 function normalizeStateShape(input) {
   const state = clone(input || {});
-  for (const path of Object.values(STATE_PATHS)) {
+  for (const [name, path] of Object.entries(STATE_PATHS)) {
     if (!Array.isArray(getAtPath(state, path))) setAtPath(state, path, []);
+    if (name === 'stock') continue;
+    const rows = getAtPath(state, path);
+    rows.forEach((record, index) => {
+      if (!record || typeof record !== 'object' || Array.isArray(record)) return;
+      if (record.id !== undefined || record._id !== undefined || record.code !== undefined || record.key !== undefined ||
+          (record.sku !== undefined && record.hubCode !== undefined)) return;
+      const digest = createHash('sha256')
+        .update(name + ':' + index + ':' + JSON.stringify(record))
+        .digest('hex')
+        .slice(0, 24);
+      record.id = 'AUTO-' + digest;
+    });
   }
   if (!state.sre || typeof state.sre !== 'object') state.sre = {};
   if (!state.metrics || typeof state.metrics !== 'object') state.metrics = {};
