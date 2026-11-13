@@ -290,9 +290,9 @@ function createSRE(deps) {
     evaluateRule('circuit_open', Boolean(circuitOpenedAt) || activeChaos().mode === 'circuit-open', 'critical', circuitFailures, 25, 'Circuit breaker is OPEN.', true);
     evaluateRule('stock_mismatch', negativeStock, 'critical', negativeStock ? 1 : 0, 0, 'Stock integrity check detected negative stock.', true);
     evaluateRule('db_slow', avgDb > 300, 'warn', avgDb, 300, 'Database p95 latency has exceeded 300ms for 60 seconds.');
-    evaluateRule('ws_drop', wsDrop, 'warn', counts, '50% drop', 'WebSocket client count dropped by at least 50 percent within 30 seconds.');
-    evaluateRule('memory_high', metrics.heapUsedPct > 85, 'warn', metrics.heapUsedPct, 85, 'Node.js heap usage exceeded 85 percent of its heap limit.');
-    evaluateRule('budget_low', budgetLow, 'warn', sloReport().filter((slo) => slo.budgetRemaining < 0.2).map((slo) => slo.id), 0.2, 'At least one SLO error budget has less than 20 percent remaining.');
+    evaluateRule('ws_drop', wsDrop, 'warn', counts, '50% drop', 'WebSocket client count dropped by at least 50 percent within 30 seconds.', true);
+    evaluateRule('memory_high', metrics.heapUsedPct > 85, 'warn', metrics.heapUsedPct, 85, 'Node.js heap usage exceeded 85 percent of its heap limit.', true);
+    evaluateRule('budget_low', budgetLow, 'warn', sloReport().filter((slo) => slo.budgetRemaining < 0.2).map((slo) => slo.id), 0.2, 'At least one SLO error budget has less than 20 percent remaining.', true);
   }
 
   function tick() {
@@ -387,6 +387,17 @@ function createSRE(deps) {
     const services = ['API', 'Database', 'WebSocket', 'Stock ledger', 'Payment gateway'].map((service) => latest.get(service) || { service, status: 'unknown', latencyMs: null, error: 'Awaiting first health check', at: null });
     const degraded = services.some((service) => ['degraded', 'unknown', 'down'].includes(service.status));
     return { status: degraded ? 'degraded' : 'ok', services, checkedAt: services.map((entry) => entry.at).filter(Boolean).sort().at(-1) || null };
+  }
+
+  function readinessSummary() {
+    const summary = healthSummary();
+    const required = summary.services.filter((service) => ['API', 'Database', 'WebSocket'].includes(service.service));
+    const ready = required.length === 3 && required.every((service) => service.status === 'up');
+    return {
+      status: ready ? 'ok' : 'degraded',
+      services: required,
+      checkedAt: summary.checkedAt
+    };
   }
 
   function dashboard() {
@@ -642,7 +653,7 @@ function createSRE(deps) {
     started = false;
   }
 
-  return { router, middleware, rateLimit, chaosMiddleware, start, stop, recordRequest, recordDbLatency, recordWebSocketLatency, attachWebSocket, pingWebSockets, currentMetrics, sloReport, healthCheck, healthSummary, dashboard, exportSnapshot, backup, audit, RUNBOOKS, SLOS };
+  return { router, middleware, rateLimit, chaosMiddleware, start, stop, recordRequest, recordDbLatency, recordWebSocketLatency, attachWebSocket, pingWebSockets, currentMetrics, sloReport, healthCheck, healthSummary, readinessSummary, dashboard, exportSnapshot, backup, audit, RUNBOOKS, SLOS };
 }
 
 module.exports = { createSRE, SLOS, RUNBOOKS, percentile };
