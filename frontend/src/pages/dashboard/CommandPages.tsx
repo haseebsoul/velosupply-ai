@@ -26,6 +26,7 @@ export function CommandPages() {
   const [selectedHub, setSelectedHub] = useState<Warehouse | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [priorityMessageDismissed, setPriorityMessageDismissed] = useState(false)
   const [simulation, setSimulation] = useState({ safetyBuffer: 20, surgeMultiplier: 2, maxLatency: 50 })
   const [search, setSearch] = useState('')
   const refresh = useCallback(async () => {
@@ -85,6 +86,23 @@ export function CommandPages() {
       {productsAtRisk.map((product) => <ThreatRow key={product.id} product={product} onResolve={() => request(() => api.post(`/inventory/restock/${product.id}`), `${product.sku} replenishment purchase order executed.`)} />)}
       {warehouses.filter((hub) => hub.status !== 'online').map((hub) => <ThreatRow key={hub.id} hub={hub} />)}
       <div className="dash-grid"><StatCard title="AI EFFICIENCY SCORE" value={metrics.efficiencyScore} suffix=" pts" /><StatCard title="DETECTION TIME" value={metrics.detectionTimeMs} suffix="ms" /><StatCard title="THREATS BLOCKED" value={metrics.threatsBlocked} /></div>
+    </>}
+
+    {pathname === '/dashboard/messages' && <>
+      <div className="page-intro">
+        <div><span className="mono-label">INBOX / SUPPORT</span><h1 className="ops-heading">Messages</h1><p className="ops-copy">Important updates for your operations workspace.</p></div>
+        <span className="status-pill">1 priority update</span>
+      </div>
+      {!priorityMessageDismissed ? <section className="card-ops dash-card message-priority">
+        <div className="message-priority-mark"><ShieldCheck size={19} /></div>
+        <div className="message-priority-copy">
+          <div className="drawer-head"><span className="mono-label">PRIORITY SUPPORT · ACCOUNT NOTICE</span><span className="status-pill status-warning">Action available</span></div>
+          <h2>Priority support is ready for your workspace</h2>
+          <p className="ops-copy">Your VeloSupply account is eligible for a zero-fee wallet funding window for the next 30 days. Review the terms with your account administrator before activating it.</p>
+          <div className="inline-actions"><button className="button ops-button" onClick={() => setPriorityMessageDismissed(true)}>Mark as resolved</button><button className="small-button" onClick={() => setPriorityMessageDismissed(true)}>Dismiss</button></div>
+        </div>
+      </section> : <section className="card-ops dash-card empty-messages"><h3>You're all caught up</h3><p className="ops-copy">No unread priority messages at the moment.</p><button className="small-button" onClick={() => setPriorityMessageDismissed(false)}>Restore message</button></section>}
+      <section className="card-ops dash-card"><span className="mono-label">RECENT UPDATES</span><div className="message-list-row"><span className="message-bullet" /><div><strong>Network report is available</strong><p className="ops-copy">Your latest operations summary can be downloaded from Reports.</p></div><span className="mono-label">Today</span></div><div className="message-list-row"><span className="message-bullet muted-bullet" /><div><strong>Warehouse synchronization completed</strong><p className="ops-copy">All active nodes have reported their latest inventory snapshots.</p></div><span className="mono-label">Yesterday</span></div></section>
     </>}
 
     {pathname === '/dashboard/activity' && <>
