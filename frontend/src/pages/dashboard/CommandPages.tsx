@@ -11,7 +11,7 @@ import { ThreatRow } from '../../components/dashboard/ThreatRow'
 import { TerminalPanel } from '../../components/dashboard/TerminalPanel'
 import { TopologyCanvas } from '../../components/dashboard/TopologyCanvas'
 
-const palette = ['var(--accent-ops-lime)', '#968B80', '#6C665F', '#494641', '#2E2B27']
+const palette = ['var(--navy-700)', 'var(--ink-soft)', 'var(--ink-muted)', 'var(--navy-50)', 'var(--white)']
 const initialMetrics: Metrics = { gmv24h: 0, activeOrders: 0, fulfillmentHealth: 0, packetsPerSec: 0, avgLatencyMs: 0, threatsBlocked: 0, detectionTimeMs: 0, efficiencyScore: 0, hubCapacities: [] }
 
 export function CommandPages() {

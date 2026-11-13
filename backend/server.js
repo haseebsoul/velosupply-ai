@@ -2,7 +2,7 @@ const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
-const { randomUUID, timingSafeEqual } = require('node:crypto');
+const { randomUUID, randomBytes, timingSafeEqual } = require('node:crypto');
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
@@ -10,6 +10,9 @@ const jwt = require('jsonwebtoken');
 const { WebSocketServer, WebSocket } = require('ws');
 const { z } = require('zod');
 const { DB_PATH, seedDatabase, productStatus } = require('./seed');
+const { createEmptyProductionState } = require('./production-state');
+const helmet = require('helmet');
+const { createSRE } = require('./sre');
 
 
 const envFilePath = path.join(__dirname, '.env');
@@ -33,9 +36,25 @@ try {
 }
 
 const PORT = Number(process.env.PORT) || 8000;
-const JWT_SECRET = process.env.JWT_SECRET || 'velosupply-development-secret-change-me';
-if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
-  throw new Error('JWT_SECRET must be set in production');
+const generatedDefaults = {};
+if (!process.env.JWT_SECRET) {
+  if (process.env.NODE_ENV === 'production') throw new Error('JWT_SECRET must be set in production');
+  process.env.JWT_SECRET = randomBytes(32).toString('base64url');
+  generatedDefaults.JWT_SECRET = process.env.JWT_SECRET;
+}
+if (!process.env.CORS_ORIGIN) {
+  if (process.env.NODE_ENV === 'production') throw new Error('CORS_ORIGIN must be set in production');
+  process.env.CORS_ORIGIN = 'http://localhost:5173';
+  generatedDefaults.CORS_ORIGIN = process.env.CORS_ORIGIN;
+}
+const JWT_SECRET = process.env.JWT_SECRET;
+if (Object.keys(generatedDefaults).length) {
+  process.stdout.write(JSON.stringify({
+    ts: new Date().toISOString(),
+    level: 'WARN',
+    msg: 'Generated development defaults. Save these values in backend/.env to keep sessions stable across restarts.',
+    defaults: generatedDefaults
+  }) + '\n');
 }
 
 const app = express();
@@ -45,6 +64,7 @@ let db;
 let mongoClient = null;
 let stateCollection = null;
 let writeQueue = Promise.resolve();
+let sre = null;
 
 const rewardOffers = [
   { id: 'priority-routing', title: 'Priority carrier allocation', description: 'Reserve preferred routing capacity during regional demand peaks.', points: 150, minimumScore: 400 },
@@ -53,11 +73,31 @@ const rewardOffers = [
 ];
 
 app.disable('x-powered-by');
+sre = createSRE({
+  getDb: () => db,
+  persist: () => persist(),
+  broadcast,
+  getMongoClient: () => mongoClient,
+  getStateCollection: () => stateCollection,
+  getWebSocketServer: () => websocketServer,
+  getWebSocketClients: () => websocketServer.clients.size,
+  isApiReady: () => server.listening,
+  isWebSocketReady: () => server.listening,
+  getDbPath: () => DB_PATH
+});
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false
+}));
+app.use(sre.middleware());
 const allowedOrigins = (process.env.CORS_ORIGIN || '').split(',').map((origin) => origin.trim()).filter(Boolean);
 app.use(cors({ origin: allowedOrigins.length ? allowedOrigins : process.env.NODE_ENV === 'production' ? false : true }));
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '100kb' }));
+app.use('/api', sre.rateLimit({ limit: 300, windowMs: 60_000, name: 'api' }));
+app.use(sre.chaosMiddleware);
 
 function persist() {
+  const startedAt = Date.now();
   writeQueue = writeQueue.catch(() => {}).then(async () => {
     if (stateCollection) {
       await stateCollection.updateOne(
@@ -76,19 +116,19 @@ function persist() {
       await fs.rm(temporaryPath, { force: true });
       throw error;
     }
-  });
+  }).finally(() => sre?.recordDbLatency(Date.now() - startedAt));
   return writeQueue;
 }
 
 async function loadDatabaseState() {
-  const seededState = await seedDatabase();
   const mongoUri = process.env.MONGODB_URI;
 
   if (!mongoUri) {
     if (process.env.NODE_ENV === 'production') {
       throw new Error('MONGODB_URI must be set in production');
     }
-    return seededState;
+    // Local JSON mode remains a deliberate demo/development environment.
+    return seedDatabase();
   }
 
   const { MongoClient } = require('mongodb');
@@ -107,15 +147,24 @@ async function loadDatabaseState() {
     return stored.state;
   }
 
-  // Demo credentials are for local development only; production starts with an empty user registry.
-  if (process.env.NODE_ENV === 'production') seededState.users = [];
+  // Never silently copy demo catalog/orders into Atlas. It must be an explicit, non-production opt-in.
+  if (process.env.SEED_DEMO_DATA === 'true' && process.env.NODE_ENV !== 'production') {
+    const demoState = await seedDatabase();
+    await stateCollection.updateOne(
+      { _id: 'primary' },
+      { $set: { state: demoState, updatedAt: new Date().toISOString() } },
+      { upsert: true }
+    );
+    return demoState;
+  }
 
+  const emptyState = createEmptyProductionState();
   await stateCollection.updateOne(
     { _id: 'primary' },
-    { $set: { state: seededState, updatedAt: new Date().toISOString() } },
+    { $set: { state: emptyState, updatedAt: new Date().toISOString() } },
     { upsert: true }
   );
-  return seededState;
+  return emptyState;
 }
 function metricsScore() { return Number(db.metrics?.efficiencyScore || 0); }
 
@@ -140,18 +189,18 @@ function refreshMetrics() {
   const now = Date.now();
   const activeOrders = db.orders.filter((order) => !['delivered', 'cancelled'].includes(order.status));
   const activeWarehouses = db.warehouses.filter((hub) => hub.status === 'online').length;
-  const fulfillmentHealth = Math.round((activeWarehouses / db.warehouses.length) * 100);
+  const fulfillmentHealth = db.warehouses.length ? Math.round((activeWarehouses / db.warehouses.length) * 100) : 0;
   db.metrics = {
     gmv24h: Number(db.orders
       .filter((order) => now - Date.parse(order.createdAt) <= 24 * 60 * 60 * 1000 && order.status !== 'cancelled')
       .reduce((sum, order) => sum + order.total, 0).toFixed(2)),
     activeOrders: activeOrders.length,
     fulfillmentHealth,
-    packetsPerSec: db.metrics?.packetsPerSec || 1284,
+    packetsPerSec: db.metrics?.packetsPerSec ?? 0,
     avgLatencyMs: Math.round(db.warehouses.reduce((sum, hub) => sum + hub.latency, 0) / Math.max(db.warehouses.length, 1)),
-    threatsBlocked: db.metrics?.threatsBlocked || 0,
-    detectionTimeMs: db.metrics?.detectionTimeMs || 14,
-    efficiencyScore: db.metrics?.efficiencyScore || 842,
+    threatsBlocked: db.metrics?.threatsBlocked ?? 0,
+    detectionTimeMs: db.metrics?.detectionTimeMs ?? 0,
+    efficiencyScore: db.metrics?.efficiencyScore ?? 0,
     hubCapacities: db.warehouses.map(({ name, capacity }) => ({ name, capacity }))
   };
   return db.metrics;
@@ -165,7 +214,12 @@ function telemetryEvent(event = {}) {
     timestamp: new Date().toISOString(),
     metrics: refreshMetrics(),
     warehouses: db.warehouses,
-    ...(event.order ? { order: event.order } : {})
+    ...(event.order ? { order: {
+      id: event.order.id,
+      status: event.order.status,
+      total: event.order.total,
+      warehouse_hub: event.order.warehouse_hub
+    } } : {})
   };
 }
 
@@ -255,7 +309,7 @@ const newsletterSchema = z.object({
 const registerSchema = z.object({
   name: z.string().trim().min(2).max(100),
   email: z.string().trim().email().transform((value) => value.toLowerCase()),
-  password: z.string().min(8).max(128),
+  password: z.string().min(8).max(128).regex(/[A-Z]/, 'Password must contain an uppercase letter').regex(/[0-9]/, 'Password must contain a number'),
   role: z.enum(['admin', 'operator', 'user']).default('user'),
   registrationInviteCode: z.string().max(200).optional()
 }).strict();
@@ -287,18 +341,37 @@ const simulationSchema = z.object({
   }).strict().optional().default({})
 }).strict();
 
-app.get('/api/health', (_req, res) => res.json({
-  status: 'ok',
+app.get('/api/health', (_req, res) => {
+  const summary = sre.healthSummary();
+  res.json({
+    status: summary.status,
+    service: 'velosupply-api',
+    storage: stateCollection ? 'mongodb' : 'file',
+    dataMode: db.dataMode || 'unclassified',
+    timestamp: new Date().toISOString(),
+    services: summary.services,
+    checkedAt: summary.checkedAt
+  });
+});
+app.get('/health', (_req, res) => res.json({
+  status: sre.healthSummary().status,
   service: 'velosupply-api',
   storage: stateCollection ? 'mongodb' : 'file',
-  timestamp: new Date().toISOString()
+  dataMode: db.dataMode || 'unclassified',
+  timestamp: new Date().toISOString(),
+  services: sre.healthSummary().services
 }));
-app.get('/health', (_req, res) => res.json({
-  status: 'ok',
-  service: 'velosupply-api',
-  timestamp: new Date().toISOString()
+app.get('/livez', (_req, res) => res.json({ status: 'ok', service: 'velosupply-api' }));
+app.get('/readyz', (_req, res) => {
+  const summary = sre.readinessSummary();
+  res.status(summary.status === 'ok' ? 200 : 503).json(summary);
+});
+app.get('/api/metrics', (_req, res) => res.json({
+  dataMode: db.dataMode || 'unclassified',
+  ...refreshMetrics(),
+  sre: sre.currentMetrics(),
+  slos: sre.sloReport()
 }));
-app.get('/api/metrics', (_req, res) => res.json(refreshMetrics()));
 app.get('/api/products', (req, res) => {
   const search = String(req.query.search || '').trim().toLowerCase();
   const category = String(req.query.category || '').trim().toLowerCase();
@@ -320,16 +393,31 @@ app.post('/api/newsletter', validate(newsletterSchema), asyncRoute(async (req, r
   await persist();
   res.status(201).json({ success: true, subscribed: true, alreadySubscribed: false });
 }));
-app.post('/api/auth/login', validate(loginSchema), asyncRoute(async (req, res) => {
+app.post('/api/auth/login', sre.rateLimit({ limit: 10, windowMs: 60_000, name: 'login' }), validate(loginSchema), asyncRoute(async (req, res) => {
+  if (!db.sre) db.sre = {};
+  if (!Array.isArray(db.sre.loginAttempts)) db.sre.loginAttempts = [];
+  const now = Date.now();
+  db.sre.loginAttempts = db.sre.loginAttempts.filter((entry) => now - Date.parse(entry.at) < 60 * 60 * 1000);
+  const recentFailures = db.sre.loginAttempts.filter((entry) => entry.email === req.body.email && now - Date.parse(entry.at) < 15 * 60 * 1000);
+  if (recentFailures.length >= 5) return res.status(423).json({ error: 'Account temporarily locked. Try again in 15 minutes.' });
   const user = db.users.find((entry) => entry.email === req.body.email);
   if (!user || !(await bcrypt.compare(req.body.password, user.passwordHash))) {
+    db.sre.loginAttempts.push({ email: req.body.email, ip: req.ip, at: new Date().toISOString() });
+    await persist();
     return res.status(401).json({ error: 'Invalid email or password' });
   }
+  if (user.status === 'suspended') return res.status(403).json({ error: 'Account is suspended. Contact an administrator.' });
+  db.sre.loginAttempts = db.sre.loginAttempts.filter((entry) => entry.email !== req.body.email);
+  user.lastLoginAt = new Date().toISOString();
+  await persist();
   const token = jwt.sign({ sub: user.id, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
   res.json({ token, user: safeUser(user) });
 }));
 
 async function register(req, res) {
+  if (req.body.role === 'admin' && db.users.some((entry) => entry.role === 'admin')) {
+    return res.status(409).json({ error: 'ADMIN_EXISTS' });
+  }
   if (req.body.role === 'admin' || req.body.role === 'operator') {
     const roleName = req.body.role;
     const keyName = roleName === 'admin' ? 'ADMIN_REGISTRATION_KEY' : 'OPERATOR_REGISTRATION_KEY';
@@ -348,12 +436,17 @@ async function register(req, res) {
   if (db.users.some((entry) => entry.email === req.body.email)) {
     return res.status(409).json({ error: 'Email already registered' });
   }
+  const passwordHash = await bcrypt.hash(req.body.password, 12);
+  // Re-check after bcrypt yields: concurrent admin registrations must not create a second administrator.
+  if (req.body.role === 'admin' && db.users.some((entry) => entry.role === 'admin')) {
+    return res.status(409).json({ error: 'ADMIN_EXISTS' });
+  }
   const user = {
     id: `USER-${randomUUID()}`,
     name: req.body.name,
     email: req.body.email,
     role: req.body.role || 'user',
-    passwordHash: await bcrypt.hash(req.body.password, 12),
+    passwordHash,
     createdAt: new Date().toISOString()
   };
   db.users.push(user);
@@ -362,10 +455,10 @@ async function register(req, res) {
   const token = jwt.sign({ sub: user.id, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
   res.status(201).json({ token, user: safeUser(user) });
 }
-app.post('/api/auth/register', validate(registerSchema), asyncRoute(register));
-app.post('/api/register', validate(registerSchema), asyncRoute(register));
+app.post('/api/auth/register', sre.rateLimit({ limit: 10, windowMs: 60_000, name: 'register' }), validate(registerSchema), asyncRoute(register));
+app.post('/api/register', sre.rateLimit({ limit: 10, windowMs: 60_000, name: 'register-legacy' }), validate(registerSchema), asyncRoute(register));
 
-app.post('/api/orders/checkout', validate(checkoutSchema), asyncRoute(async (req, res) => {
+const checkoutHandler = asyncRoute(async (req, res) => {
   const quantities = new Map();
   for (const item of req.body.items) {
     quantities.set(item.productId, (quantities.get(item.productId) || 0) + item.quantity);
@@ -412,9 +505,19 @@ app.post('/api/orders/checkout', validate(checkoutSchema), asyncRoute(async (req
   refreshMetrics();
   await persist();
   res.status(201).json({ order, event });
-}));
+});
+app.post('/api/orders/checkout', validate(checkoutSchema), checkoutHandler);
+app.post('/api/checkout', validate(checkoutSchema), checkoutHandler);
 
 app.use('/api', authenticate);
+app.use('/api/sre', requireRoles('admin', 'operator'), sre.router);
+app.get('/api/admin/backup', requireRoles('admin'), (req, res) => {
+  sre.audit?.('backup.export', req.user, { format: 'velosupply-backup-v1' });
+  const snapshot = sre.exportSnapshot();
+  res.setHeader('content-type', 'application/json; charset=utf-8');
+  res.setHeader('content-disposition', 'attachment; filename="velosupply-backup.json"');
+  res.json(snapshot);
+});
 
 app.get('/api/auth/me', (req, res) => res.json({ user: safeUser(req.user) }));
 app.post('/api/auth/logout', (_req, res) => res.json({ success: true }));
@@ -438,7 +541,13 @@ app.post('/api/rewards/:offerId/claim', asyncRoute(async (req, res) => {
   await persist();
   res.status(201).json({ claim });
 }));
-app.get('/api/orders', (_req, res) => res.json(db.orders));
+app.get('/api/orders', (req, res) => {
+  if (req.user.role === 'admin' || req.user.role === 'operator') return res.json(db.orders);
+  const ownOrders = db.orders.filter((order) =>
+    order.buyerId === req.user.id || String(order.customerEmail || '').toLowerCase() === req.user.email
+  );
+  res.json(ownOrders);
+});
 app.get('/api/logs', (_req, res) => res.json(db.logs));
 app.get('/api/threats', (_req, res) => {
   const products = db.products.filter((product) => product.stock <= product.reorder_threshold).map((product) => ({
@@ -463,6 +572,15 @@ app.get('/api/admin/users', requireRoles('admin'), (_req, res) => {
 });
 app.patch('/api/admin/users/:id', requireRoles('admin'), validate(roleSchema), asyncRoute(async (req, res) => {
   const user = findById(db.users, req.params.id, 'User');
+  if (req.params.id === req.user.id && req.body.role !== 'admin') {
+    return res.status(400).json({ error: 'You cannot demote your own administrator account' });
+  }
+  if (req.body.role === 'admin' && user.role !== 'admin' && db.users.some((entry) => entry.role === 'admin')) {
+    return res.status(409).json({ error: 'ADMIN_EXISTS' });
+  }
+  if (user.role === 'admin' && req.body.role !== 'admin' && db.users.filter((entry) => entry.role === 'admin').length <= 1) {
+    return res.status(409).json({ error: 'The last administrator cannot be demoted' });
+  }
   user.role = req.body.role;
   user.updatedAt = new Date().toISOString();
   addLog(`Role updated for ${user.name}: ${user.role}.`, 'INFO', 'USER', { userId: user.id });
@@ -513,6 +631,9 @@ app.post('/api/orders/:id/route', requireRoles('admin', 'operator'), asyncRoute(
 }));
 
 app.post('/api/simulation/trigger', requireRoles('admin', 'operator'), validate(simulationSchema), asyncRoute(async (req, res) => {
+  if (process.env.NODE_ENV === 'production' && process.env.SIMULATIONS_ENABLED !== 'true') {
+    return res.status(403).json({ error: 'SIMULATIONS_DISABLED' });
+  }
   const { scenario, params } = req.body;
   let message;
   let level = 'INFO';
@@ -557,11 +678,21 @@ app.post('/api/simulation/trigger', requireRoles('admin', 'operator'), validate(
 }));
 
 app.use((_req, res) => res.status(404).json({ error: 'Route not found' }));
-app.use((error, _req, res, _next) => {
-  console.error(`[api-error] ${error.stack || error.message}`);
+app.use((error, req, res, _next) => {
   const status = error instanceof SyntaxError && error.status === 400
     ? 400
     : Number.isInteger(error.status) && error.status >= 400 && error.status < 600 ? error.status : 500;
+  process.stdout.write(JSON.stringify({
+    ts: new Date().toISOString(),
+    level: status >= 500 ? 'ERROR' : 'WARN',
+    msg: 'API request failed',
+    route: req.originalUrl?.split('?')[0] || req.path,
+    status,
+    userId: req.user?.id || null,
+    reqId: req.requestId || null,
+    error: status === 500 ? undefined : error.message,
+    ...(status === 500 && process.env.NODE_ENV !== 'production' ? { details: error.message } : {})
+  }) + '\n');
   res.status(status).json({
     error: status === 500 ? 'Internal server error' : error.message,
     ...(status === 500 && process.env.NODE_ENV !== 'production' ? { details: error.message } : {})
@@ -572,8 +703,11 @@ function tickTelemetry() {
   if (!db) return;
   db.telemetry.tick += 1;
   db.telemetry.updatedAt = new Date().toISOString();
-  db.metrics.packetsPerSec = 1100 + Math.floor(Math.random() * 400);
-  db.metrics.detectionTimeMs = 8 + Math.floor(Math.random() * 16);
+  // These are synthetic demo indicators, not observed network packet inspection.
+  if (db.dataMode === 'demo' && process.env.NODE_ENV !== 'production') {
+    db.metrics.packetsPerSec = 1100 + Math.floor(Math.random() * 400);
+    db.metrics.detectionTimeMs = 8 + Math.floor(Math.random() * 16);
+  }
   const event = telemetryEvent({
     type: 'HEARTBEAT',
     level: 'INFO',
@@ -601,6 +735,7 @@ server.on('upgrade', (request, socket, head) => {
   });
 });
 websocketServer.on('connection', (websocket) => {
+  sre.attachWebSocket(websocket);
   websocket.send(JSON.stringify(telemetryEvent({
     type: 'CONNECTED',
     message: 'Connected to VeloSupply live telemetry.'
@@ -612,7 +747,10 @@ async function start() {
   if (!Array.isArray(db.newsletter)) db.newsletter = [];
   if (!Array.isArray(db.rewardClaims)) db.rewardClaims = [];
   refreshMetrics();
-  server.listen(PORT, () => console.log(`VeloSupply API listening on http://localhost:${PORT}`));
+  server.listen(PORT, () => {
+    console.log(`VeloSupply API listening on http://localhost:${PORT}`);
+    sre.start();
+  });
   const timer = setInterval(tickTelemetry, 2000);
   timer.unref();
 }
@@ -624,4 +762,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server, start, refreshMetrics };
+module.exports = { app, server, start, refreshMetrics, sre };

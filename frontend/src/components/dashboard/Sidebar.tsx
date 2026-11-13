@@ -3,17 +3,18 @@ import { motion } from 'framer-motion'
 import {
   Activity, Bell, ChevronDown, ChevronLeft, ChevronRight, Menu, X,
   CircleGauge, FileText, Gift, LayoutDashboard, LogOut, Network,
-  Package, Shield, Store, Users
+  Package, Shield, ShieldCheck, Store, Users
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { useAppStore } from '../../store/useAppStore'
 
-type NavItem = { to: string; label: string; icon: LucideIcon; adminOnly?: boolean }
+type NavItem = { to: string; label: string; icon: LucideIcon; adminOnly?: boolean; operationsOnly?: boolean }
 const groups: Array<{ title: string; items: NavItem[] }> = [
   { title: 'Workspace', items: [
     { to: '/dashboard', label: 'Overview', icon: LayoutDashboard },
     { to: '/dashboard/activity', label: 'Activity', icon: Activity },
+    { to: '/dashboard/reliability', label: 'Reliability', icon: ShieldCheck, operationsOnly: true },
     { to: '/dashboard/messages', label: 'Messages', icon: Bell }
   ] },
   { title: 'Operations', items: [
@@ -62,7 +63,7 @@ export function Sidebar() {
 
       <nav aria-label="Operations navigation" className="sidebar-navigation">
         {groups.map((group) => {
-          const items = group.items.filter((item) => !item.adminOnly || user?.role === 'admin')
+          const items = group.items.filter((item) => (!item.adminOnly || user?.role === 'admin') && (!item.operationsOnly || user?.role === 'admin' || user?.role === 'operator'))
           return <div className="sidebar-group" key={group.title}>
             <p className="sidebar-section-title">{group.title}</p>
             {items.map(({ to, label, icon: Icon }) => <NavLink

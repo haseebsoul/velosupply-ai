@@ -11,16 +11,16 @@ VeloSupply AI is a local-first inventory, fulfillment, and commerce demo. It com
 
 ## Start locally
 
-Install dependencies once:
+Recommended single-command workflow from the repository root:
 
 ```powershell
-cd backend
-npm install
-cd ..\frontend
-npm install
+npm run setup
+npm run dev
 ```
 
-Then run these two commands in separate terminals from the repository root:
+The root launcher starts the backend on port 8000 and Vite on port 5173. It is Windows-safe and stops both services when either process exits.
+
+The original two-terminal workflow remains supported. Install dependencies with `npm run setup`, then run these commands in separate terminals from the repository root:
 
 ```powershell
 cd backend; npm start
@@ -30,19 +30,19 @@ cd backend; npm start
 cd frontend; npm run dev
 ```
 
-Open the Vite URL printed in the frontend terminal (normally `http://localhost:5173`). The backend health probe is available at `http://localhost:8000/api/health`.
+Open the Vite URL printed in the frontend terminal (normally `http://localhost:5173`). The backend health probe is available at `http://localhost:8000/api/health`. Run `npm run check` for backend tests, palette validation and the frontend production build.
 
 ## Demo accounts
 
-All seeded local-development demo accounts use password `1234`. Production startup intentionally does not seed these demo users. Create Administrator and Operations team accounts using the private `ADMIN_REGISTRATION_KEY` and `OPERATOR_REGISTRATION_KEY` invitation keys. Public self-registration is limited to Buyers.
+All seeded local-development demo accounts use password `Velo@12345`. Production startup intentionally does not seed these demo users. Create Administrator and Operations team accounts using the private `ADMIN_REGISTRATION_KEY` and `OPERATOR_REGISTRATION_KEY` invitation keys. Public self-registration is limited to Buyers.
 
 | Email | Role |
 | --- | --- |
 | `admin@velosupply.ai` | Admin |
-| `ops@velosupply.ai` | Operator |
+| `operator@velosupply.ai` | Operator |
 | `buyer@velosupply.ai` | Buyer |
 
-Copy `backend/.env.example` to `backend/.env` and set `MONGODB_URI`, `MONGODB_DB_NAME=velosupply`, and a long random `JWT_SECRET`. The Atlas database user must have `readWrite` access to the `velosupply` database. Set `ADMIN_REGISTRATION_KEY` to a private invitation key before creating an Administrator account; never commit `.env` or real credentials. Production deployments must also set `CORS_ORIGIN` to the deployed frontend origin and terminate TLS at a trusted proxy. After adding the MongoDB driver, run `npm install` in `backend` to refresh the lockfile before using `npm ci` in your deployment pipeline.
+Copy `backend/.env.example` to `backend/.env` and set `MONGODB_URI`, `MONGODB_DB_NAME=velosupply`, and a long random `JWT_SECRET`. The Atlas database user must have `readWrite` access to the `velosupply` database. Atlas starts with an empty application state unless an existing state document is present. Sample catalog, demo users and demo orders are only loaded into Atlas when `SEED_DEMO_DATA=true` is explicitly set in a non-production environment. Local JSON mode continues to seed demo data for development. Set `ADMIN_REGISTRATION_KEY` to a private invitation key before creating an Administrator account; never commit `.env` or real credentials. Production deployments must also set `CORS_ORIGIN` to the deployed frontend origin and terminate TLS at a trusted proxy. After adding the MongoDB driver, run `npm install` in `backend` to refresh the lockfile before using `npm ci` in your deployment pipeline.
 
 ## Routes
 
@@ -69,3 +69,52 @@ Public endpoints include `GET /api/health`, `GET /api/products`, `POST /api/auth
 ## Design notes
 
 The Dashboard V14 redesign keeps the existing VeloSupply logistics product, operational data and route behavior. Its visual clean-up follows the audit-first spacing, restrained color, typography and motion principles from [unslop](https://github.com/heydamir/unslop) by Damir Sokolovsky, licensed CC BY 4.0. The toolkit itself is not copied into this repository.
+
+## Data provenance and what is real
+
+The application exposes `dataMode` from `GET /api/health` and `GET /api/metrics`:
+
+- `demo`: generated sample catalog and operational records. The local JSON development fallback uses this mode.
+- `production`: real application storage mode. A new Atlas database starts empty and does not seed fake buyers, products, warehouses, or orders.
+- `unclassified`: an older state document created before data provenance tracking; verify its records before treating them as production data.
+
+### Sample data (not real business records)
+
+The local demo seed contains 5 non-Pakistan hubs (Newark, Austin, Rotterdam, Dubai and Singapore), 24 synthetic products, 12 synthetic orders, three demo accounts and generated event logs. It also has illustrative starting metrics. These are development examples, not live inventory, supplier feeds, customers, or carrier shipments.
+
+The legacy heartbeat generator randomizes packet-rate and detection-time values only for demo state outside production. Those values are not network packet inspection or threat detection. `GET /api/threats` currently reports inventory threshold and warehouse-status alerts; it does not detect cyberattacks. Scenario simulations change the local demo model and are blocked in production unless `SIMULATIONS_ENABLED=true` is explicitly configured.
+
+### Real application behavior
+
+Authenticated login/JWT checks, authorization rules, product/order API calls, stock updates and persistence are implemented. A checkout request creates an application order and reduces the chosen product's stored stock. That record becomes real application data only after a real buyer places the order against a configured, persistent database. The present checkout does not charge a payment method or create a carrier booking. Payment methods and carriers remain simulated adapters / planned integrations.
+
+The Reliability layer measures actual API request timing/status, process memory and event-loop lag, WebSocket ping/pong latency, and the health probes while the backend is running. Its 1-second sample ring is in process memory; five-minute aggregates and SRE state are persisted through the configured storage adapter. The complete 30-day SLO window is not restart-safe yet.
+
+### Atlas storage currently provisioned
+
+The existing Atlas project already contains the free `VeloSupplyCluster` (AWS Singapore, MongoDB 8.0). The `velosupply` database uses `application_state`; its existing `velosupply_app` database user has `readWrite` on that database. The initial `_id: "primary"` document is now bootstrapped with `dataMode: "production"` and empty arrays for users, warehouses, products and orders. No customer or sample business records were loaded into Atlas.
+
+Atlas Network Access currently has no IP/CIDR entries. Before a local or deployed application can connect directly, add only that application's actual public egress IP/CIDR. Do not use `0.0.0.0/0`. Put the existing database-user password and the SRV connection string in `backend/.env` or deployment secrets; never commit them.
+
+## Reliability and SRE
+
+The operator Reliability workspace is available at `/dashboard/reliability` for administrators and operators. It reads the authenticated `/api/sre` API and presents the six SLOs, calculated error budgets, recent telemetry, five service probes, alerts, incidents, runbooks and scoped chaos controls.
+
+SRE API routes (admin/operator unless stated otherwise):
+
+- `GET /api/sre`, `GET /api/sre/metrics`, `GET /api/sre/health`
+- `GET /api/sre/alerts`, `PATCH /api/sre/alerts/:id/ack`, `PATCH /api/sre/alerts/:id/resolve`
+- `GET/POST /api/sre/incidents`, `PATCH/DELETE /api/sre/incidents/:id`, `POST /api/sre/incidents/:id/notes`
+- `GET /api/sre/runbooks`, `PUT /api/sre/runbooks/:id/progress`
+- `GET/POST /api/sre/chaos` (effects expire after 60 seconds and are limited to product browse and checkout)
+- `GET /api/admin/backup` (administrator only)
+
+The API also exposes `/livez` and `/readyz`. `GET /api/health` retains its original status, service, storage and timestamp fields and adds per-service health details.
+
+### SRE operations notes
+
+- Set `BACKUP_EXPORT=true` to enable the weekly JSON export when using Atlas. Atlas automated backups remain the primary Atlas backup mechanism. Local mode writes a nightly JSON backup under `backend/backups/` and retains the last seven daily files.
+- Structured request logs include a request ID returned in `x-request-id`. The API applies a 300-request/minute IP limit and a 10-login/minute IP limit. Five failed login attempts for an email in 15 minutes trigger a 15-minute lockout.
+- The current application still has no immutable stock movement ledger and no external payment gateway. Health probes intentionally report those dependencies as degraded until those systems are implemented; stock accuracy SLO measurement is therefore not a substitute for a ledger reconciliation.
+- SRE telemetry keeps a 3,600-sample in-process one-second ring and persistent five-minute aggregate buckets. The one-second ring resets when the process restarts.
+- Run backend tests with `cd backend; npm test`. The CI workflow runs the backend syntax checks and SRE tests before the frontend build.

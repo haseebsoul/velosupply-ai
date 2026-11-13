@@ -1,0 +1,16 @@
+:root {
+  --navy-700: #14305E;
+  --navy-900: #0E2244;
+  --navy-50: #EAF0F8;
+  --white: #FFFFFF;
+  --sand: #FAF7F2;
+  --orange-600: #C2410C;
+  --orange-500: #E4631F;
+  --orange-50: #FDEEE4;
+  --ink: #1B2B45;
+  --ink-soft: #50627F;
+  --ink-muted: #8493AB;
+  --line: rgba(20, 48, 94, 0.14);
+  --danger: #B3382C;
+  --shadow-card: 0 1px 2px rgba(20, 48, 94, 0.06), 0 8px 24px -8px rgba(20, 48, 94, 0.14);
+}
