@@ -541,3 +541,13 @@ This direct Atlas inspection confirms the cluster and empty bootstrap record exi
 - Express route handlers still mutate an in-memory compatibility state object and call repository.writeState; collection-specific controller/service reads and writes and safe multi-instance concurrency remain a follow-up. Do not represent this phase as the entire Section 13.4 requirement completed.
 - The Atlas migration has not been run through the application connection. The verified Atlas Network Access list had no entries; the deployment host's actual egress IP/CIDR is still required.
 - Added npm run migrate:state and repository tests for file CRUD/rollback, collection metadata separation, stock projection, legacy backup/migration, and fail-closed initialization.
+
+
+## v16 Domain Repository Follow-up
+
+- Added domain services for buyer soft-deletion, product archival, atomic order plus order-item creation, append-only stock movements in the SRS `movements` collection, stock reconciliation, append-only audit events and versioned tariff rules.
+- Domain order writes validate integer minor-unit totals, verify the total equals item quantity x unit price, and constrain currency to PKR. Buyer creation requires filer/non-filer status.
+- Movement records use the SRS fields: `sku`, `hubCode`, `type`, `qty`, `reason`, `refType`, `refId`, `actorId`, and `at`. Append-only enforcement prevents update/delete/replacement; audit events are also append-only.
+- These services are covered by unit tests but **are not yet wired into the existing HTTP checkout, restock, inventory update, or admin routes**. Production stock behavior must not be described as ledger-backed until that integration is complete.
+- The SRS calls for Zod validation at API/domain boundaries; these new service validations are explicit runtime checks, not yet a complete Zod schema layer for every collection.
+- No live Atlas runtime migration or persistence smoke test has been performed; the known Atlas IP allowlist gap remains.
