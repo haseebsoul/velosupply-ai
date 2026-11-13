@@ -128,6 +128,16 @@ describe('SRE API', () => {
     await request(harness.app).get('/api/products').expect(200);
   });
 
+  it('opens the circuit breaker after 25 failed target requests', async () => {
+    for (let index = 0; index < 25; index += 1) {
+      harness.sre.recordRequest({ path: '/api/products', method: 'GET', status: 500, ms: 220 });
+    }
+    const breaker = await request(harness.app).get('/api/sre/chaos').expect(200);
+    expect(breaker.body.breaker.state).toBe('OPEN');
+    await request(harness.app).get('/api/products').expect(503);
+    expect(harness.state.sre.alerts.some((alert) => alert.rule === 'circuit_open')).toBe(true);
+  });
+
   it('acknowledges and resolves stored alerts', async () => {
     const alert = {
       id: 'ALT-test', rule: 'db_slow', severity: 'warn', status: 'firing',
