@@ -434,3 +434,14 @@ a { color: inherit; text-decoration: none; }
   .stakeholder-description { grid-column: 2; }
   .registration-fields { grid-template-columns: 1fr; }
 }
+
+.capacity-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-bottom: 21px; }
+.capacity-card-heading h3 { margin: 6px 0 0; color: var(--text-ops-primary); font-size: 15px; font-weight: 550; letter-spacing: -.02em; }
+.capacity-total { color: #EAA084; font: 24px 'Geist Mono', monospace; letter-spacing: -.04em; }
+.capacity-meter-list { display: grid; gap: 18px; }
+.capacity-meter-row { display: grid; gap: 8px; }
+.capacity-meter-meta { display: flex; align-items: center; justify-content: space-between; color: #D7D1C9; font-size: 10px; }
+.capacity-meter-meta .mono { color: #A9A198; font-size: 10px; }
+.capacity-meter-track { height: 6px; overflow: hidden; border-radius: 10px; background: #2B2925; }
+.capacity-meter-track span { display: block; height: 100%; border-radius: inherit; background: var(--accent-ops-lime); }
+.capacity-footnote { margin: 21px 0 0; padding-top: 13px; border-top: 1px solid var(--border-ops-subtle); font-size: 10px; }
