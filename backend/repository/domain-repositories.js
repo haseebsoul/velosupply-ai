@@ -54,29 +54,92 @@ function createDomainRepositories(adapter) {
     }
   };
 
+  const DELIVERY_FEES_PKR = {
+    Karachi: 350,
+    Lahore: 400,
+    Islamabad: 450,
+    Rawalpindi: 450,
+    Faisalabad: 500,
+    Multan: 550,
+    Peshawar: 650,
+    Quetta: 900
+  };
+
   const orders = {
     async createWithItems(orderInput, itemInputs) {
-      const userId = requiredString(orderInput.userId, 'userId');
+      const buyerId = requiredString(orderInput.buyerId || orderInput.userId, 'buyerId');
+      const city = requiredString(orderInput.city, 'city');
       if (!Array.isArray(itemInputs) || !itemInputs.length) throw new TypeError('At least one order item is required');
-      const items = itemInputs.map((item) => ({
-        id: item.id || 'ITEM-' + randomUUID(),
-        productId: requiredString(item.productId, 'productId'),
-        quantity: integer(item.quantity, 'quantity', 1),
-        unitPriceMinor: integer(item.unitPriceMinor, 'unitPriceMinor')
-      }));
-      const totalMinor = integer(orderInput.totalMinor, 'totalMinor');
-      if (orderInput.currency !== undefined && orderInput.currency !== 'PKR') throw new TypeError('currency must be PKR');
-      const calculated = items.reduce((sum, item) => sum + item.quantity * item.unitPriceMinor, 0);
-      if (!Number.isSafeInteger(calculated) || calculated !== totalMinor) throw new TypeError('totalMinor must equal the sum of integer-minor-unit order items');
+
+      const settings = await adapter.find('settings', { key: { $in: ['gstPct', 'deliveryFeeTable'] } });
+      const gstSetting = settings.find((entry) => entry.key === 'gstPct');
+      const deliverySetting = settings.find((entry) => entry.key === 'deliveryFeeTable');
+      const gstPct = gstSetting ? Number(gstSetting.value) : 18;
+      if (!Number.isFinite(gstPct) || gstPct < 0 || gstPct > 100) throw new TypeError('gstPct setting must be between 0 and 100');
+      const deliveryFees = deliverySetting && deliverySetting.value && typeof deliverySetting.value === 'object'
+        ? { ...DELIVERY_FEES_PKR, ...deliverySetting.value }
+        : DELIVERY_FEES_PKR;
+      if (!Object.prototype.hasOwnProperty.call(deliveryFees, city)) throw new TypeError('Unsupported delivery city: ' + city);
+
+      const items = itemInputs.map((item) => {
+        const qty = integer(item.qty ?? item.quantity, 'qty', 1);
+        const unitExGstPkr = Number(item.unitExGstPkr);
+        if (!Number.isFinite(unitExGstPkr) || unitExGstPkr < 0) throw new TypeError('unitExGstPkr must be a non-negative PKR amount');
+        const sku = requiredString(item.sku, 'sku');
+        const name = requiredString(item.name, 'name');
+        const lineEx = Math.round(unitExGstPkr * qty);
+        const lineGst = Math.round(lineEx * gstPct / 100);
+        return {
+          id: item.id || 'ITEM-' + randomUUID(),
+          sku,
+          name,
+          qty,
+          unitExGstPkr: Math.round(unitExGstPkr),
+          lineEx,
+          lineGst
+        };
+      });
+
+      const subtotalEx = items.reduce((sum, item) => sum + item.lineEx, 0);
+      const gst = items.reduce((sum, item) => sum + item.lineGst, 0);
+      const deliveryFee = subtotalEx > 150000 ? 0 : Number(deliveryFees[city]);
+      if (!Number.isSafeInteger(deliveryFee) || deliveryFee < 0) throw new TypeError('Delivery fee must be a non-negative whole PKR amount');
+      const totalPkr = subtotalEx + gst + deliveryFee;
+      if (![subtotalEx, gst, totalPkr].every(Number.isSafeInteger)) throw new TypeError('PKR order totals exceed the safe integer range');
+
+      const at = new Date().toISOString();
       const order = {
-        ...orderInput, id: orderInput.id || 'ORD-' + randomUUID(),
-        userId, totalMinor, currency: orderInput.currency || 'PKR',
-        createdAt: orderInput.createdAt || new Date().toISOString()
+        ...orderInput,
+        id: orderInput.id || 'ORD-' + randomUUID(),
+        code: orderInput.code || 'VS-' + randomUUID(),
+        buyerId,
+        city,
+        items: items.map(({ sku, name, qty, unitExGstPkr }) => ({ sku, name, qty, unitExGstPkr })),
+        price: { subtotalEx, gst, deliveryFee, totalPkr },
+        paymentState: orderInput.paymentState || 'pending',
+        status: orderInput.status || 'PLACED',
+        hubs: Array.isArray(orderInput.hubs) ? orderInput.hubs : [],
+        splitShipment: Boolean(orderInput.splitShipment),
+        timeline: Array.isArray(orderInput.timeline) && orderInput.timeline.length
+          ? orderInput.timeline
+          : [{ status: orderInput.status || 'PLACED', at, actorId: buyerId, note: 'Order placed' }],
+        createdAt: orderInput.createdAt || at
       };
+
       return adapter.withTransaction(async ({ repository }) => {
         const saved = await repository.insert('orders', order);
-        for (const item of items) await repository.insert('orderItems', { ...item, orderId: saved.id });
-        return { order: saved, items };
+        const savedItems = [];
+        for (const item of items) {
+          savedItems.push(await repository.insert('orderItems', {
+            id: item.id,
+            orderId: saved.id,
+            sku: item.sku,
+            name: item.name,
+            qty: item.qty,
+            unitExGstPkr: item.unitExGstPkr
+          }));
+        }
+        return { order: saved, items: savedItems };
       });
     }
   };
