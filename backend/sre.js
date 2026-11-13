@@ -492,6 +492,10 @@ function createSRE(deps) {
     audit('alert.resolve', req.user, { alertId: alert.id, rule: alert.rule });
     res.json({ alert });
   });
+  router.get('/audit', (req, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Administrator access required' });
+    res.json(getDb().sre.audit.slice(0, 1000));
+  });
   router.get('/incidents', (_req, res) => res.json(getDb().sre.incidents));
   const incidentSchema = z.object({
     title: z.string().trim().min(3).max(160),
