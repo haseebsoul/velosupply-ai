@@ -41,8 +41,8 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Check backend JavaScript syntax
         working-directory: backend
-        run: node --check server.js && node --check seed.js && node --check sre.js
-      - name: Run backend SRE tests
+        run: node --check server.js && node --check seed.js && node --check sre.js && node --check migrate-state.js && node --check repository/index.js && node --check repository/collection-map.js && node --check repository/file-adapter.js && node --check repository/mongo-adapter.js
+      - name: Run backend tests
         working-directory: backend
         run: npm test
       - name: Check frontend palette tokens
