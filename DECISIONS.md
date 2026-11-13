@@ -35,3 +35,8 @@ D-017 | Keep four separate SRE AreaCharts and a 500-line terminal buffer fed by 
 D-018 | Calculate one-hour burn rates from each SLO's own event stream | Browse, checkout, WebSocket, health, stock accuracy and dispatch have different bad-event definitions and must not share only the HTTP request sample set | backend/sre.js
 
 D-019 | Exercise the 25-failure breaker threshold and browse SLO calculations in backend tests | Critical SRE behavior should be verified by automated assertions, not only manual dashboard actions | backend/test/sre.test.mjs
+D-020 | Commit the npm-generated backend lockfile and require npm ci in CI | The dependency manifest, lockfile and a clean install must agree; transitive package versions must come from npm's resolver rather than hand-authored guesses | backend/package-lock.json, .github/workflows/ci.yml
+
+D-021 | Treat API, database and WebSocket as readiness-critical, while reporting the stock ledger and payment gateway separately in health | Missing future integrations must be visible as degraded without marking an otherwise functioning HTTP application unready | backend/sre.js, backend/server.js
+
+D-022 | Give the Activity terminal a level filter and let new events repopulate after clear | Operators need the specified terminal controls without disabling the stream after one clear action | frontend/src/components/dashboard/TerminalPanel.tsx
