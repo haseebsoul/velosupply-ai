@@ -39,6 +39,8 @@ function createSRE(deps) {
   const samples = [];
   const dbLatencies = [];
   const wsLatencies = [];
+  const pendingPings = new Map();
+  let currentBucket = null;
   const healthFailures = new Map();
   const ruleStartedAt = new Map();
   const ruleClearAt = new Map();
@@ -116,6 +118,11 @@ function createSRE(deps) {
     const chaos = db.sre.chaos;
     if (chaos.expiresAt && Date.now() >= Date.parse(chaos.expiresAt)) {
       db.sre.chaos = { mode: 'reset', expiresAt: null, activatedAt: null };
+      if (circuitOpenedAt) {
+        circuitOpenedAt = null;
+        circuitFailures = 0;
+        log('INFO', 'Circuit breaker returned to CLOSED after the 60-second recovery window.');
+      }
       return db.sre.chaos;
     }
     return chaos;
@@ -183,8 +190,13 @@ function createSRE(deps) {
         bad = selected.filter((entry) => entry.status !== 'up').length;
       } else if (slo.id === 'SLO-6') {
         const orders = (db.orders || []).filter((order) => Date.parse(order.createdAt || 0) >= now - WINDOW_MS);
-        selected = orders;
-        bad = orders.filter((order) => !['dispatched', 'delivered', 'DISPATCHED', 'DELIVERED'].includes(order.status)).length;
+        const matured = orders.filter((order) => {
+          const created = Date.parse(order.createdAt || 0);
+          const dispatched = ['dispatched', 'delivered', 'DISPATCHED', 'DELIVERED'].includes(order.status);
+          return dispatched || now - created >= 24 * 60 * 60 * 1000;
+        });
+        selected = matured;
+        bad = matured.filter((order) => !['dispatched', 'delivered', 'DISPATCHED', 'DELIVERED'].includes(order.status)).length;
       }
       const total = selected.length;
       const observed = total ? (total - bad) / total : 1;
@@ -279,6 +291,30 @@ function createSRE(deps) {
     const metric = currentMetrics();
     samples.push(metric);
     if (samples.length > SAMPLE_LIMIT) samples.splice(0, samples.length - SAMPLE_LIMIT);
+    const bucketStart = Math.floor(now / 300_000) * 300_000;
+    if (!currentBucket || currentBucket.start !== bucketStart) {
+      currentBucket = {
+        start: bucketStart, samples: 0, rpsTotal: 0, p50Max: 0, p95Max: 0, p99Max: 0,
+        errorRateMax: 0, wsClientsMax: 0, memMbMax: 0, eventLoopLagMsMax: 0,
+        dbLatencyMsMax: 0, orderThroughputTotal: 0
+      };
+      const db = getDb();
+      if (!Array.isArray(db.sre.telemetryBuckets)) db.sre.telemetryBuckets = [];
+      db.sre.telemetryBuckets.push(currentBucket);
+      db.sre.telemetryBuckets = db.sre.telemetryBuckets.slice(-8640);
+      Promise.resolve(deps.persist?.()).catch((error) => log('ERROR', 'Telemetry bucket persistence failed', { error: error.message }));
+    }
+    currentBucket.samples += 1;
+    currentBucket.rpsTotal += metric.rps;
+    currentBucket.p50Max = Math.max(currentBucket.p50Max, metric.p50);
+    currentBucket.p95Max = Math.max(currentBucket.p95Max, metric.p95);
+    currentBucket.p99Max = Math.max(currentBucket.p99Max, metric.p99);
+    currentBucket.errorRateMax = Math.max(currentBucket.errorRateMax, metric.errorRate);
+    currentBucket.wsClientsMax = Math.max(currentBucket.wsClientsMax, metric.wsClients);
+    currentBucket.memMbMax = Math.max(currentBucket.memMbMax, metric.memMb);
+    currentBucket.eventLoopLagMsMax = Math.max(currentBucket.eventLoopLagMsMax, metric.eventLoopLagMs);
+    currentBucket.dbLatencyMsMax = Math.max(currentBucket.dbLatencyMsMax, metric.dbLatencyMs);
+    currentBucket.orderThroughputTotal += metric.orderThroughput;
     recentClientCounts.push({ at: now, count: metric.wsClients });
     recentClientCounts = recentClientCounts.filter((entry) => entry.at >= now - 30_000);
     lastTickAt = now;
@@ -327,7 +363,7 @@ function createSRE(deps) {
     const db = getDb();
     db.sre.healthChecks.push(...checks);
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-    db.sre.healthChecks = db.sre.healthChecks.filter((entry) => Date.parse(entry.at) >= cutoff).slice(-5000);
+    db.sre.healthChecks = db.sre.healthChecks.filter((entry) => Date.parse(entry.at) >= cutoff).slice(-50_000);
     await deps.persist?.().catch((error) => log('ERROR', 'Health check persistence failed', { error: error.message }));
     for (const entry of checks.filter((item) => item.status === 'down')) log('CRITICAL', 'Service health check is DOWN', { service: entry.service, error: entry.error });
     return checks;
@@ -402,13 +438,36 @@ function createSRE(deps) {
   function attachWebSocket(websocket) {
     websocket.on('pong', (data) => {
       const sentAt = Number(data?.toString());
-      if (Number.isFinite(sentAt)) recordWebSocketLatency(Date.now() - sentAt);
+      if (Number.isFinite(sentAt)) {
+        const timeout = pendingPings.get(websocket);
+        if (timeout) clearTimeout(timeout);
+        pendingPings.delete(websocket);
+        recordWebSocketLatency(Date.now() - sentAt);
+      }
+    });
+    websocket.on('close', () => {
+      const timeout = pendingPings.get(websocket);
+      if (timeout) clearTimeout(timeout);
+      pendingPings.delete(websocket);
     });
   }
 
   function pingWebSockets(websocketServer) {
     if (!websocketServer) return;
-    for (const client of websocketServer.clients) if (client.readyState === 1) client.ping(String(Date.now()));
+    for (const client of websocketServer.clients) {
+      if (client.readyState !== 1) continue;
+      const sentAt = Date.now();
+      const prior = pendingPings.get(client);
+      if (prior) clearTimeout(prior);
+      client.ping(String(sentAt));
+      const timeout = setTimeout(() => {
+        if (!pendingPings.has(client)) return;
+        pendingPings.delete(client);
+        recordWebSocketLatency(2001);
+      }, 2000);
+      timeout.unref();
+      pendingPings.set(client, timeout);
+    }
   }
 
   const router = express.Router();
