@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Activity, AlertTriangle, BookOpen, RefreshCw, ShieldAlert, Siren } from 'lucide-react'
 import { api, errorMessage } from '../../lib/apiClient'
@@ -68,7 +68,7 @@ export function ReliabilityPage() {
     finally { setBusy(false) }
   }
 
-  async function saveIncident(event: React.FormEvent<HTMLFormElement>) {
+  async function saveIncident(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     await mutate(() => api.post('/sre/incidents', {
       title: incidentTitle, severity: incidentSeverity, status: 'open', summary: incidentSummary
