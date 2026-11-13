@@ -256,7 +256,7 @@ a { color: inherit; text-decoration: none; }
 .sidebar-user { display: flex; align-items: center; gap: 9px; padding: 11px 8px 7px; border-top: 1px solid var(--border-ops); }
 .sidebar-user-avatar, .profile-avatar { width: 30px; height: 30px; flex: 0 0 30px; display: grid; place-items: center; border-radius: 50%; background: #38312C; color: #F0B79F; font: 11px 'Geist Mono', monospace; }
 .sidebar-logout { border: 0; background: transparent; cursor: pointer; }
-.sidebar.collapsed .sidebar-wordmark, .sidebar.collapsed .sidebar-workspace, .sidebar.collapsed .sidebar-section-title, .sidebar.collapsed .side-label, .sidebar.collapsed .sidebar-user-copy, .sidebar.collapsed .sidebar-collapse { display: none; }
+.sidebar.collapsed .sidebar-wordmark, .sidebar.collapsed .sidebar-workspace, .sidebar.collapsed .sidebar-section-title, .sidebar.collapsed .side-label, .sidebar.collapsed .sidebar-user-copy { display: none; }
 .sidebar.collapsed .sidebar-brand { justify-content: center; padding-inline: 0; }
 .sidebar.collapsed .side-link { justify-content: center; padding-inline: 8px; }
 .sidebar.collapsed .sidebar-user { justify-content: center; padding-inline: 0; }
@@ -400,7 +400,7 @@ a { color: inherit; text-decoration: none; }
   .sidebar.mobile-open .sidebar-wordmark, .sidebar.mobile-open .sidebar-workspace .workspace-copy, .sidebar.mobile-open .workspace-chevron, .sidebar.mobile-open .sidebar-section-title, .sidebar.mobile-open .side-label, .sidebar.mobile-open .sidebar-user-copy { display: initial; }
   .sidebar.mobile-open .sidebar-workspace { justify-content: flex-start; }
   .sidebar.mobile-open .sidebar-brand { justify-content: space-between; }
-  .sidebar.mobile-open .sidebar-link { justify-content: flex-start; }
+  .sidebar.mobile-open .side-link { justify-content: flex-start; }
   .sidebar-collapse { display: none; }
   .sidebar-overlay { display: block; position: fixed; inset: 0; z-index: 19; border: 0; background: rgba(0,0,0,.48); }
   .sidebar-mobile-toggle { position: fixed; top: 17px; left: 15px; z-index: 18; width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid var(--border-ops); border-radius: 8px; color: var(--text-ops-primary); background: #1A1917; font-size: 17px; }
