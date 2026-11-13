@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Boxes, Building2, Eye, EyeOff, ShieldCheck, ShoppingBag, Truck } from 'lucide-react'
+import { Boxes, Eye, EyeOff, ShieldCheck, ShoppingBag, Truck } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { z } from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -30,7 +31,7 @@ const stakeholders: Array<{
   value: UserRole
   label: string
   description: string
-  icon: typeof Building2
+  icon: LucideIcon
 }> = [
   { value: 'admin', label: 'Administrator', description: 'Manage accounts, access and workspace settings', icon: ShieldCheck },
   { value: 'operator', label: 'Operations team', description: 'Manage inventory, routing and fulfillment', icon: Truck },
@@ -50,7 +51,7 @@ export function RegisterPage() {
 
   const submit = async (values: Fields) => {
     setError('')
-    const { confirmPassword, ...payload } = values
+    const payload = { name: values.name, email: values.email, role: values.role, password: values.password, ...(values.adminInviteCode ? { adminInviteCode: values.adminInviteCode } : {}) }
     try {
       const { data } = await api.post<{ token: string; user: User }>('/auth/register', payload)
       setSession(data.token, data.user)
