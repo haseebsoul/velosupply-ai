@@ -74,6 +74,7 @@ function createDomainRepositories(adapter) {
   function activeTariffRule(rows, code, now) {
     return rows
       .filter((rule) => rule.code === code &&
+        ['demo-estimate', 'official', 'licensed-provider'].includes(rule.source) &&
         (!rule.effectiveFrom || Date.parse(rule.effectiveFrom) <= now) &&
         (!rule.effectiveTo || Date.parse(rule.effectiveTo) >= now))
       .sort((a, b) => Number(b.version) - Number(a.version))[0] || null;
