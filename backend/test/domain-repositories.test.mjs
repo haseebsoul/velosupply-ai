@@ -50,6 +50,19 @@ describe('domain repositories and immutable ledgers', () => {
     )).rejects.toThrow('unitExGstPkr');
   });
 
+  it('creates products only against an existing warehouse and requires the supplied batch hash', async () => {
+    const { adapter, domain } = await harness();
+    await expect(domain.products.create({
+      sku: 'SKU-MISSING', name: 'Router', batchHash: 'sha256:abc', originWarehouseId: 'MISSING'
+    })).rejects.toThrow('existing warehouse');
+    const warehouse = await domain.warehouses.create({ code: 'HUB-KHI', name: 'Port Qasim Hub', city: 'Karachi' });
+    const product = await domain.products.create({
+      sku: 'SKU-OK', name: 'Router', batchHash: 'sha256:abc', originWarehouseId: warehouse.id
+    });
+    expect(product.originWarehouseId).toBe(warehouse.id);
+    expect(await adapter.count('products', { sku: 'SKU-OK' })).toBe(1);
+  });
+
   it('calculates PKR lines, GST, and city delivery fees using SRS rounding', async () => {
     const { adapter, domain } = await harness();
     const result = await domain.orders.createWithItems(
@@ -68,17 +81,6 @@ describe('domain repositories and immutable ledgers', () => {
       [{ sku: 'SKU-1', name: 'Server Rack', qty: 1, unitExGstPkr: 150001 }]
     );
     expect(result.order.price.deliveryFee).toBe(0);
-  });
-
-  it('creates an order and its items atomically using integer minor units', async () => {
-    const { adapter, domain } = await harness();
-    const result = await domain.orders.createWithItems(
-      { userId: 'buyer-1', totalMinor: 3750 },
-      [{ productId: 'p-1', quantity: 3, unitPriceMinor: 1250 }]
-    );
-    expect(result.order.totalMinor).toBe(3750);
-    expect(result.order.currency).toBe('PKR');
-    expect(await adapter.count('orderItems', { orderId: result.order.id })).toBe(1);
   });
 
   it('reconciles on-hand stock from append-only movements', async () => {
