@@ -347,6 +347,7 @@ app.get('/api/health', (_req, res) => {
     status: summary.status,
     service: 'velosupply-api',
     storage: stateCollection ? 'mongodb' : 'file',
+    dataMode: db.dataMode || 'unclassified',
     timestamp: new Date().toISOString(),
     services: summary.services,
     checkedAt: summary.checkedAt
@@ -355,6 +356,8 @@ app.get('/api/health', (_req, res) => {
 app.get('/health', (_req, res) => res.json({
   status: sre.healthSummary().status,
   service: 'velosupply-api',
+  storage: stateCollection ? 'mongodb' : 'file',
+  dataMode: db.dataMode || 'unclassified',
   timestamp: new Date().toISOString(),
   services: sre.healthSummary().services
 }));
@@ -364,6 +367,7 @@ app.get('/readyz', (_req, res) => {
   res.status(summary.status === 'ok' ? 200 : 503).json(summary);
 });
 app.get('/api/metrics', (_req, res) => res.json({
+  dataMode: db.dataMode || 'unclassified',
   ...refreshMetrics(),
   sre: sre.currentMetrics(),
   slos: sre.sloReport()
