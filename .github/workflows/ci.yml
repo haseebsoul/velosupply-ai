@@ -28,6 +28,10 @@ jobs:
       - name: Run backend SRE tests
         working-directory: backend
         run: npm test
+      - name: Check frontend palette tokens
+        run: node scripts/check-hex.mjs
+      - name: Check root development script syntax
+        run: node --check scripts/dev.js
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci --no-audit --no-fund
