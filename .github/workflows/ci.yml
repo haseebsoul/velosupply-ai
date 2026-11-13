@@ -24,7 +24,10 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Check backend JavaScript syntax
         working-directory: backend
-        run: node --check server.js && node --check seed.js
+        run: node --check server.js && node --check seed.js && node --check sre.js
+      - name: Run backend SRE tests
+        working-directory: backend
+        run: npm test
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci --no-audit --no-fund
