@@ -168,6 +168,22 @@ describe('collection repository adapters', () => {
     }]);
   });
 
+  it('keeps the local stock collection projection synchronized with product quantities', async () => {
+    const { adapter } = await createTempAdapter({
+      users: [], products: [{ id: 'p-1', sku: 'SKU-1', stock: 4, warehouse_hub: 'HUB-1' }],
+      warehouses: [], orders: [], logs: [], newsletter: [], rewardClaims: [],
+      metrics: {}, telemetry: { tick: 0 }
+    });
+    expect(await adapter.find('stock')).toEqual([{
+      id: 'SKU-1:HUB-1', sku: 'SKU-1', hubCode: 'HUB-1',
+      onHand: 4, reserved: 0, projection: true
+    }]);
+    const state = await adapter.readState();
+    state.products[0].stock = 9;
+    await adapter.writeState(state);
+    expect((await adapter.find('stock'))[0].onHand).toBe(9);
+  });
+
   it('keeps collection-owned arrays out of the metadata document', () => {
     const metadata = extractMetadata({
       users: [{ id: 'u-1' }], products: [], warehouses: [], orders: [], logs: [],
