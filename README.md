@@ -11,6 +11,8 @@ VeloSupply AI is an inventory, fulfillment, and commerce application. It combine
 
 ## Start locally
 
+Before starting the app, add your development machine's public IP address to the VeloSupply Atlas project's Network Access list. Do not use an unrestricted `0.0.0.0/0` rule for a production deployment.
+
 Configure MongoDB and the stakeholder invitation codes:
 
 ```powershell

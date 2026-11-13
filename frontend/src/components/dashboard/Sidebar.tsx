@@ -23,7 +23,7 @@ const operationsLinks = [
 ] as const
 
 export function Sidebar() {
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(() => window.matchMedia('(max-width: 1000px)').matches)
   const { user, logout } = useAppStore()
   const navigate = useNavigate()
   const roleLabel = user?.role === 'admin' ? 'Administrator' : user?.role === 'operator' ? 'Operations' : 'Buyer'

@@ -451,3 +451,13 @@ a { color: inherit; text-decoration: none; }
 .live-dot { box-shadow: none; }
 .canvas-map { background: #141416; }
 @media (max-width: 1000px) { .sidebar { width: 76px; flex-basis: 76px; } }
+
+.sidebar { transition: border-color .16s ease; }
+.side-link:focus-visible, .small-button:focus-visible, .navbar-icon-button:focus-visible, .profile-trigger:focus-visible {
+  outline: 2px solid var(--accent-ops-lime);
+  outline-offset: 2px;
+}
+@media (max-width: 1000px) {
+  .sidebar { min-height: 100vh; }
+  .sidebar:not(.collapsed) { z-index: 20; }
+}
