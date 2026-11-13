@@ -69,8 +69,9 @@ describe('domain repositories and immutable ledgers', () => {
       { buyerId: 'buyer-1', city: 'Karachi', paymentMethod: 'COD' },
       [{ sku: 'SKU-1', name: 'Router', qty: 3, unitExGstPkr: 12500 }]
     );
-    expect(result.order.price).toEqual({ subtotalEx: 37500, gst: 6750, deliveryFee: 350, totalPkr: 44600 });
-    expect(result.order.items).toEqual([{ sku: 'SKU-1', name: 'Router', qty: 3, unitExGstPkr: 12500 }]);
+    expect(result.order.price).toEqual({ currency: 'PKR', subtotalExMinor: 3750000, gstMinor: 675000, deliveryFeeMinor: 35000, totalMinor: 4460000 });
+    expect(result.order.items).toEqual([{ sku: 'SKU-1', name: 'Router', qty: 3, unitPriceMinor: 1250000 }]);
+    expect(Number.isSafeInteger(result.order.price.totalMinor)).toBe(true);
     expect(await adapter.count('orderItems', { orderId: result.order.id })).toBe(1);
   });
 
@@ -80,7 +81,7 @@ describe('domain repositories and immutable ledgers', () => {
       { buyerId: 'buyer-1', city: 'Lahore' },
       [{ sku: 'SKU-1', name: 'Server Rack', qty: 1, unitExGstPkr: 150001 }]
     );
-    expect(result.order.price.deliveryFee).toBe(0);
+    expect(result.order.price.deliveryFeeMinor).toBe(0);
   });
 
   it('reconciles on-hand stock from append-only movements', async () => {
