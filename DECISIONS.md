@@ -40,3 +40,12 @@ D-020 | Commit the npm-generated backend lockfile and require npm ci in CI | The
 D-021 | Treat API, database and WebSocket as readiness-critical, while reporting the stock ledger and payment gateway separately in health | Missing future integrations must be visible as degraded without marking an otherwise functioning HTTP application unready | backend/sre.js, backend/server.js
 
 D-022 | Give the Activity terminal a level filter and let new events repopulate after clear | Operators need the specified terminal controls without disabling the stream after one clear action | frontend/src/components/dashboard/TerminalPanel.tsx
+D-023 | Reuse the existing VeloSupplyCluster instead of creating a duplicate | The Atlas project already contains an active free AWS Singapore cluster with a scoped velosupply_app database user; a second cluster would duplicate infrastructure without benefit | MongoDB Atlas VeloSupply AI project
+
+D-024 | Bootstrap Atlas with an empty production application state and require explicit SEED_DEMO_DATA=true to load samples | Customer/order/inventory data must never be silently fabricated in a real data store | backend/production-state.js, backend/server.js
+
+D-025 | Tag seeded state as demo and empty Atlas state as production; return the mode from health/metrics | Operators need to distinguish sample records, new production data and legacy records without provenance | backend/seed.js, backend/server.js
+
+D-026 | Disable randomized heartbeat metrics and state-mutating scenario simulation in production by default | Simulated packet rates/detection times are not measurements and simulation must not alter real stock/order state | backend/server.js
+
+D-027 | Do not add a universal Atlas IP allowlist entry | A broad 0.0.0.0/0 rule would expose database authentication endpoints to every IPv4 address; only the actual application egress IP/CIDR should be allowlisted | MongoDB Atlas Network Access
