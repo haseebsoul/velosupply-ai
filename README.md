@@ -38,7 +38,7 @@ Open the Vite URL printed in the frontend terminal (normally `http://localhost:5
 
 ## Development and production accounts
 
-Development seed accounts use password `1234`. They are created only when `NODE_ENV` is not `production` and Atlas has no application state yet. A new production database instead requires a bootstrap administrator name, email and password (at least 16 characters), and starts without sample orders or demo users.
+Development seed accounts use password `1234`. They are created only when `NODE_ENV` is not `production` and Atlas has no application state yet. A new production database instead requires a bootstrap administrator name, email and password (at least 16 characters), and starts without sample orders or demo users. If a legacy JSON seed file is migrated in production, its seeded user accounts are replaced by that bootstrap administrator.
 
 | Email | Role |
 | --- | --- |

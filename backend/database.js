@@ -1,6 +1,6 @@
 const fs = require('node:fs/promises');
 const { MongoClient } = require('mongodb');
-const { DB_PATH, createSeedData, hasCurrentSchema } = require('./seed');
+const { DB_PATH, createInitialSeedData, hasCurrentSchema } = require('./seed');
 
 let client;
 let stateCollection;
@@ -29,31 +29,18 @@ async function connectState() {
   let initialState;
   try {
     const legacy = JSON.parse(await fs.readFile(DB_PATH, 'utf8'));
-    if (hasCurrentSchema(legacy)) initialState = legacy;
+    if (hasCurrentSchema(legacy)) {
+      initialState = legacy;
+      if (process.env.NODE_ENV === 'production') {
+        const secureInitialState = await createInitialSeedData();
+        initialState.users = secureInitialState.users;
+      }
+    }
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
 
-  if (!initialState) {
-    if (process.env.NODE_ENV === 'production') {
-      const name = process.env.BOOTSTRAP_ADMIN_NAME?.trim();
-      const email = process.env.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase();
-      const password = process.env.BOOTSTRAP_ADMIN_PASSWORD || '';
-
-      if (!name || name.length < 2 || !email || !email.includes('@') || password.length < 16) {
-        throw new Error(
-          'For a new production database, set BOOTSTRAP_ADMIN_NAME, BOOTSTRAP_ADMIN_EMAIL, and BOOTSTRAP_ADMIN_PASSWORD (16+ characters) before starting the API.'
-        );
-      }
-
-      initialState = await createSeedData({
-        production: true,
-        bootstrapAdmin: { name, email, password }
-      });
-    } else {
-      initialState = await createSeedData();
-    }
-  }
+  if (!initialState) initialState = await createInitialSeedData();
 
   await stateCollection.insertOne({
     _id: 'primary',

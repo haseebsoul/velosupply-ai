@@ -150,6 +150,25 @@ async function createSeedData(options = {}) {
   };
 }
 
+async function createInitialSeedData() {
+  if (process.env.NODE_ENV !== 'production') return createSeedData();
+
+  const name = process.env.BOOTSTRAP_ADMIN_NAME?.trim();
+  const email = process.env.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase();
+  const password = process.env.BOOTSTRAP_ADMIN_PASSWORD || '';
+
+  if (!name || name.length < 2 || !email || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email) || password.length < 16) {
+    throw new Error(
+      'For a new production database, set BOOTSTRAP_ADMIN_NAME, BOOTSTRAP_ADMIN_EMAIL, and BOOTSTRAP_ADMIN_PASSWORD (16+ characters) before starting the API.'
+    );
+  }
+
+  return createSeedData({
+    production: true,
+    bootstrapAdmin: { name, email, password }
+  });
+}
+
 async function writeAtomic(filePath, data) {
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   await fs.writeFile(temporaryPath, `${JSON.stringify(data, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
@@ -224,7 +243,7 @@ async function seedDatabase(options = {}) {
       if (error.code !== 'ENOENT') throw error;
     }
   }
-  const data = await createSeedData();
+  const data = await createInitialSeedData();
   await writeAtomic(filePath, data);
   return data;
 }
@@ -238,4 +257,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { DB_PATH, DB_SCHEMA_VERSION, seedDatabase, productStatus, hasCurrentSchema, createSeedData };
+module.exports = { DB_PATH, DB_SCHEMA_VERSION, seedDatabase, productStatus, hasCurrentSchema, createSeedData, createInitialSeedData };
