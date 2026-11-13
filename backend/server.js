@@ -1,4 +1,6 @@
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
+const path = require('node:path');
 const http = require('node:http');
 const { randomUUID, timingSafeEqual } = require('node:crypto');
 const express = require('express');
@@ -8,6 +10,27 @@ const jwt = require('jsonwebtoken');
 const { WebSocketServer, WebSocket } = require('ws');
 const { z } = require('zod');
 const { DB_PATH, seedDatabase, productStatus } = require('./seed');
+
+
+const envFilePath = path.join(__dirname, '.env');
+try {
+  const envFile = fsSync.readFileSync(envFilePath, 'utf8');
+  for (const line of envFile.split(/\\r?\\n/)) {
+    const valueLine = line.trim();
+    if (!valueLine || valueLine.startsWith('#')) continue;
+    const separator = valueLine.indexOf('=');
+    if (separator < 1) continue;
+    const key = valueLine.slice(0, separator).trim();
+    if (Object.prototype.hasOwnProperty.call(process.env, key)) continue;
+    let value = valueLine.slice(separator + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    process.env[key] = value;
+  }
+} catch (error) {
+  if (error.code !== 'ENOENT') throw error;
+}
 
 const PORT = Number(process.env.PORT) || 8000;
 const JWT_SECRET = process.env.JWT_SECRET || 'velosupply-development-secret-change-me';
@@ -39,7 +62,7 @@ function persist() {
     }
 
     const temporaryPath = `${DB_PATH}.${process.pid}.${randomUUID()}.tmp`;
-    await fs.writeFile(temporaryPath, `${JSON.stringify(db, null, 2)}\\n`, { encoding: 'utf8', mode: 0o600 });
+    await fs.writeFile(temporaryPath, `${JSON.stringify(db, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
     try {
       await fs.rename(temporaryPath, DB_PATH);
     } catch (error) {
