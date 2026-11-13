@@ -13,6 +13,8 @@ VeloSupply AI is an inventory, fulfillment, and commerce application. It combine
 
 Before starting the app, add your development machine's public IP address to the VeloSupply Atlas project's Network Access list. Do not use an unrestricted `0.0.0.0/0` rule for a production deployment.
 
+Use Node.js 20 or newer. The example environment defaults to development and seeds the demo accounts (password `1234`) into a new database. For production, set `NODE_ENV=production` and provide the bootstrap administrator values shown in `.env.example` before the first start.
+
 Configure MongoDB and the stakeholder invitation codes:
 
 ```powershell
