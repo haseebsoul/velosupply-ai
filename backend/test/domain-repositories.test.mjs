@@ -41,21 +41,33 @@ describe('domain repositories and immutable ledgers', () => {
     expect(await adapter.count('orders', { userId: buyer.id })).toBe(1);
   });
 
-  it('requires filer status for buyers and integer minor-unit order totals', async () => {
+  it('requires filer status for buyers and validates whole-PKR order inputs', async () => {
     const { domain } = await harness();
     await expect(domain.users.create({ email: 'bad@example.com', role: 'buyer' })).rejects.toThrow('filerStatus');
     await expect(domain.orders.createWithItems(
-      { userId: 'buyer-1', totalMinor: 12.5 },
-      [{ productId: 'p-1', quantity: 1, unitPriceMinor: 12 }]
-    )).rejects.toThrow('integer');
+      { buyerId: 'buyer-1', city: 'Karachi' },
+      [{ sku: 'SKU-1', name: 'Router', qty: 1, unitExGstPkr: -1 }]
+    )).rejects.toThrow('unitExGstPkr');
   });
 
-  it('rejects non-PKR order currency', async () => {
+  it('calculates PKR lines, GST, and city delivery fees using SRS rounding', async () => {
+    const { adapter, domain } = await harness();
+    const result = await domain.orders.createWithItems(
+      { buyerId: 'buyer-1', city: 'Karachi', paymentMethod: 'COD' },
+      [{ sku: 'SKU-1', name: 'Router', qty: 3, unitExGstPkr: 12500 }]
+    );
+    expect(result.order.price).toEqual({ subtotalEx: 37500, gst: 6750, deliveryFee: 350, totalPkr: 44600 });
+    expect(result.order.items).toEqual([{ sku: 'SKU-1', name: 'Router', qty: 3, unitExGstPkr: 12500 }]);
+    expect(await adapter.count('orderItems', { orderId: result.order.id })).toBe(1);
+  });
+
+  it('applies free delivery only when subtotal is above Rs 150,000', async () => {
     const { domain } = await harness();
-    await expect(domain.orders.createWithItems(
-      { userId: 'buyer-1', totalMinor: 1250, currency: 'USD' },
-      [{ productId: 'p-1', quantity: 1, unitPriceMinor: 1250 }]
-    )).rejects.toThrow('currency must be PKR');
+    const result = await domain.orders.createWithItems(
+      { buyerId: 'buyer-1', city: 'Lahore' },
+      [{ sku: 'SKU-1', name: 'Server Rack', qty: 1, unitExGstPkr: 150001 }]
+    );
+    expect(result.order.price.deliveryFee).toBe(0);
   });
 
   it('creates an order and its items atomically using integer minor units', async () => {
@@ -71,16 +83,28 @@ describe('domain repositories and immutable ledgers', () => {
 
   it('reconciles on-hand stock from append-only movements', async () => {
     const { adapter, domain } = await harness();
-    await domain.stockMovements.append({ sku: 'SKU-1', warehouseId: 'WH-1', reason: 'opening_balance', quantityDelta: 10 });
-    await domain.stockMovements.append({ sku: 'SKU-1', warehouseId: 'WH-1', reason: 'sale', quantityDelta: -3, orderId: 'order-1' });
-    await domain.stockMovements.append({ sku: 'SKU-1', warehouseId: 'WH-1', reason: 'restock', quantityDelta: 5, adminActionId: 'restock-1' });
-    expect(await domain.stockMovements.reconcile('SKU-1', 'WH-1', 12)).toMatchObject({
-      ledgerOnHand: 12, expectedOnHand: 12, matches: true, movementCount: 3, hubCode: 'WH-1'
+    await domain.stockMovements.append({ sku: 'SKU-1', hubCode: 'WH-1', type: 'RECEIVE', reason: 'opening_balance', qty: 10, refType: 'opening_balance', refId: 'open-1' });
+    await domain.stockMovements.append({ sku: 'SKU-1', hubCode: 'WH-1', type: 'RESERVE', reason: 'checkout', qty: 3, adminActionId: 'reserve-1' });
+    await domain.stockMovements.append({ sku: 'SKU-1', hubCode: 'WH-1', type: 'SHIP', reason: 'sale', qty: 3, orderId: 'order-1' });
+    await domain.stockMovements.append({ sku: 'SKU-1', hubCode: 'WH-1', type: 'RECEIVE', reason: 'restock', qty: 5, adminActionId: 'restock-1' });
+    expect(await domain.stockMovements.reconcile('SKU-1', 'WH-1', 12, 0)).toMatchObject({
+      onHand: 12, reserved: 0, available: 12, expectedOnHand: 12, expectedReserved: 0, matches: true, movementCount: 4
     });
     const stored = await adapter.find('movements', { sku: 'SKU-1' });
-    expect(stored[1]).toMatchObject({ hubCode: 'WH-1', type: 'OUT', qty: 3, reason: 'sale', refType: 'order', refId: 'order-1', actorId: 'system' });
+    expect(stored[2]).toMatchObject({ hubCode: 'WH-1', type: 'SHIP', qty: 3, reason: 'sale', refType: 'order', refId: 'order-1', actorId: 'system' });
     await expect(adapter.update('movements', 'missing', { quantityDelta: 0 })).rejects.toThrow('append-only');
     await expect(adapter.remove('movements', 'missing')).rejects.toThrow('append-only');
+  });
+
+  it('moves stock between hubs with paired movements in one transaction', async () => {
+    const { adapter, domain } = await harness();
+    await domain.stockMovements.append({ sku: 'SKU-2', hubCode: 'KHI', type: 'RECEIVE', reason: 'opening_balance', qty: 8, refType: 'opening_balance', refId: 'opening-2' });
+    const transfer = await domain.stockMovements.transfer({ sku: 'SKU-2', fromHubCode: 'KHI', toHubCode: 'LHE', qty: 3, reason: 'hub_transfer', actorId: 'operator-1' });
+    expect(transfer.transferOut.type).toBe('TRANSFER_OUT');
+    expect(transfer.transferIn.type).toBe('TRANSFER_IN');
+    expect(await domain.stockMovements.reconcile('SKU-2', 'KHI', 5, 0)).toMatchObject({ matches: true, onHand: 5 });
+    expect(await domain.stockMovements.reconcile('SKU-2', 'LHE', 3, 0)).toMatchObject({ matches: true, onHand: 3 });
+    expect(await adapter.count('movements', { refId: transfer.refId })).toBe(2);
   });
 
   it('rejects audit log updates and deletes and rejects replacement through writeState', async () => {
