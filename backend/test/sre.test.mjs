@@ -34,6 +34,7 @@ function createHarness() {
     req.user = { id: 'operator-test', role: 'operator' };
     next();
   });
+  app.use(sre.middleware());
   app.use(sre.chaosMiddleware);
   app.use('/api/sre', sre.router);
   app.use('/limited', sre.rateLimit({ limit: 1, windowMs: 60_000, name: 'test' }));
@@ -73,6 +74,14 @@ describe('SRE API', () => {
   it('enforces a per-IP rate limit', async () => {
     await request(harness.app).get('/limited').expect(200);
     await request(harness.app).get('/limited').expect(429);
+  });
+
+  it('records browse request measurements for the SLO report', async () => {
+    await request(harness.app).get('/api/products').expect(200);
+    const browse = harness.sre.sloReport().find((slo) => slo.id === 'SLO-1');
+    expect(browse.totalEvents).toBe(1);
+    expect(browse.badEvents).toBe(0);
+    expect(browse.budgetRemaining).toBe(1);
   });
 
   it('returns the reliability dashboard and SLO samples', async () => {
