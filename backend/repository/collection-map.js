@@ -21,7 +21,8 @@ const STATE_PATHS = {
   healthChecks: ['sre', 'healthChecks'],
   loginAttempts: ['sre', 'loginAttempts'],
   idempotencyKeys: ['idempotencyKeys'],
-  simulationRuns: ['simulationRuns']
+  simulationRuns: ['simulationRuns'],
+  settings: ['settings']
 };
 
 const COLLECTION_NAMES = [
@@ -159,7 +160,7 @@ function recordsForState(state, name) {
 
 function applyRecordsToState(state, name, records) {
   const path = STATE_PATHS[name];
-  if (!path || name === 'stock') return;
+  if (!path) return;
   setAtPath(state, path, records);
 }
 
@@ -181,6 +182,7 @@ function documentId(record) {
 function stripMongoId(document) {
   const result = clone(document);
   delete result._id;
+  if (result.id === undefined && document._id !== undefined) result.id = String(document._id);
   return result;
 }
 
