@@ -91,7 +91,7 @@ export function LoginPage() {
       <label className="ops-copy">Email<input className="field" type="email" autoComplete="email" {...register('email')} /></label>{errors.email && <small className="danger-text">{errors.email.message}</small>}
       <label className="ops-copy" style={{ display: 'block', marginTop: 16 }}>Password<div style={{ position: 'relative' }}><input className="field" type={visible ? 'text' : 'password'} autoComplete="current-password" {...register('password')} /><button type="button" aria-label={visible ? 'Hide password' : 'Show password'} className="small-button" style={{ position: 'absolute', right: 7, top: 7 }} onClick={() => setVisible((value) => !value)}>{visible ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>{errors.password && <small className="danger-text">{errors.password.message}</small>}
       {error && <p role="alert" className="danger-text">{error}</p>}<button className="button ops-button" style={{ width: '100%', marginTop: 22 }} disabled={isSubmitting}>{isSubmitting ? 'Authenticating…' : 'Sign in to console'}</button>
-      <p className="ops-copy" style={{ marginTop: 22 }}>New to VeloSupply? <Link to="/" style={{ color: 'var(--accent-ops-lime)' }}>Explore the platform</Link></p>
+      <p className="ops-copy" style={{ marginTop: 22 }}>New to VeloSupply? <Link to="/register" style={{ color: 'var(--accent-ops-lime)' }}>Create an account</Link></p>
     </form></section>
   </main>
 }
