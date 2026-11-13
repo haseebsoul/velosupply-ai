@@ -19,7 +19,12 @@ async function harness() {
     filePath: path.join(directory, 'db.json'),
     loadInitial: async () => ({
       dataMode: 'test', users: [], products: [], warehouses: [], orders: [],
-      orderItems: [], movements: [], tariffRules: [], logs: [],
+      orderItems: [], movements: [], tariffRules: [
+        { id: 'GST-DEMO-1', code: 'PK-GST', version: 1, ratePct: 18, source: 'demo-estimate' },
+        { id: 'DEL-KHI-DEMO-1', code: 'PK-DELIVERY-KARACHI', version: 1, amountPkr: 350, source: 'demo-estimate' },
+        { id: 'DEL-LHE-DEMO-1', code: 'PK-DELIVERY-LAHORE', version: 1, amountPkr: 400, source: 'demo-estimate' },
+        { id: 'FREE-DEL-DEMO-1', code: 'PK-FREE-DELIVERY-THRESHOLD', version: 1, amountPkr: 150000, source: 'demo-estimate' }
+      ], logs: [],
       newsletter: [], rewardClaims: [], metrics: {}, telemetry: { tick: 0 },
       sre: { audit: [], incidents: [], alerts: [], healthChecks: [], loginAttempts: [] }
     })
@@ -72,7 +77,19 @@ describe('domain repositories and immutable ledgers', () => {
     expect(result.order.price).toEqual({ currency: 'PKR', subtotalExMinor: 3750000, gstMinor: 675000, deliveryFeeMinor: 35000, totalMinor: 4460000 });
     expect(result.order.items).toEqual([{ sku: 'SKU-1', name: 'Router', qty: 3, unitPriceMinor: 1250000 }]);
     expect(Number.isSafeInteger(result.order.price.totalMinor)).toBe(true);
+    expect(result.order.price.simulated).toBe(true);
     expect(await adapter.count('orderItems', { orderId: result.order.id })).toBe(1);
+  });
+
+  it('refuses to quote when sourced tariff rules are missing', async () => {
+    const { adapter, domain } = await harness();
+    const state = await adapter.readState();
+    state.tariffRules = [];
+    await adapter.writeState(state);
+    await expect(domain.orders.createWithItems(
+      { buyerId: 'buyer-1', city: 'Karachi' },
+      [{ sku: 'SKU-1', name: 'Router', qty: 1, unitExGstPkr: 1000 }]
+    )).rejects.toThrow('sourced tariff rules');
   });
 
   it('applies free delivery only when subtotal is above Rs 150,000', async () => {
