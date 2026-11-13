@@ -27,7 +27,6 @@ const STATE_PATHS = {
 
 const COLLECTION_NAMES = [
   ...Object.keys(STATE_PATHS),
-  'settings',
   'application_meta',
   'migrationBackups'
 ];
