@@ -6,6 +6,7 @@ const { MongoClient } = require('mongodb');
 const { DB_PATH, seedDatabase } = require('./seed');
 const { createEmptyProductionState } = require('./production-state');
 const { createRepository } = require('./repository');
+const { recordsForState } = require('./repository/collection-map');
 
 function loadEnvFile() {
   const envFilePath = path.join(__dirname, '.env');
@@ -80,12 +81,29 @@ async function migrateMongoState() {
     const state = await adapter.readState();
     const names = ['users', 'products', 'warehouses', 'suppliers', 'stock', 'stockMovements', 'orderItems', 'orders', 'invoices', 'returns', 'purchaseOrders', 'messages', 'incidents', 'alerts', 'auditLogs', 'tariffRules', 'healthChecks', 'idempotencyKeys', 'simulationRuns', 'loginAttempts'];
     const counts = {};
-    for (const name of names) counts[name] = await adapter.count(name);
+    const expectedCounts = {};
+    for (const name of names) {
+      expectedCounts[name] = recordsForState(state, name)?.length ?? 0;
+      counts[name] = await adapter.count(name);
+      if (counts[name] !== expectedCounts[name]) {
+        throw new Error('Migration count mismatch for ' + name + ': expected ' + expectedCounts[name] + ', found ' + counts[name]);
+      }
+    }
+    let backupVerified = null;
+    if (adapter.migration?.status === 'migrated') {
+      const backup = await adapter.findById('migrationBackups', adapter.migration.backupId);
+      const legacySource = await database.collection(legacyCollectionName).findOne({ _id: 'primary' });
+      backupVerified = Boolean(backup && legacySource);
+      if (!backupVerified) throw new Error('Legacy source or migration backup is missing after migration.');
+    }
     process.stdout.write(JSON.stringify({
       adapter: 'mongodb',
       status: adapter.migration?.status || 'already-initialized',
       migration: adapter.migration || null,
       dataMode: state.dataMode || 'unclassified',
+      backupVerified,
+      countVerification: 'passed',
+      expectedCounts,
       counts
     }, null, 2) + '\n');
   } finally {
