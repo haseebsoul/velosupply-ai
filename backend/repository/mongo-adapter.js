@@ -5,6 +5,8 @@ const { randomUUID } = require('node:crypto');
 const {
   COLLECTION_NAMES,
   INDEXES,
+  APPEND_ONLY_COLLECTIONS,
+  assertAppendOnlyTransition,
   STATE_PATHS,
   clone,
   normalizeStateShape,
@@ -166,6 +168,10 @@ class MongoAdapter {
       const records = recordsForState(state, name) || [];
       const serialized = JSON.stringify(records);
       if (this.lastCollectionJson.get(name) !== serialized) {
+        if (APPEND_ONLY_COLLECTIONS.has(name)) {
+          const previous = JSON.parse(this.lastCollectionJson.get(name) || '[]');
+          assertAppendOnlyTransition(name, previous, records);
+        }
         changedCollections.push({ name, records, serialized });
       }
     }
@@ -178,6 +184,17 @@ class MongoAdapter {
     await this.withTransaction(async ({ session }) => {
       for (const entry of changedCollections) {
         const collection = this.collection(entry.name);
+        if (APPEND_ONLY_COLLECTIONS.has(entry.name)) {
+          const previous = JSON.parse(this.lastCollectionJson.get(entry.name) || '[]');
+          const appended = entry.records.slice(previous.length);
+          if (appended.length) {
+            await collection.insertMany(appended.map((record) => toMongoDocument(entry.name, record)), {
+              ordered: true,
+              session
+            });
+          }
+          continue;
+        }
         await collection.deleteMany({}, { session });
         if (entry.records.length) {
           await collection.insertMany(entry.records.map((record) => toMongoDocument(entry.name, record)), {
@@ -238,6 +255,11 @@ class MongoAdapter {
   }
 
   async update(name, id, changes, options = {}) {
+    if (APPEND_ONLY_COLLECTIONS.has(name)) {
+      const error = new Error(name + ' is append-only; updates are not permitted');
+      error.code = 'IMMUTABLE_COLLECTION';
+      throw error;
+    }
     const cleanChanges = clone(changes);
     delete cleanChanges._id;
     await this.collection(name).updateOne(
@@ -249,6 +271,11 @@ class MongoAdapter {
   }
 
   async remove(name, id, options = {}) {
+    if (APPEND_ONLY_COLLECTIONS.has(name)) {
+      const error = new Error(name + ' is append-only; deletes are not permitted');
+      error.code = 'IMMUTABLE_COLLECTION';
+      throw error;
+    }
     const result = await this.collection(name).deleteOne({ _id: String(id) }, this.transactionOptions(options));
     return result.deletedCount || 0;
   }
