@@ -56,10 +56,6 @@ const INDEXES = {
   movements: [
     { key: { sku: 1, at: -1 }, name: 'movements_sku_at' }
   ],
-  stockMovements: [
-    { key: { sku: 1, createdAt: -1 }, name: 'stock_movements_sku_created' },
-    { key: { orderId: 1 }, sparse: true, name: 'stock_movements_order' }
-  ],
   orderItems: [
     { key: { orderId: 1 }, name: 'order_items_order' },
     { key: { productId: 1, orderId: 1 }, name: 'order_items_product_order' }
