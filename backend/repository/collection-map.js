@@ -177,6 +177,50 @@ function recordsForState(state, name) {
       projection: true
     }));
   }
+  if (name === 'users') {
+    return (state.users || []).map((user) => ({
+      ...user,
+      role: user.role === 'user' ? 'buyer' : user.role,
+      ...(user.role === 'user' || user.role === 'buyer' ? { filerStatus: user.filerStatus || 'unverified' } : {}),
+      isActive: user.isActive !== false,
+      deletedAt: user.deletedAt || null
+    }));
+  }
+  if (name === 'warehouses') {
+    return (state.warehouses || []).map((warehouse) => ({
+      ...warehouse,
+      seedOrigin: state.dataMode === 'demo' ? true : warehouse.seedOrigin === true
+    }));
+  }
+  if (name === 'products') {
+    return (state.products || []).map((product) => ({
+      ...product,
+      originWarehouseId: product.originWarehouseId || product.warehouse_hub || null
+    }));
+  }
+  if (name === 'orders') {
+    return (state.orders || []).map((order) => ({
+      ...order,
+      userId: order.userId || order.buyerId || null
+    }));
+  }
+  if (name === 'orderItems' && (!Array.isArray(state.orderItems) || state.orderItems.length === 0)) {
+    const productsById = new Map((state.products || []).map((product) => [product.id, product]));
+    return (state.orders || []).flatMap((order) => (order.items || []).map((item, index) => {
+      const product = productsById.get(item.productId);
+      const unitPriceMinor = Number.isSafeInteger(item.unitPriceMinor) ? item.unitPriceMinor : null;
+      return {
+        id: 'legacy-item:' + String(order.id) + ':' + index,
+        orderId: order.id,
+        productId: item.productId || product?.id || null,
+        sku: item.sku || product?.sku || null,
+        name: item.name || product?.name || 'Legacy order item',
+        quantity: item.quantity || item.qty || 1,
+        unitPriceMinor,
+        priceStatus: unitPriceMinor === null ? 'legacy_unavailable' : 'known'
+      };
+    }));
+  }
   const path = STATE_PATHS[name];
   if (!path) return null;
   const records = getAtPath(state, path);
