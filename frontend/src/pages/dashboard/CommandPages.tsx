@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Copy, Download, RefreshCw, ShieldCheck, Truck, MessageSquareText } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
@@ -171,7 +171,7 @@ function AdminCreateForm({ onCreate }: { onCreate: (values: AdminUserValues) => 
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
 
-  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setFormError('')
     setSaving(true)

@@ -1,3 +1,4 @@
+require('./config');
 const http = require('node:http');
 const { randomUUID, timingSafeEqual } = require('node:crypto');
 const express = require('express');

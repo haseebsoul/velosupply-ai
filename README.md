@@ -4,17 +4,19 @@ VeloSupply AI is a local-first inventory, fulfillment, and commerce demo. It com
 
 ## Architecture
 
-- **Backend:** Node.js, Express, Zod, JWT, bcrypt, and `ws`; listens on port `8000`.
+- **Backend:** Node.js, Express, Zod, JWT, bcrypt, MongoDB Node driver, and `ws`; listens on port `8000`.
 - **Persistence:** MongoDB Atlas stores the application state in the `application_state` collection. On first startup, the API migrates a valid legacy `backend/db.json` file or seeds the initial demo data.
 - **Frontend:** React, TypeScript, Vite, React Router, Zustand, TanStack Query, Recharts, and Tailwind CSS.
 - **API proxy:** Vite forwards `/api` and `/ws` requests to the local backend.
 
 ## Start locally
 
-Install dependencies once:
+Configure MongoDB and the stakeholder invitation codes:
 
 ```powershell
 cd backend
+Copy-Item .env.example .env
+# Edit .env with your Atlas database password and unique secrets
 npm install
 cd ..\frontend
 npm install
@@ -42,7 +44,7 @@ All seeded demo accounts use password `1234`.
 | `operator@velosupply.ai` | Operations |
 | `buyer@velosupply.ai` | Buyer |
 
-Set `MONGODB_URI` and `MONGODB_DB_NAME` in `backend/.env`. Set strong, unique `JWT_SECRET`, `ADMIN_INVITE_CODE` and `OPERATOR_INVITE_CODE` values before sharing the app. Buyers can self-register; administrator and operations registrations require their matching invitation code. Keep `.env` out of Git and restrict the Atlas network access list to trusted application IPs. Production deployments must terminate TLS at a trusted proxy.
+The backend reads `backend/.env` on startup. Set `MONGODB_URI` and `MONGODB_DB_NAME` there. Set strong, unique `JWT_SECRET`, `ADMIN_INVITE_CODE` and `OPERATOR_INVITE_CODE` values before sharing the app. Buyers can self-register; administrator and operations registrations require their matching invitation code. Keep `.env` out of Git and restrict the Atlas network access list to trusted application IPs. Production deployments must terminate TLS at a trusted proxy.
 
 ## Routes
 
@@ -62,3 +64,8 @@ Set `MONGODB_URI` and `MONGODB_DB_NAME` in `backend/.env`. Set strong, unique `J
 ## API overview
 
 Public endpoints include `GET /api/health`, `GET /api/products`, `POST /api/auth/login`, and `POST /api/auth/register`. Authenticated routes provide profile, checkout, orders, metrics, warehouses, threats, inventory updates, and simulations. Admin user-management endpoints support create, read, role update and delete operations, and require an admin bearer token. Live telemetry is broadcast over `/ws/telemetry`.
+
+
+## Design credit
+
+Dashboard craft principles were adapted from [unslop](https://github.com/heydamir/unslop) by Damir Sokolovsky, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
