@@ -15,13 +15,13 @@ const schema = z.object({
   role: z.enum(['admin', 'operator', 'user']),
   password: z.string().min(8, 'Use at least 8 characters').max(128, 'Password is too long'),
   confirmPassword: z.string(),
-  adminInviteCode: z.string().optional()
+  registrationInviteCode: z.string().optional()
 }).superRefine((values, context) => {
   if (values.password !== values.confirmPassword) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['confirmPassword'], message: 'Passwords do not match' })
   }
-  if (values.role === 'admin' && !values.adminInviteCode?.trim()) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['adminInviteCode'], message: 'An administrator invitation key is required' })
+  if (values.role !== 'user' && !values.registrationInviteCode?.trim()) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['registrationInviteCode'], message: 'An invitation key is required for this role' })
   }
 })
 
@@ -45,13 +45,13 @@ export function RegisterPage() {
   const [error, setError] = useState('')
   const { register, handleSubmit, setValue, watch, formState: { errors, isSubmitting } } = useForm<Fields>({
     resolver: zodResolver(schema),
-    defaultValues: { role: 'user', name: '', email: '', password: '', confirmPassword: '', adminInviteCode: '' }
+    defaultValues: { role: 'user', name: '', email: '', password: '', confirmPassword: '', registrationInviteCode: '' }
   })
   const selectedRole = watch('role')
 
   const submit = async (values: Fields) => {
     setError('')
-    const payload = { name: values.name, email: values.email, role: values.role, password: values.password, ...(values.adminInviteCode ? { adminInviteCode: values.adminInviteCode } : {}) }
+    const payload = { name: values.name, email: values.email, role: values.role, password: values.password, ...(values.registrationInviteCode ? { registrationInviteCode: values.registrationInviteCode } : {}) }
     try {
       const { data } = await api.post<{ token: string; user: User }>('/auth/register', payload)
       setSession(data.token, data.user)
@@ -87,14 +87,14 @@ export function RegisterPage() {
             ><span className="stakeholder-icon"><Icon size={18} /></span><span className="stakeholder-label">{label}</span><span className="stakeholder-description">{description}</span></button>)}
           </div>
         </fieldset>
-        {selectedRole === 'admin' && <div className="admin-invite-note"><ShieldCheck size={16} /><span>Administrator access is invitation-only. Enter the private invitation key supplied by your workspace owner.</span></div>}
+        {selectedRole !== 'user' && <div className="admin-invite-note"><ShieldCheck size={16} /><span>{selectedRole === 'admin' ? 'Administrator' : 'Operations team'} access is invitation-only. Enter the private invitation key supplied by your workspace owner.</span></div>}
 
         <div className="registration-fields">
           <label className="registration-label">Full name<input className="field" autoComplete="name" placeholder="Your name" {...register('name')} />{errors.name && <small className="form-error">{errors.name.message}</small>}</label>
           <label className="registration-label">Work email<input className="field" type="email" autoComplete="email" placeholder="name@company.com" {...register('email')} />{errors.email && <small className="form-error">{errors.email.message}</small>}</label>
           <label className="registration-label">Password<div className="password-field"><input className="field" type={visiblePassword ? 'text' : 'password'} autoComplete="new-password" placeholder="At least 8 characters" {...register('password')} /><button type="button" className="password-toggle" aria-label={visiblePassword ? 'Hide password' : 'Show password'} onClick={() => setVisiblePassword((value) => !value)}>{visiblePassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div>{errors.password && <small className="form-error">{errors.password.message}</small>}</label>
           <label className="registration-label">Confirm password<input className="field" type="password" autoComplete="new-password" placeholder="Repeat your password" {...register('confirmPassword')} />{errors.confirmPassword && <small className="form-error">{errors.confirmPassword.message}</small>}</label>
-          {selectedRole === 'admin' && <label className="registration-label">Administrator invitation key<input className="field" type="password" autoComplete="off" placeholder="Invitation key" {...register('adminInviteCode')} />{errors.adminInviteCode && <small className="form-error">{errors.adminInviteCode.message}</small>}</label>}
+          {selectedRole !== 'user' && <label className="registration-label">{selectedRole === 'admin' ? 'Administrator' : 'Operations'} invitation key<input className="field" type="password" autoComplete="off" placeholder="Invitation key" {...register('registrationInviteCode')} />{errors.registrationInviteCode && <small className="form-error">{errors.registrationInviteCode.message}</small>}</label>}
         </div>
         {error && <p role="alert" className="form-error registration-alert">{error}</p>}
         <button className="button ops-button registration-submit" disabled={isSubmitting}>{isSubmitting ? 'Creating account…' : 'Create account'}</button>
