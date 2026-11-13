@@ -69,3 +69,26 @@ Public endpoints include `GET /api/health`, `GET /api/products`, `POST /api/auth
 ## Design notes
 
 The Dashboard V14 redesign keeps the existing VeloSupply logistics product, operational data and route behavior. Its visual clean-up follows the audit-first spacing, restrained color, typography and motion principles from [unslop](https://github.com/heydamir/unslop) by Damir Sokolovsky, licensed CC BY 4.0. The toolkit itself is not copied into this repository.
+
+## Reliability and SRE
+
+The operator Reliability workspace is available at `/dashboard/reliability` for administrators and operators. It reads the authenticated `/api/sre` API and presents the six SLOs, calculated error budgets, recent telemetry, five service probes, alerts, incidents, runbooks and scoped chaos controls.
+
+SRE API routes (admin/operator unless stated otherwise):
+
+- `GET /api/sre`, `GET /api/sre/metrics`, `GET /api/sre/health`
+- `GET /api/sre/alerts`, `PATCH /api/sre/alerts/:id/ack`, `PATCH /api/sre/alerts/:id/resolve`
+- `GET/POST /api/sre/incidents`, `PATCH/DELETE /api/sre/incidents/:id`, `POST /api/sre/incidents/:id/notes`
+- `GET /api/sre/runbooks`, `PUT /api/sre/runbooks/:id/progress`
+- `GET/POST /api/sre/chaos` (effects expire after 60 seconds and are limited to product browse and checkout)
+- `GET /api/admin/backup` (administrator only)
+
+The API also exposes `/livez` and `/readyz`. `GET /api/health` retains its original status, service, storage and timestamp fields and adds per-service health details.
+
+### SRE operations notes
+
+- Set `BACKUP_EXPORT=true` to enable the weekly JSON export when using Atlas. Atlas automated backups remain the primary Atlas backup mechanism. Local mode writes a nightly JSON backup under `backend/backups/` and retains the last seven daily files.
+- Structured request logs include a request ID returned in `x-request-id`. The API applies a 300-request/minute IP limit and a 10-login/minute IP limit. Five failed login attempts for an email in 15 minutes trigger a 15-minute lockout.
+- The current application still has no immutable stock movement ledger and no external payment gateway. Health probes intentionally report those dependencies as degraded until those systems are implemented; stock accuracy SLO measurement is therefore not a substitute for a ledger reconciliation.
+- SRE telemetry keeps a 3,600-sample in-process one-second ring and persistent five-minute aggregate buckets. The one-second ring resets when the process restarts.
+- Run backend tests with `cd backend; npm test`. The CI workflow runs the backend syntax checks and SRE tests before the frontend build.
