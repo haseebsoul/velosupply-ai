@@ -1,0 +1,216 @@
+'use strict';
+
+const STATE_PATHS = {
+  users: ['users'],
+  products: ['products'],
+  warehouses: ['warehouses'],
+  suppliers: ['suppliers'],
+  stock: ['stock'],
+  movements: ['movements'],
+  orders: ['orders'],
+  invoices: ['invoices'],
+  returns: ['returns'],
+  purchaseOrders: ['purchaseOrders'],
+  messages: ['messages'],
+  logs: ['logs'],
+  newsletter: ['newsletter'],
+  rewardClaims: ['rewardClaims'],
+  incidents: ['sre', 'incidents'],
+  alerts: ['sre', 'alerts'],
+  auditLogs: ['sre', 'audit'],
+  healthChecks: ['sre', 'healthChecks'],
+  loginAttempts: ['sre', 'loginAttempts'],
+  idempotencyKeys: ['idempotencyKeys'],
+  simulationRuns: ['simulationRuns']
+};
+
+const COLLECTION_NAMES = [
+  ...Object.keys(STATE_PATHS),
+  'settings',
+  'application_meta',
+  'migrationBackups'
+];
+
+const INDEXES = {
+  users: [
+    { key: { email: 1 }, unique: true, name: 'users_email_unique' }
+  ],
+  products: [
+    { key: { sku: 1 }, unique: true, name: 'products_sku_unique' },
+    { key: { name: 'text' }, name: 'products_name_text' }
+  ],
+  warehouses: [
+    { key: { code: 1 }, unique: true, sparse: true, name: 'warehouses_code_unique' }
+  ],
+  suppliers: [
+    { key: { name: 1 }, name: 'suppliers_name' }
+  ],
+  stock: [
+    { key: { sku: 1, hubCode: 1 }, unique: true, name: 'stock_sku_hub_unique' }
+  ],
+  movements: [
+    { key: { sku: 1, at: -1 }, name: 'movements_sku_at' }
+  ],
+  orders: [
+    { key: { code: 1 }, unique: true, sparse: true, name: 'orders_code_unique' },
+    { key: { buyerId: 1, status: 1 }, name: 'orders_buyer_status' }
+  ],
+  invoices: [
+    { key: { code: 1 }, unique: true, name: 'invoices_code_unique' }
+  ],
+  returns: [
+    { key: { orderId: 1, status: 1 }, name: 'returns_order_status' }
+  ],
+  purchaseOrders: [
+    { key: { status: 1 }, name: 'purchase_orders_status' }
+  ],
+  messages: [
+    { key: { toRole: 1, at: -1 }, name: 'messages_recipient_at' }
+  ],
+  incidents: [
+    { key: { status: 1 }, name: 'incidents_status' }
+  ],
+  alerts: [
+    { key: { status: 1 }, name: 'alerts_status' }
+  ],
+  auditLogs: [
+    { key: { actorId: 1, at: -1 }, name: 'audit_actor_at' }
+  ],
+  settings: [
+    { key: { key: 1 }, unique: true, name: 'settings_key_unique' }
+  ],
+  healthChecks: [
+    { key: { at: 1 }, expireAfterSeconds: 86400, name: 'health_checks_ttl_24h' }
+  ],
+  idempotencyKeys: [
+    { key: { key: 1 }, unique: true, name: 'idempotency_key_unique' },
+    { key: { at: 1 }, expireAfterSeconds: 86400, name: 'idempotency_ttl_24h' }
+  ],
+  simulationRuns: [
+    { key: { at: -1 }, name: 'simulation_runs_at' }
+  ],
+  loginAttempts: [
+    { key: { at: 1 }, expireAfterSeconds: 3600, name: 'login_attempts_ttl_1h' }
+  ],
+  logs: [
+    { key: { timestamp: -1 }, name: 'logs_timestamp' }
+  ],
+  newsletter: [
+    { key: { email: 1 }, unique: true, name: 'newsletter_email_unique' }
+  ],
+  rewardClaims: [
+    { key: { userId: 1, offerId: 1 }, unique: true, name: 'reward_claim_user_offer_unique' }
+  ]
+};
+
+function clone(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function getAtPath(value, path) {
+  return path.reduce((current, key) => current == null ? undefined : current[key], value);
+}
+
+function setAtPath(value, path, next) {
+  let current = value;
+  for (const key of path.slice(0, -1)) {
+    if (!current[key] || typeof current[key] !== 'object') current[key] = {};
+    current = current[key];
+  }
+  current[path[path.length - 1]] = next;
+}
+
+function deleteAtPath(value, path) {
+  let current = value;
+  for (const key of path.slice(0, -1)) {
+    if (!current || typeof current !== 'object') return;
+    current = current[key];
+  }
+  if (current && typeof current === 'object') delete current[path[path.length - 1]];
+}
+
+function normalizeStateShape(input) {
+  const state = clone(input || {});
+  for (const path of Object.values(STATE_PATHS)) {
+    if (!Array.isArray(getAtPath(state, path))) setAtPath(state, path, []);
+  }
+  if (!state.sre || typeof state.sre !== 'object') state.sre = {};
+  if (!state.metrics || typeof state.metrics !== 'object') state.metrics = {};
+  if (!state.telemetry || typeof state.telemetry !== 'object') state.telemetry = { tick: 0, updatedAt: new Date().toISOString() };
+  return state;
+}
+
+function recordsForState(state, name) {
+  if (name === 'stock') {
+    return (state.products || []).map((product) => ({
+      id: String(product.sku || product.id) + ':' + String(product.warehouse_hub || 'unassigned'),
+      sku: product.sku,
+      hubCode: product.warehouse_hub || 'unassigned',
+      onHand: Number.isFinite(product.stock) ? product.stock : 0,
+      reserved: 0,
+      projection: true
+    }));
+  }
+  const path = STATE_PATHS[name];
+  if (!path) return null;
+  const records = getAtPath(state, path);
+  return Array.isArray(records) ? records : [];
+}
+
+function applyRecordsToState(state, name, records) {
+  const path = STATE_PATHS[name];
+  if (!path || name === 'stock') return;
+  setAtPath(state, path, records);
+}
+
+function extractMetadata(state) {
+  const metadata = clone(state);
+  for (const path of Object.values(STATE_PATHS)) deleteAtPath(metadata, path);
+  return metadata;
+}
+
+function documentId(record) {
+  if (record && record._id !== undefined) return String(record._id);
+  if (record && record.id !== undefined) return String(record.id);
+  if (record && record.code !== undefined) return String(record.code);
+  if (record && record.key !== undefined) return String(record.key);
+  if (record && record.sku !== undefined && record.hubCode !== undefined) return String(record.sku) + ':' + String(record.hubCode);
+  throw new Error('A repository document must contain id, code, key, or the sku/hubCode pair');
+}
+
+function stripMongoId(document) {
+  const result = clone(document);
+  delete result._id;
+  return result;
+}
+
+function matchesFilter(document, filter = {}) {
+  return Object.entries(filter).every(([key, expected]) => {
+    const actual = key.split('.').reduce((value, part) => value == null ? undefined : value[part], document);
+    if (expected && typeof expected === 'object' && !Array.isArray(expected)) {
+      if ('$in' in expected) return expected.$in.includes(actual);
+      if ('$ne' in expected) return actual !== expected.$ne;
+      if ('$gt' in expected) return actual > expected.$gt;
+      if ('$gte' in expected) return actual >= expected.$gte;
+      if ('$lt' in expected) return actual < expected.$lt;
+      if ('$lte' in expected) return actual <= expected.$lte;
+    }
+    return actual === expected;
+  });
+}
+
+module.exports = {
+  STATE_PATHS,
+  COLLECTION_NAMES,
+  INDEXES,
+  clone,
+  getAtPath,
+  setAtPath,
+  normalizeStateShape,
+  recordsForState,
+  applyRecordsToState,
+  extractMetadata,
+  documentId,
+  stripMongoId,
+  matchesFilter
+};
