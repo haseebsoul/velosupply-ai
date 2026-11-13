@@ -49,3 +49,10 @@ D-025 | Tag seeded state as demo and empty Atlas state as production; return the
 D-026 | Disable randomized heartbeat metrics and state-mutating scenario simulation in production by default | Simulated packet rates/detection times are not measurements and simulation must not alter real stock/order state | backend/server.js
 
 D-027 | Do not add a universal Atlas IP allowlist entry | A broad 0.0.0.0/0 rule would expose database authentication endpoints to every IPv4 address; only the actual application egress IP/CIDR should be allowlisted | MongoDB Atlas Network Access
+
+D-028 | Keep the local JSON file format while exposing the same collection CRUD/transaction contract as Atlas | Local development must not require MongoDB and must retain atomic replacement | backend/repository/file-adapter.js
+D-029 | Store Atlas domain entities in named collections and keep only shared app state in application_meta | Section 12.1 requires real collections; the metadata collection must not contain the former full-state document | backend/repository/mongo-adapter.js
+D-030 | Back up legacy application_state/primary into migrationBackups before writing named collections | Migration must preserve its source and remain safe to retry; the legacy source is never deleted by the migration | backend/repository/mongo-adapter.js
+D-031 | Fail closed when new collections are populated but application_meta is missing | A partial/ambiguous migration must never be overwritten automatically | backend/repository/mongo-adapter.js
+D-032 | Treat stock collection rows as a compatibility projection from product stock until a ledger exists | The current application does not yet record immutable stock movements; projected stock must not be described as reconciled ledger truth | backend/repository/collection-map.js, AUDIT.md
+D-033 | Keep API handlers on the existing state shape for this migration slice | Preserve all existing endpoints while the storage adapter changes; collection-specific service migration and multi-instance write safety are explicit next work, not implied complete | backend/server.js, AUDIT.md
