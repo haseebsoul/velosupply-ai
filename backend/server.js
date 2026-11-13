@@ -243,7 +243,7 @@ function authenticate(req, res, next) {
   try {
     const payload = jwt.verify(match[1], JWT_SECRET);
     const user = db.users.find((entry) => entry.id === payload.sub);
-    if (!user) return res.status(401).json({ error: 'Invalid or expired token' });
+    if (!user || user.isActive === false || user.deletedAt) return res.status(401).json({ error: 'Invalid or expired token' });
     req.user = user;
     next();
   } catch (_error) {
@@ -385,6 +385,7 @@ app.post('/api/auth/login', sre.rateLimit({ limit: 10, windowMs: 60_000, name: '
     await persist();
     return res.status(401).json({ error: 'Invalid email or password' });
   }
+  if (user.isActive === false || user.deletedAt) return res.status(403).json({ error: 'Account is inactive. Contact an administrator.' });
   if (user.status === 'suspended') return res.status(403).json({ error: 'Account is suspended. Contact an administrator.' });
   db.sre.loginAttempts = db.sre.loginAttempts.filter((entry) => entry.email !== req.body.email);
   user.lastLoginAt = new Date().toISOString();
@@ -426,6 +427,8 @@ async function register(req, res) {
     email: req.body.email,
     role: req.body.role || 'user',
     passwordHash,
+    isActive: true,
+    deletedAt: null,
     createdAt: new Date().toISOString()
   };
   db.users.push(user);
@@ -563,19 +566,24 @@ app.patch('/api/admin/users/:id', requireRoles('admin'), validate(roleSchema), a
   user.role = req.body.role;
   user.updatedAt = new Date().toISOString();
   addLog(`Role updated for ${user.name}: ${user.role}.`, 'INFO', 'USER', { userId: user.id });
+  sre.audit?.('user.role_update', req.user, { targetUserId: user.id, role: user.role });
   await persist();
   res.json({ user: safeUser(user) });
 }));
 app.delete('/api/admin/users/:id', requireRoles('admin'), asyncRoute(async (req, res) => {
   if (req.params.id === req.user.id) return res.status(400).json({ error: 'You cannot delete your own account' });
   const user = findById(db.users, req.params.id, 'User');
-  if (user.role === 'admin' && db.users.filter((entry) => entry.role === 'admin').length <= 1) {
+  if (user.isActive === false || user.deletedAt) return res.status(409).json({ error: 'User account is already inactive' });
+  if (user.role === 'admin' && db.users.filter((entry) => entry.role === 'admin' && entry.isActive !== false && !entry.deletedAt).length <= 1) {
     return res.status(409).json({ error: 'The last administrator cannot be deleted' });
   }
-  db.users = db.users.filter((entry) => entry.id !== user.id);
-  addLog(`User account deleted for ${user.email}.`, 'WARN', 'USER', { userId: user.id });
+  user.isActive = false;
+  user.deletedAt = new Date().toISOString();
+  user.updatedAt = user.deletedAt;
+  addLog(`User account soft-deleted for ${user.email}.`, 'WARN', 'USER', { userId: user.id });
+  sre.audit?.('user.soft_delete', req.user, { targetUserId: user.id });
   await persist();
-  res.json({ success: true });
+  res.json({ success: true, user: safeUser(user) });
 }));
 
 app.patch('/api/inventory/:id', requireRoles('admin', 'operator'), validate(inventoryUpdateSchema), asyncRoute(async (req, res) => {
@@ -584,6 +592,7 @@ app.patch('/api/inventory/:id', requireRoles('admin', 'operator'), validate(inve
   if (req.body.price !== undefined) product.price = req.body.price;
   product.updatedAt = new Date().toISOString();
   addLog(`Inventory updated for ${product.sku}.`, 'INFO', 'INVENTORY', { productId: product.id });
+  sre.audit?.('inventory.update', req.user, { productId: product.id, stock: req.body.stock, priceChanged: req.body.price !== undefined });
   await persist();
   res.json({ product });
 }));
@@ -592,6 +601,7 @@ app.post('/api/inventory/restock/:id', requireRoles('admin', 'operator'), valida
   const quantity = req.body.quantity || Math.max(product.reorder_threshold * 2 - product.stock, 10);
   updateProductStock(product, product.stock + quantity);
   const event = publish('THREAT_RESOLVED', `Restock purchase order executed for ${product.sku}: +${quantity} units.`, 'INFO', { productId: product.id });
+  sre.audit?.('inventory.restock', req.user, { productId: product.id, quantity });
   refreshMetrics();
   await persist();
   res.json({ product, quantity, event });
