@@ -202,8 +202,17 @@ function createSRE(deps) {
       const observed = total ? (total - bad) / total : 1;
       const allowedBad = slo.zeroTolerance ? 0 : (1 - slo.target) * total;
       const remaining = slo.zeroTolerance ? (bad ? 0 : 1) : allowedBad > 0 ? Math.max(0, Math.min(1, 1 - bad / allowedBad)) : 1;
-      const lastHour = inWindow.filter((event) => event.at >= now - 60 * 60 * 1000 && ((slo.id === 'SLO-1' && ['/api/products', '/api/health', '/health'].includes(event.path)) || (slo.id === 'SLO-2' && ['/api/orders/checkout', '/api/checkout'].includes(event.path))));
-      const recentBad = lastHour.filter((event) => (slo.id === 'SLO-1' ? event.ms >= 150 || event.status >= 500 : event.status >= 500)).length;
+      const timestampOf = (entry) => typeof entry.at === 'number' ? entry.at : Date.parse(entry.at);
+      const lastHour = selected.filter((entry) => Number.isFinite(timestampOf(entry)) && timestampOf(entry) >= now - 60 * 60 * 1000);
+      const recentBad = lastHour.filter((entry) => {
+        if (slo.id === 'SLO-1') return entry.ms >= 150 || entry.status >= 500;
+        if (slo.id === 'SLO-2') return entry.status >= 500;
+        if (slo.id === 'SLO-3') return negativeStock;
+        if (slo.id === 'SLO-4') return entry.ms > 2000;
+        if (slo.id === 'SLO-5') return entry.status !== 'up';
+        if (slo.id === 'SLO-6') return !['dispatched', 'delivered', 'DISPATCHED', 'DELIVERED'].includes(entry.status);
+        return false;
+      }).length;
       const burnRate = slo.zeroTolerance ? (bad ? 'infinite' : 0) : lastHour.length ? Math.round((recentBad / lastHour.length / (1 - slo.target)) * 100) / 100 : 0;
       return { ...slo, observed: Math.round(observed * 10000) / 10000, totalEvents: total, badEvents: bad, allowedBad: Math.round(allowedBad * 10000) / 10000, budgetRemaining: remaining, burnRate, budgetState: remaining < 0.2 || burnRate === 'infinite' || burnRate > 14 ? 'danger' : remaining < 0.5 ? 'warning' : 'normal' };
     });
