@@ -65,6 +65,7 @@ function createDomainRepositories(adapter) {
         unitPriceMinor: integer(item.unitPriceMinor, 'unitPriceMinor')
       }));
       const totalMinor = integer(orderInput.totalMinor, 'totalMinor');
+      if (orderInput.currency !== undefined && orderInput.currency !== 'PKR') throw new TypeError('currency must be PKR');
       const calculated = items.reduce((sum, item) => sum + item.quantity * item.unitPriceMinor, 0);
       if (!Number.isSafeInteger(calculated) || calculated !== totalMinor) throw new TypeError('totalMinor must equal the sum of integer-minor-unit order items');
       const order = {
@@ -98,7 +99,7 @@ function createDomainRepositories(adapter) {
         id: input.id || 'MOV-' + randomUUID(),
         sku,
         hubCode,
-        type: input.type || (input.quantityDelta > 0 ? 'IN' : 'OUT'),
+        type: input.quantityDelta > 0 ? 'IN' : 'OUT',
         qty: Math.abs(input.quantityDelta),
         reason,
         refType,
