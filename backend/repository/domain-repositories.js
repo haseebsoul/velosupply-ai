@@ -132,6 +132,8 @@ function createDomainRepositories(adapter) {
         buyerId,
         userId: buyerId,
         city,
+        currency: 'PKR',
+        totalMinor,
         items: items.map(({ sku, name, qty, unitPriceMinor }) => ({ sku, name, qty, unitPriceMinor })),
         price: { currency: 'PKR', subtotalExMinor, gstMinor, deliveryFeeMinor, totalMinor },
         paymentState: orderInput.paymentState || 'pending',
