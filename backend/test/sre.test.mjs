@@ -22,7 +22,7 @@ function createHarness() {
     broadcast: (event) => broadcast.push(event),
     getMongoClient: () => null,
     getStateCollection: () => null,
-    getDbPath: () => '/tmp/velosupply-test/db.json',
+    getDbPath: () => '/tmp/velosupply-test.json',
     getWebSocketServer: () => null,
     getWebSocketClients: () => 0,
     isApiReady: () => true,
