@@ -642,7 +642,7 @@ function createSRE(deps) {
     started = false;
   }
 
-  return { router, middleware, rateLimit, chaosMiddleware, start, stop, recordDbLatency, recordWebSocketLatency, attachWebSocket, pingWebSockets, currentMetrics, sloReport, healthCheck, healthSummary, dashboard, exportSnapshot, backup, RUNBOOKS, SLOS };
+  return { router, middleware, rateLimit, chaosMiddleware, start, stop, recordRequest, recordDbLatency, recordWebSocketLatency, attachWebSocket, pingWebSockets, currentMetrics, sloReport, healthCheck, healthSummary, dashboard, exportSnapshot, backup, audit, RUNBOOKS, SLOS };
 }
 
 module.exports = { createSRE, SLOS, RUNBOOKS, percentile };
