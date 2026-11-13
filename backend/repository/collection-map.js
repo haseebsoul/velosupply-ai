@@ -9,7 +9,6 @@ const STATE_PATHS = {
   suppliers: ['suppliers'],
   stock: ['stock'],
   movements: ['movements'],
-  stockMovements: ['stockMovements'],
   orderItems: ['orderItems'],
   orders: ['orders'],
   tariffRules: ['tariffRules'],
@@ -215,7 +214,7 @@ function stripMongoId(document) {
   return result;
 }
 
-const APPEND_ONLY_COLLECTIONS = new Set(['stockMovements', 'auditLogs']);
+const APPEND_ONLY_COLLECTIONS = new Set(['movements', 'auditLogs']);
 
 function assertAppendOnlyTransition(name, before = [], after = []) {
   if (!APPEND_ONLY_COLLECTIONS.has(name)) return;
