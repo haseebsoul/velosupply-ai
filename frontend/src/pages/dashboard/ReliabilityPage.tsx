@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Activity, AlertTriangle, BookOpen, RefreshCw, ShieldAlert, Siren } from 'lucide-react'
 import { api, errorMessage } from '../../lib/apiClient'
+import { useAppStore } from '../../store/useAppStore'
 
 type Slo = { id: string; name: string; target: number; observed: number; totalEvents: number; badEvents: number; budgetRemaining: number; burnRate: number | string; budgetState: string; description: string }
 type Service = { service: string; status: string; latencyMs: number | null; error: string | null; at: string | null }
@@ -27,6 +28,7 @@ function badgeClass(status: string) {
 }
 
 export function ReliabilityPage() {
+  const { user } = useAppStore()
   const [data, setData] = useState<Dashboard | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -68,6 +70,22 @@ export function ReliabilityPage() {
     finally { setBusy(false) }
   }
 
+  async function exportBackup() {
+    try {
+      const response = await api.get('/admin/backup', { responseType: 'blob' })
+      const url = URL.createObjectURL(response.data)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'velosupply-backup.json'
+      link.click()
+      URL.revokeObjectURL(url)
+      setNotice('Full backup exported.')
+      setError('')
+    } catch (reason) {
+      setError(errorMessage(reason))
+    }
+  }
+
   async function saveIncident(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     await mutate(() => api.post('/sre/incidents', {
@@ -99,7 +117,10 @@ export function ReliabilityPage() {
   return <main className="dashboard-content">
     <div className="drawer-head">
       <div><span className="mono-label">SITE RELIABILITY ENGINEERING</span><h1 className="ops-heading">Reliability</h1><p className="ops-copy">Service objectives, error budgets, health, alerts and controlled failure testing.</p></div>
-      <button className="small-button" disabled={busy} onClick={() => void refresh()}><RefreshCw size={14} /> Refresh</button>
+      <div className="inline-actions">
+        {user?.role === 'admin' && <button className="small-button" disabled={busy} onClick={() => void exportBackup()}>Export full backup</button>}
+        <button className="small-button" disabled={busy} onClick={() => void refresh()}><RefreshCw size={14} /> Refresh</button>
+      </div>
     </div>
     {error && <div role="alert" className="danger-text" style={{ marginBottom: 12 }}>{error}</div>}
     {notice && <div role="status" className="success-text" style={{ marginBottom: 12 }}>{notice}</div>}
