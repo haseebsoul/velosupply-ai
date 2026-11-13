@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import {
   Activity, Bell, Boxes, ChevronDown, ChevronLeft, ChevronRight, Menu, X,
   CircleGauge, FileText, Gift, LayoutDashboard, LogOut, Network,
-  Package, Settings2, Shield, Store, Users
+  Package, Shield, Store, Users
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
