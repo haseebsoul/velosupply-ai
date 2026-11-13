@@ -13,6 +13,7 @@ const { DB_PATH, seedDatabase, productStatus } = require('./seed');
 const { createEmptyProductionState } = require('./production-state');
 const helmet = require('helmet');
 const { createSRE } = require('./sre');
+const { createRepository } = require('./repository');
 
 
 const envFilePath = path.join(__dirname, '.env');
@@ -63,6 +64,7 @@ const websocketServer = new WebSocketServer({ noServer: true });
 let db;
 let mongoClient = null;
 let stateCollection = null;
+let repository = null;
 let writeQueue = Promise.resolve();
 let sre = null;
 
@@ -99,23 +101,8 @@ app.use(sre.chaosMiddleware);
 function persist() {
   const startedAt = Date.now();
   writeQueue = writeQueue.catch(() => {}).then(async () => {
-    if (stateCollection) {
-      await stateCollection.updateOne(
-        { _id: 'primary' },
-        { $set: { state: db, updatedAt: new Date().toISOString() } },
-        { upsert: true }
-      );
-      return;
-    }
-
-    const temporaryPath = `${DB_PATH}.${process.pid}.${randomUUID()}.tmp`;
-    await fs.writeFile(temporaryPath, `${JSON.stringify(db, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-    try {
-      await fs.rename(temporaryPath, DB_PATH);
-    } catch (error) {
-      await fs.rm(temporaryPath, { force: true });
-      throw error;
-    }
+    if (!repository) throw new Error('Persistence repository has not been initialized');
+    await repository.writeState(db);
   }).finally(() => sre?.recordDbLatency(Date.now() - startedAt));
   return writeQueue;
 }
@@ -127,8 +114,12 @@ async function loadDatabaseState() {
     if (process.env.NODE_ENV === 'production') {
       throw new Error('MONGODB_URI must be set in production');
     }
-    // Local JSON mode remains a deliberate demo/development environment.
-    return seedDatabase();
+    repository = createRepository({
+      filePath: DB_PATH,
+      loadInitial: () => seedDatabase()
+    });
+    await repository.initialize();
+    return repository.readState();
   }
 
   const { MongoClient } = require('mongodb');
@@ -140,31 +131,19 @@ async function loadDatabaseState() {
 
   const databaseName = process.env.MONGODB_DB_NAME || 'velosupply';
   const collectionName = process.env.MONGODB_STATE_COLLECTION || 'application_state';
-  stateCollection = mongoClient.db(databaseName).collection(collectionName);
+  const database = mongoClient.db(databaseName);
+  stateCollection = database.collection(collectionName);
+  const fallbackState = process.env.SEED_DEMO_DATA === 'true' && process.env.NODE_ENV !== 'production'
+    ? await seedDatabase()
+    : createEmptyProductionState();
 
-  const stored = await stateCollection.findOne({ _id: 'primary' });
-  if (stored?.state && typeof stored.state === 'object') {
-    return stored.state;
-  }
-
-  // Never silently copy demo catalog/orders into Atlas. It must be an explicit, non-production opt-in.
-  if (process.env.SEED_DEMO_DATA === 'true' && process.env.NODE_ENV !== 'production') {
-    const demoState = await seedDatabase();
-    await stateCollection.updateOne(
-      { _id: 'primary' },
-      { $set: { state: demoState, updatedAt: new Date().toISOString() } },
-      { upsert: true }
-    );
-    return demoState;
-  }
-
-  const emptyState = createEmptyProductionState();
-  await stateCollection.updateOne(
-    { _id: 'primary' },
-    { $set: { state: emptyState, updatedAt: new Date().toISOString() } },
-    { upsert: true }
-  );
-  return emptyState;
+  repository = createRepository({
+    client: mongoClient,
+    database,
+    legacyCollectionName: collectionName
+  });
+  await repository.initialize({ fallbackState });
+  return repository.readState();
 }
 function metricsScore() { return Number(db.metrics?.efficiencyScore || 0); }
 
