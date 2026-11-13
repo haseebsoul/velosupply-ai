@@ -74,7 +74,7 @@ describe('domain repositories and immutable ledgers', () => {
       { buyerId: 'buyer-1', city: 'Karachi', paymentMethod: 'COD' },
       [{ sku: 'SKU-1', name: 'Router', qty: 3, unitExGstPkr: 12500 }]
     );
-    expect(result.order.price).toEqual({ currency: 'PKR', subtotalExMinor: 3750000, gstMinor: 675000, deliveryFeeMinor: 35000, totalMinor: 4460000 });
+    expect(result.order.price).toEqual({ currency: 'PKR', subtotalExMinor: 3750000, gstMinor: 675000, deliveryFeeMinor: 35000, totalMinor: 4460000, simulated: true });
     expect(result.order.items).toEqual([{ sku: 'SKU-1', name: 'Router', qty: 3, unitPriceMinor: 1250000 }]);
     expect(Number.isSafeInteger(result.order.price.totalMinor)).toBe(true);
     expect(result.order.price.simulated).toBe(true);
