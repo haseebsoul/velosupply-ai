@@ -497,7 +497,8 @@ app.post('/api/checkout', validate(checkoutSchema), checkoutHandler);
 
 app.use('/api', authenticate);
 app.use('/api/sre', requireRoles('admin', 'operator'), sre.router);
-app.get('/api/admin/backup', requireRoles('admin'), (_req, res) => {
+app.get('/api/admin/backup', requireRoles('admin'), (req, res) => {
+  sre.audit?.('backup.export', req.user, { format: 'velosupply-backup-v1' });
   const snapshot = sre.exportSnapshot();
   res.setHeader('content-type', 'application/json; charset=utf-8');
   res.setHeader('content-disposition', 'attachment; filename="velosupply-backup.json"');
