@@ -318,7 +318,7 @@ function createSRE(deps) {
     recentClientCounts.push({ at: now, count: metric.wsClients });
     recentClientCounts = recentClientCounts.filter((entry) => entry.at >= now - 30_000);
     lastTickAt = now;
-    deps.broadcast?.({ type: 'TELEMETRY_TICK', level: 'INFO', message: 'SRE telemetry sample recorded.', timestamp: metric.at, metrics: metric });
+    deps.broadcast?.({ type: 'TELEMETRY_TICK', level: 'INFO', message: 'SRE telemetry sample recorded.', timestamp: metric.at, sreMetrics: metric });
   }
 
   async function healthCheck() {
