@@ -10,7 +10,7 @@ import { DashboardLayout } from './components/dashboard/DashboardLayout'
 import { CommandPages } from './pages/dashboard/CommandPages'
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } })
-const viewMotion = { initial: { opacity: 0, y: 16 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: -8 }, transition: { duration: .3 } }
+const viewMotion = { initial: { opacity: 0, y: 10 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: -6 }, transition: { duration: .24, ease: 'easeOut' } }
 
 function AnimatedRoutes() {
   const location = useLocation()
