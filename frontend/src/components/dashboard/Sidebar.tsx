@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import {
-  Activity, Boxes, ChevronLeft, ChevronRight, CircleGauge, FileText, Gift,
+  Activity, ChevronLeft, ChevronRight, CircleGauge, FileText, Gift,
   LayoutDashboard, LogOut, MessageSquareText, Network, Settings, ShieldAlert, Store, UsersRound
 } from 'lucide-react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
