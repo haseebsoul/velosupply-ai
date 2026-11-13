@@ -5,6 +5,7 @@ const { DB_SCHEMA_VERSION } = require('./seed');
 function createEmptyProductionState(now = new Date().toISOString()) {
   return {
     schemaVersion: DB_SCHEMA_VERSION,
+    dataMode: 'production',
     users: [],
     warehouses: [],
     products: [],
