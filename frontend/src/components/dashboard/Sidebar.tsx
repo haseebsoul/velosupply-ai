@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import {
-  Activity, Bell, Boxes, ChevronDown, ChevronLeft, ChevronRight, Menu, X,
+  Activity, Bell, ChevronDown, ChevronLeft, ChevronRight, Menu, X,
   CircleGauge, FileText, Gift, LayoutDashboard, LogOut, Network,
   Package, Shield, Store, Users
 } from 'lucide-react'
