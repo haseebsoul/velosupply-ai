@@ -627,6 +627,9 @@ app.post('/api/orders/:id/route', requireRoles('admin', 'operator'), asyncRoute(
 }));
 
 app.post('/api/simulation/trigger', requireRoles('admin', 'operator'), validate(simulationSchema), asyncRoute(async (req, res) => {
+  if (process.env.NODE_ENV === 'production' && process.env.SIMULATIONS_ENABLED !== 'true') {
+    return res.status(403).json({ error: 'SIMULATIONS_DISABLED' });
+  }
   const { scenario, params } = req.body;
   let message;
   let level = 'INFO';
@@ -696,8 +699,11 @@ function tickTelemetry() {
   if (!db) return;
   db.telemetry.tick += 1;
   db.telemetry.updatedAt = new Date().toISOString();
-  db.metrics.packetsPerSec = 1100 + Math.floor(Math.random() * 400);
-  db.metrics.detectionTimeMs = 8 + Math.floor(Math.random() * 16);
+  // These are synthetic demo indicators, not observed network packet inspection.
+  if (db.dataMode === 'demo' && process.env.NODE_ENV !== 'production') {
+    db.metrics.packetsPerSec = 1100 + Math.floor(Math.random() * 400);
+    db.metrics.detectionTimeMs = 8 + Math.floor(Math.random() * 16);
+  }
   const event = telemetryEvent({
     type: 'HEARTBEAT',
     level: 'INFO',
