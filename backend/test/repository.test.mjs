@@ -240,6 +240,26 @@ describe('collection repository adapters', () => {
     expect((await reloaded.readState()).dataMode).toBe('production');
   });
 
+  it('stores the legacy movements alias in the canonical stockMovements MongoDB collection', async () => {
+    const database = new FakeDatabase();
+    const adapter = createMongoAdapter({ client: new FakeClient(), database });
+    await adapter.initialize({ fallbackState: {
+      dataMode: 'production', users: [], products: [], warehouses: [], orders: [],
+      orderItems: [], movements: [], tariffRules: [], logs: [], newsletter: [],
+      rewardClaims: [], metrics: {}, telemetry: { tick: 0 }, sre: { audit: [] }
+    } });
+    await adapter.insert('movements', {
+      id: 'MOV-1', sku: 'SKU-1', hubCode: 'WH-1', type: 'RECEIVE',
+      qty: 5, reason: 'opening_balance', refType: 'opening_balance',
+      refId: 'opening-1', actorId: 'system', at: '2026-11-13T00:00:00.000Z'
+    });
+    expect(await adapter.count('stockMovements')).toBe(1);
+    expect(await adapter.count('movements')).toBe(1);
+    expect(database.collection('stockMovements').documents.has('MOV-1')).toBe(true);
+    expect(database.collection('movements').documents.size).toBe(0);
+    await expect(adapter.remove('movements', 'MOV-1')).rejects.toThrow('append-only');
+  });
+
   it('refuses to overwrite unmarked populated collections', async () => {
     const database = new FakeDatabase();
     database.collection('products').documents.set('PROD-1', { _id: 'PROD-1', id: 'PROD-1', sku: 'SKU-1' });
