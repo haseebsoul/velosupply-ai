@@ -215,6 +215,24 @@ function stripMongoId(document) {
   return result;
 }
 
+const APPEND_ONLY_COLLECTIONS = new Set(['stockMovements', 'auditLogs']);
+
+function assertAppendOnlyTransition(name, before = [], after = []) {
+  if (!APPEND_ONLY_COLLECTIONS.has(name)) return;
+  if (!Array.isArray(before) || !Array.isArray(after) || after.length < before.length) {
+    const error = new Error(name + ' is append-only; existing records cannot be removed');
+    error.code = 'IMMUTABLE_COLLECTION';
+    throw error;
+  }
+  for (let index = 0; index < before.length; index += 1) {
+    if (JSON.stringify(before[index]) !== JSON.stringify(after[index])) {
+      const error = new Error(name + ' is append-only; existing records cannot be changed');
+      error.code = 'IMMUTABLE_COLLECTION';
+      throw error;
+    }
+  }
+}
+
 function matchesFilter(document, filter = {}) {
   return Object.entries(filter).every(([key, expected]) => {
     const actual = key.split('.').reduce((value, part) => value == null ? undefined : value[part], document);
@@ -234,6 +252,8 @@ module.exports = {
   STATE_PATHS,
   COLLECTION_NAMES,
   INDEXES,
+  APPEND_ONLY_COLLECTIONS,
+  assertAppendOnlyTransition,
   clone,
   getAtPath,
   setAtPath,
