@@ -1,6 +1,6 @@
 const fs = require('node:fs/promises');
 const http = require('node:http');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, timingSafeEqual } = require('node:crypto');
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
@@ -19,6 +19,8 @@ const app = express();
 const server = http.createServer(app);
 const websocketServer = new WebSocketServer({ noServer: true });
 let db;
+let mongoClient = null;
+let stateCollection = null;
 let writeQueue = Promise.resolve();
 
 app.disable('x-powered-by');
@@ -27,8 +29,17 @@ app.use(express.json({ limit: '1mb' }));
 
 function persist() {
   writeQueue = writeQueue.catch(() => {}).then(async () => {
+    if (stateCollection) {
+      await stateCollection.updateOne(
+        { _id: 'primary' },
+        { $set: { state: db, updatedAt: new Date().toISOString() } },
+        { upsert: true }
+      );
+      return;
+    }
+
     const temporaryPath = `${DB_PATH}.${process.pid}.${randomUUID()}.tmp`;
-    await fs.writeFile(temporaryPath, `${JSON.stringify(db, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    await fs.writeFile(temporaryPath, `${JSON.stringify(db, null, 2)}\\n`, { encoding: 'utf8', mode: 0o600 });
     try {
       await fs.rename(temporaryPath, DB_PATH);
     } catch (error) {
@@ -39,6 +50,40 @@ function persist() {
   return writeQueue;
 }
 
+async function loadDatabaseState() {
+  const seededState = await seedDatabase();
+  const mongoUri = process.env.MONGODB_URI;
+
+  if (!mongoUri) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('MONGODB_URI must be set in production');
+    }
+    return seededState;
+  }
+
+  const { MongoClient } = require('mongodb');
+  mongoClient = new MongoClient(mongoUri, {
+    serverSelectionTimeoutMS: 10000,
+    maxPoolSize: 10
+  });
+  await mongoClient.connect();
+
+  const databaseName = process.env.MONGODB_DB_NAME || 'velosupply';
+  const collectionName = process.env.MONGODB_STATE_COLLECTION || 'application_state';
+  stateCollection = mongoClient.db(databaseName).collection(collectionName);
+
+  const stored = await stateCollection.findOne({ _id: 'primary' });
+  if (stored?.state && typeof stored.state === 'object') {
+    return stored.state;
+  }
+
+  await stateCollection.updateOne(
+    { _id: 'primary' },
+    { $set: { state: seededState, updatedAt: new Date().toISOString() } },
+    { upsert: true }
+  );
+  return seededState;
+}
 function safeUser(user) {
   const { passwordHash, ...result } = user;
   return result;
@@ -175,7 +220,9 @@ const newsletterSchema = z.object({
 const registerSchema = z.object({
   name: z.string().trim().min(2).max(100),
   email: z.string().trim().email().transform((value) => value.toLowerCase()),
-  password: z.string().min(4).max(128)
+  password: z.string().min(8).max(128),
+  role: z.enum(['admin', 'operator', 'user']).default('user'),
+  adminInviteCode: z.string().max(200).optional()
 }).strict();
 const checkoutSchema = z.object({
   customerName: z.string().trim().min(2).max(100),
@@ -247,6 +294,19 @@ app.post('/api/auth/login', validate(loginSchema), asyncRoute(async (req, res) =
 }));
 
 async function register(req, res) {
+  if (req.body.role === 'admin') {
+    const expectedCode = process.env.ADMIN_REGISTRATION_KEY || '';
+    const suppliedCode = req.body.adminInviteCode || '';
+    const expectedBuffer = Buffer.from(expectedCode);
+    const suppliedBuffer = Buffer.from(suppliedCode);
+    const validCode = expectedBuffer.length > 0 &&
+      expectedBuffer.length === suppliedBuffer.length &&
+      timingSafeEqual(expectedBuffer, suppliedBuffer);
+    if (!validCode) {
+      return res.status(403).json({ error: 'Administrator registration requires a valid invitation key' });
+    }
+  }
+
   if (db.users.some((entry) => entry.email === req.body.email)) {
     return res.status(409).json({ error: 'Email already registered' });
   }
@@ -254,8 +314,8 @@ async function register(req, res) {
     id: `USER-${randomUUID()}`,
     name: req.body.name,
     email: req.body.email,
-    role: 'user',
-    passwordHash: await bcrypt.hash(req.body.password, 10),
+    role: req.body.role || 'user',
+    passwordHash: await bcrypt.hash(req.body.password, 12),
     createdAt: new Date().toISOString()
   };
   db.users.push(user);
@@ -492,7 +552,7 @@ websocketServer.on('connection', (websocket) => {
 });
 
 async function start() {
-  db = await seedDatabase();
+  db = await loadDatabaseState();
   if (!Array.isArray(db.newsletter)) db.newsletter = [];
   refreshMetrics();
   server.listen(PORT, () => console.log(`VeloSupply API listening on http://localhost:${PORT}`));
