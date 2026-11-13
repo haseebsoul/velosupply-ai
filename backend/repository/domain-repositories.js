@@ -3,7 +3,7 @@
 const { randomUUID } = require('node:crypto');
 
 const BUYER_ROLES = new Set(['buyer', 'operator', 'admin']);
-const MOVEMENT_REASONS = new Set(['opening_balance', 'restock', 'sale', 'refund', 'adjustment']);
+const MOVEMENT_TYPES = new Set(['RECEIVE', 'RESERVE', 'RELEASE', 'SHIP', 'ADJUST', 'TRANSFER_OUT', 'TRANSFER_IN', 'RETURN_IN']);
 
 function requiredString(value, field) {
   if (typeof value !== 'string' || !value.trim()) throw new TypeError(field + ' is required');
@@ -41,9 +41,8 @@ function createDomainRepositories(adapter) {
   const products = {
     create(input) {
       const sku = requiredString(input.sku, 'sku');
-      const batchHash = requiredString(input.batchHash, 'batchHash');
       return adapter.insert('products', {
-        ...input, id: input.id || 'PROD-' + randomUUID(), sku, batchHash,
+        ...input, id: input.id || 'PROD-' + randomUUID(), sku,
         archivedAt: null, createdAt: input.createdAt || new Date().toISOString()
       });
     },
@@ -144,37 +143,100 @@ function createDomainRepositories(adapter) {
     }
   };
 
+  function movementBalance(rows) {
+    return rows.reduce((balance, movement) => {
+      const qty = Number(movement.qty) || 0;
+      if (movement.type === 'RECEIVE' || movement.type === 'TRANSFER_IN' || movement.type === 'RETURN_IN') balance.onHand += qty;
+      if (movement.type === 'SHIP' || movement.type === 'TRANSFER_OUT') {
+        balance.onHand -= qty;
+        balance.reserved -= qty;
+      }
+      if (movement.type === 'ADJUST') balance.onHand += qty;
+      if (movement.type === 'RESERVE') balance.reserved += qty;
+      if (movement.type === 'RELEASE') balance.reserved -= qty;
+      return balance;
+    }, { onHand: 0, reserved: 0 });
+  }
+
   const stockMovements = {
     async append(input) {
       const sku = requiredString(input.sku, 'sku');
       const hubCode = requiredString(input.hubCode || input.warehouseId, 'hubCode');
+      const type = requiredString(input.type, 'type').toUpperCase();
+      if (!MOVEMENT_TYPES.has(type)) throw new TypeError('Unsupported stock movement type');
       const reason = requiredString(input.reason, 'reason');
-      if (!MOVEMENT_REASONS.has(reason)) throw new TypeError('Unsupported stock movement reason');
-      if (!Number.isSafeInteger(input.quantityDelta) || input.quantityDelta === 0) throw new TypeError('quantityDelta must be a non-zero integer');
-      if (reason === 'sale' && input.quantityDelta >= 0) throw new TypeError('sale movement must reduce stock');
-      if (reason === 'restock' && input.quantityDelta <= 0) throw new TypeError('restock movement must increase stock');
-      const refType = input.refType || (input.orderId ? 'order' : input.adminActionId ? 'admin_action' : reason === 'opening_balance' ? 'opening_balance' : '');
-      const refId = input.refId || input.orderId || input.adminActionId || (reason === 'opening_balance' ? 'opening:' + randomUUID() : '');
-      if (!refType || !refId) throw new TypeError('A stock movement must reference an order or administrative action');
+      const qty = integer(input.qty ?? Math.abs(input.quantityDelta || 0), 'qty', 1);
+      if (type === 'ADJUST' && input.quantityDelta !== undefined) {
+        if (!Number.isSafeInteger(input.quantityDelta) || input.quantityDelta === 0 || Math.abs(input.quantityDelta) !== qty) {
+          throw new TypeError('ADJUST quantityDelta must be a non-zero signed integer matching qty');
+        }
+      }
+      if (type === 'ADJUST' && !reason) throw new TypeError('ADJUST requires a reason code');
+      const refType = requiredString(input.refType || (input.orderId ? 'order' : input.adminActionId ? 'admin_action' : ''), 'refType');
+      const refId = requiredString(input.refId || input.orderId || input.adminActionId, 'refId');
+      const actorId = requiredString(input.actorId || 'system', 'actorId');
       const at = input.at || input.createdAt || new Date().toISOString();
-      const actorId = input.actorId || 'system';
-      return adapter.insert('movements', {
+      const movement = {
         id: input.id || 'MOV-' + randomUUID(),
-        sku,
-        hubCode,
-        type: input.quantityDelta > 0 ? 'IN' : 'OUT',
-        qty: Math.abs(input.quantityDelta),
-        reason,
-        refType,
-        refId,
-        actorId,
-        at
+        sku, hubCode, type,
+        qty: type === 'ADJUST' ? input.quantityDelta : qty,
+        reason, refType, refId, actorId, at
+      };
+
+      return adapter.withTransaction(async ({ repository }) => {
+        const rows = await repository.find('movements', { sku, hubCode });
+        const before = movementBalance(rows);
+        const after = movementBalance([...rows, movement]);
+        if (after.onHand < 0 || after.reserved < 0 || after.reserved > after.onHand) {
+          const error = new Error('Stock movement would make available inventory negative');
+          error.code = 'NEGATIVE_STOCK';
+          throw error;
+        }
+        return repository.insert('movements', movement);
       });
     },
-    async reconcile(sku, hubCode, expectedOnHand) {
+
+    async transfer(input) {
+      const sku = requiredString(input.sku, 'sku');
+      const fromHubCode = requiredString(input.fromHubCode, 'fromHubCode');
+      const toHubCode = requiredString(input.toHubCode, 'toHubCode');
+      if (fromHubCode === toHubCode) throw new TypeError('Transfer hubs must be different');
+      const qty = integer(input.qty, 'qty', 1);
+      const actorId = requiredString(input.actorId || 'system', 'actorId');
+      const at = input.at || new Date().toISOString();
+      const refId = input.refId || 'TRANSFER-' + randomUUID();
+
+      return adapter.withTransaction(async ({ repository }) => {
+        const sourceRows = await repository.find('movements', { sku, hubCode: fromHubCode });
+        const source = movementBalance(sourceRows);
+        if (source.onHand - source.reserved < qty) {
+          const error = new Error('Insufficient available stock for transfer');
+          error.code = 'NEGATIVE_STOCK';
+          throw error;
+        }
+        const transferOut = await repository.insert('movements', {
+          id: 'MOV-' + randomUUID(), sku, hubCode: fromHubCode, type: 'TRANSFER_OUT',
+          qty, reason: requiredString(input.reason, 'reason'),
+          refType: 'transfer', refId, actorId, at
+        });
+        const transferIn = await repository.insert('movements', {
+          id: 'MOV-' + randomUUID(), sku, hubCode: toHubCode, type: 'TRANSFER_IN',
+          qty, reason: input.reason, refType: 'transfer', refId, actorId, at
+        });
+        return { transferOut, transferIn, refId };
+      });
+    },
+
+    async reconcile(sku, hubCode, expectedOnHand, expectedReserved) {
       const rows = await adapter.find('movements', { sku, hubCode });
-      const ledgerOnHand = rows.reduce((sum, movement) => sum + (movement.type === 'IN' ? movement.qty : -movement.qty), 0);
-      return { sku, hubCode, ledgerOnHand, expectedOnHand, matches: ledgerOnHand === expectedOnHand, movementCount: rows.length };
+      const balance = movementBalance(rows);
+      const matches = balance.onHand === expectedOnHand &&
+        (expectedReserved === undefined || balance.reserved === expectedReserved);
+      return {
+        sku, hubCode, onHand: balance.onHand, reserved: balance.reserved,
+        available: balance.onHand - balance.reserved,
+        expectedOnHand, expectedReserved, matches, movementCount: rows.length
+      };
     }
   };
 
@@ -206,4 +268,4 @@ function createDomainRepositories(adapter) {
   return { users, products, orders, stockMovements, auditLogs, tariffRules };
 }
 
-module.exports = { createDomainRepositories, BUYER_ROLES, MOVEMENT_REASONS };
+module.exports = { createDomainRepositories, BUYER_ROLES, MOVEMENT_TYPES, movementBalance };
