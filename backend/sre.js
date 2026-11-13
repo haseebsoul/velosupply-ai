@@ -202,7 +202,7 @@ function createSRE(deps) {
       const observed = total ? (total - bad) / total : 1;
       const allowedBad = slo.zeroTolerance ? 0 : (1 - slo.target) * total;
       const remaining = slo.zeroTolerance ? (bad ? 0 : 1) : allowedBad > 0 ? Math.max(0, Math.min(1, 1 - bad / allowedBad)) : 1;
-      const timestampOf = (entry) => typeof entry.at === 'number' ? entry.at : Date.parse(entry.at);
+      const timestampOf = (entry) => typeof entry.at === 'number' ? entry.at : Date.parse(entry.at || entry.createdAt);
       const lastHour = selected.filter((entry) => Number.isFinite(timestampOf(entry)) && timestampOf(entry) >= now - 60 * 60 * 1000);
       const recentBad = lastHour.filter((entry) => {
         if (slo.id === 'SLO-1') return entry.ms >= 150 || entry.status >= 500;
