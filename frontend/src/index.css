@@ -39,7 +39,6 @@
   --border-ops: var(--line);
   --border-ops-subtle: var(--line);
 
-  --shadow-card: var(--shadow-card);
   font-family: 'Public Sans', Inter, sans-serif;
   color: var(--text-editorial-primary);
   font-synthesis: none;
