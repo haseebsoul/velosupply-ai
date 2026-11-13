@@ -184,6 +184,7 @@ function recordsForState(state, name) {
 }
 
 function applyRecordsToState(state, name, records) {
+  name = canonicalCollectionName(name);
   const path = STATE_PATHS[name];
   if (!path) return;
   setAtPath(state, path, records);
