@@ -290,8 +290,8 @@ function appendStockMovement(product, quantityDelta, reason, reference, actorId 
     id: `MOV-${randomUUID()}`,
     sku: product.sku,
     hubCode: product.warehouse_hub || 'unassigned',
-    type: reason === 'restock' || reason === 'refund' ? 'RECEIVE' : 'ADJUST',
-    qty: reason === 'restock' || reason === 'refund' ? Math.abs(quantityDelta) : quantityDelta,
+    type: reason === 'restock' || reason === 'refund' || reason === 'opening_balance' ? 'RECEIVE' : 'ADJUST',
+    qty: reason === 'restock' || reason === 'refund' || reason === 'opening_balance' ? Math.abs(quantityDelta) : quantityDelta,
     reason,
     refType,
     refId,
@@ -300,6 +300,18 @@ function appendStockMovement(product, quantityDelta, reason, reference, actorId 
   };
   db.movements.push(movement);
   return movement;
+}
+
+function ensureStockOpeningBalance(product, actorId = 'system') {
+  if (!Array.isArray(db.movements)) db.movements = [];
+  const hubCode = product.warehouse_hub || 'unassigned';
+  const hasBaseline = db.movements.some((entry) => entry.sku === product.sku && entry.hubCode === hubCode);
+  if (!hasBaseline && Number.isSafeInteger(product.stock) && product.stock > 0) {
+    appendStockMovement(product, product.stock, 'opening_balance', {
+      type: 'opening_balance',
+      id: `legacy-snapshot:${product.sku}:${hubCode}`
+    }, actorId);
+  }
 }
 
 const loginSchema = z.object({
@@ -493,7 +505,10 @@ const checkoutHandler = asyncRoute(async (req, res) => {
     name: product.name,
     unitPrice: product.price
   }));
-  for (const { product, quantity } of resolved) updateProductStock(product, product.stock - quantity);
+  for (const { product, quantity } of resolved) {
+    ensureStockOpeningBalance(product, 'guest-checkout');
+    updateProductStock(product, product.stock - quantity);
+  }
   const order = {
     id: `ORD-${randomUUID()}`,
     customerName: req.body.customerName,
@@ -616,6 +631,7 @@ app.delete('/api/admin/users/:id', requireRoles('admin'), asyncRoute(async (req,
 app.patch('/api/inventory/:id', requireRoles('admin', 'operator'), validate(inventoryUpdateSchema), asyncRoute(async (req, res) => {
   const product = findById(db.products, req.params.id, 'Product');
   const previousStock = product.stock;
+  if (req.body.stock !== undefined && req.body.stock !== previousStock) ensureStockOpeningBalance(product, req.user.id);
   if (req.body.stock !== undefined) updateProductStock(product, req.body.stock);
   if (req.body.stock !== undefined && req.body.stock !== previousStock) {
     appendStockMovement(product, req.body.stock - previousStock, 'adjustment', { type: 'admin_action', id: randomUUID() }, req.user.id);
@@ -653,6 +669,7 @@ app.get('/api/inventory/:id/ledger', requireRoles('admin', 'operator'), (req, re
 app.post('/api/inventory/restock/:id', requireRoles('admin', 'operator'), validate(restockSchema), asyncRoute(async (req, res) => {
   const product = findById(db.products, req.params.id, 'Product');
   const quantity = req.body.quantity || Math.max(product.reorder_threshold * 2 - product.stock, 10);
+  ensureStockOpeningBalance(product, req.user.id);
   updateProductStock(product, product.stock + quantity);
   appendStockMovement(product, quantity, 'restock', { type: 'admin_action', id: randomUUID() }, req.user.id);
   const event = publish('THREAT_RESOLVED', `Restock purchase order executed for ${product.sku}: +${quantity} units.`, 'INFO', { productId: product.id });
@@ -695,6 +712,7 @@ app.post('/api/simulation/trigger', requireRoles('admin', 'operator'), validate(
     for (const product of db.products) {
       product.velocity_per_hr = Number((product.velocity_per_hr * multiplier).toFixed(1));
       const simulatedDemand = Math.min(product.stock, Math.max(1, Math.ceil(product.velocity_per_hr / 4)));
+      if (simulatedDemand > 0) ensureStockOpeningBalance(product, req.user.id);
       updateProductStock(product, product.stock - simulatedDemand);
       if (simulatedDemand > 0) appendStockMovement(product, -simulatedDemand, 'adjustment', { type: 'simulation', id: 'demand_spike' }, req.user.id);
     }
