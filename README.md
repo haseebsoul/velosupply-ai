@@ -70,6 +70,32 @@ Public endpoints include `GET /api/health`, `GET /api/products`, `POST /api/auth
 
 The Dashboard V14 redesign keeps the existing VeloSupply logistics product, operational data and route behavior. Its visual clean-up follows the audit-first spacing, restrained color, typography and motion principles from [unslop](https://github.com/heydamir/unslop) by Damir Sokolovsky, licensed CC BY 4.0. The toolkit itself is not copied into this repository.
 
+## Data provenance and what is real
+
+The application exposes `dataMode` from `GET /api/health` and `GET /api/metrics`:
+
+- `demo`: generated sample catalog and operational records. The local JSON development fallback uses this mode.
+- `production`: real application storage mode. A new Atlas database starts empty and does not seed fake buyers, products, warehouses, or orders.
+- `unclassified`: an older state document created before data provenance tracking; verify its records before treating them as production data.
+
+### Sample data (not real business records)
+
+The local demo seed contains 5 non-Pakistan hubs (Newark, Austin, Rotterdam, Dubai and Singapore), 24 synthetic products, 12 synthetic orders, three demo accounts and generated event logs. It also has illustrative starting metrics. These are development examples, not live inventory, supplier feeds, customers, or carrier shipments.
+
+The legacy heartbeat generator randomizes packet-rate and detection-time values only for demo state outside production. Those values are not network packet inspection or threat detection. `GET /api/threats` currently reports inventory threshold and warehouse-status alerts; it does not detect cyberattacks. Scenario simulations change the local demo model and are blocked in production unless `SIMULATIONS_ENABLED=true` is explicitly configured.
+
+### Real application behavior
+
+Authenticated login/JWT checks, authorization rules, product/order API calls, stock updates and persistence are implemented. A checkout request creates an application order and reduces the chosen product's stored stock. That record becomes real application data only after a real buyer places the order against a configured, persistent database. The present checkout does not charge a payment method or create a carrier booking. Payment methods and carriers remain simulated adapters / planned integrations.
+
+The Reliability layer measures actual API request timing/status, process memory and event-loop lag, WebSocket ping/pong latency, and the health probes while the backend is running. Its 1-second sample ring is in process memory; five-minute aggregates and SRE state are persisted through the configured storage adapter. The complete 30-day SLO window is not restart-safe yet.
+
+### Atlas storage currently provisioned
+
+The existing Atlas project already contains the free `VeloSupplyCluster` (AWS Singapore, MongoDB 8.0). The `velosupply` database uses `application_state`; its existing `velosupply_app` database user has `readWrite` on that database. The initial `_id: "primary"` document is now bootstrapped with `dataMode: "production"` and empty arrays for users, warehouses, products and orders. No customer or sample business records were loaded into Atlas.
+
+Atlas Network Access currently has no IP/CIDR entries. Before a local or deployed application can connect directly, add only that application's actual public egress IP/CIDR. Do not use `0.0.0.0/0`. Put the existing database-user password and the SRV connection string in `backend/.env` or deployment secrets; never commit them.
+
 ## Reliability and SRE
 
 The operator Reliability workspace is available at `/dashboard/reliability` for administrators and operators. It reads the authenticated `/api/sre` API and presents the six SLOs, calculated error budgets, recent telemetry, five service probes, alerts, incidents, runbooks and scoped chaos controls.
