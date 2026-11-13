@@ -22,8 +22,8 @@ function createDomainRepositories(adapter) {
       const email = requiredString(input.email, 'email').toLowerCase();
       const role = requiredString(input.role, 'role');
       if (!BUYER_ROLES.has(role)) throw new TypeError('role must be buyer, operator, or admin');
-      if (role === 'buyer' && !['filer', 'non-filer'].includes(input.filerStatus)) {
-        throw new TypeError('filerStatus must be filer or non-filer for buyers');
+      if (role === 'buyer' && !['filer', 'non-filer', 'unverified'].includes(input.filerStatus)) {
+        throw new TypeError('filerStatus must be filer, non-filer, or unverified for buyers');
       }
       return adapter.insert('users', {
         ...input, id: input.id || 'USER-' + randomUUID(), email, role,
@@ -38,11 +38,29 @@ function createDomainRepositories(adapter) {
     }
   };
 
-  const products = {
+  const warehouses = {
     create(input) {
+      const code = requiredString(input.code, 'code');
+      const name = requiredString(input.name, 'name');
+      return adapter.insert('warehouses', {
+        ...input, id: input.id || 'WH-' + randomUUID(), code, name,
+        seedOrigin: input.seedOrigin === true,
+        createdAt: input.createdAt || new Date().toISOString()
+      });
+    }
+  };
+
+  const products = {
+    async create(input) {
       const sku = requiredString(input.sku, 'sku');
+      const batchHash = requiredString(input.batchHash, 'batchHash');
+      const originWarehouseId = requiredString(input.originWarehouseId || input.warehouse_hub, 'originWarehouseId');
+      const warehouse = await adapter.findById('warehouses', originWarehouseId) ||
+        (await adapter.find('warehouses', { code: originWarehouseId }, { limit: 1 }))[0];
+      if (!warehouse) throw new TypeError('originWarehouseId must reference an existing warehouse');
       return adapter.insert('products', {
-        ...input, id: input.id || 'PROD-' + randomUUID(), sku,
+        ...input, id: input.id || 'PROD-' + randomUUID(), sku, batchHash,
+        originWarehouseId: warehouse.id,
         archivedAt: null, createdAt: input.createdAt || new Date().toISOString()
       });
     },
@@ -111,6 +129,7 @@ function createDomainRepositories(adapter) {
         id: orderInput.id || 'ORD-' + randomUUID(),
         code: orderInput.code || 'VS-' + randomUUID(),
         buyerId,
+        userId: buyerId,
         city,
         items: items.map(({ sku, name, qty, unitExGstPkr }) => ({ sku, name, qty, unitExGstPkr })),
         price: { subtotalEx, gst, deliveryFee, totalPkr },
@@ -263,7 +282,7 @@ function createDomainRepositories(adapter) {
     }
   };
 
-  return { users, products, orders, stockMovements, auditLogs, tariffRules };
+  return { users, warehouses, products, orders, stockMovements, auditLogs, tariffRules };
 }
 
 module.exports = { createDomainRepositories, BUYER_ROLES, MOVEMENT_TYPES, movementBalance };
