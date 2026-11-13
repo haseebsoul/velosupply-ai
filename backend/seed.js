@@ -225,4 +225,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { DB_PATH, DB_SCHEMA_VERSION, seedDatabase, productStatus, hasCurrentSchema };
+module.exports = { DB_PATH, DB_SCHEMA_VERSION, seedDatabase, productStatus, hasCurrentSchema, createSeedData };
