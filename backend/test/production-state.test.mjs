@@ -7,6 +7,7 @@ describe('production storage bootstrap', () => {
   it('starts an empty Atlas state without synthetic buyers, inventory, or orders', () => {
     const state = createEmptyProductionState('2026-11-13T00:00:00.000Z');
     expect(state.schemaVersion).toBe(2);
+    expect(state.dataMode).toBe('production');
     expect(state.users).toEqual([]);
     expect(state.warehouses).toEqual([]);
     expect(state.products).toEqual([]);
