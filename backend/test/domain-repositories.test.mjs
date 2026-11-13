@@ -19,7 +19,7 @@ async function harness() {
     filePath: path.join(directory, 'db.json'),
     loadInitial: async () => ({
       dataMode: 'test', users: [], products: [], warehouses: [], orders: [],
-      orderItems: [], stockMovements: [], tariffRules: [], logs: [],
+      orderItems: [], movements: [], tariffRules: [], logs: [],
       newsletter: [], rewardClaims: [], metrics: {}, telemetry: { tick: 0 },
       sre: { audit: [], incidents: [], alerts: [], healthChecks: [], loginAttempts: [] }
     })
@@ -67,10 +67,12 @@ describe('domain repositories and immutable ledgers', () => {
     await domain.stockMovements.append({ sku: 'SKU-1', warehouseId: 'WH-1', reason: 'sale', quantityDelta: -3, orderId: 'order-1' });
     await domain.stockMovements.append({ sku: 'SKU-1', warehouseId: 'WH-1', reason: 'restock', quantityDelta: 5, adminActionId: 'restock-1' });
     expect(await domain.stockMovements.reconcile('SKU-1', 'WH-1', 12)).toMatchObject({
-      ledgerOnHand: 12, expectedOnHand: 12, matches: true, movementCount: 3
+      ledgerOnHand: 12, expectedOnHand: 12, matches: true, movementCount: 3, hubCode: 'WH-1'
     });
-    await expect(adapter.update('stockMovements', 'missing', { quantityDelta: 0 })).rejects.toThrow('append-only');
-    await expect(adapter.remove('stockMovements', 'missing')).rejects.toThrow('append-only');
+    const stored = await adapter.find('movements', { sku: 'SKU-1' });
+    expect(stored[1]).toMatchObject({ hubCode: 'WH-1', type: 'OUT', qty: 3, reason: 'sale', refType: 'order', refId: 'order-1', actorId: 'system' });
+    await expect(adapter.update('movements', 'missing', { quantityDelta: 0 })).rejects.toThrow('append-only');
+    await expect(adapter.remove('movements', 'missing')).rejects.toThrow('append-only');
   });
 
   it('rejects audit log updates and deletes and rejects replacement through writeState', async () => {
