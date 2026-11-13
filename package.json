@@ -1,0 +1,14 @@
+{
+  "name": "velosupply-ai",
+  "version": "15.0.0",
+  "private": true,
+  "description": "VeloSupply AI Pakistan Edition",
+  "scripts": {
+    "setup": "npm install --prefix backend --no-audit --no-fund && npm install --prefix frontend --no-audit --no-fund",
+    "dev": "node scripts/dev.js",
+    "seed": "npm run seed --prefix backend",
+    "test": "npm test --prefix backend",
+    "build": "npm run build --prefix frontend",
+    "check": "npm test --prefix backend && npm run build --prefix frontend"
+  }
+}
