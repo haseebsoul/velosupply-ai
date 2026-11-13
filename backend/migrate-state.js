@@ -78,7 +78,7 @@ async function migrateMongoState() {
     const adapter = createRepository({ client, database, legacyCollectionName });
     await adapter.initialize({ fallbackState: createEmptyProductionState() });
     const state = await adapter.readState();
-    const names = ['users', 'products', 'warehouses', 'suppliers', 'stock', 'movements', 'stockMovements', 'orderItems', 'orders', 'invoices', 'returns', 'purchaseOrders', 'messages', 'incidents', 'alerts', 'auditLogs', 'tariffRules', 'healthChecks', 'idempotencyKeys', 'simulationRuns', 'loginAttempts'];
+    const names = ['users', 'products', 'warehouses', 'suppliers', 'stock', 'movements', 'orderItems', 'orders', 'invoices', 'returns', 'purchaseOrders', 'messages', 'incidents', 'alerts', 'auditLogs', 'tariffRules', 'healthChecks', 'idempotencyKeys', 'simulationRuns', 'loginAttempts'];
     const counts = {};
     for (const name of names) counts[name] = await adapter.count(name);
     process.stdout.write(JSON.stringify({
