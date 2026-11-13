@@ -11,7 +11,7 @@ export default {
         ink: { DEFAULT: 'var(--ink)', soft: 'var(--ink-soft)', muted: 'var(--ink-muted)' },
         danger: 'var(--danger)',
         editorial: { root: 'var(--bg-editorial-root)', ink: 'var(--text-editorial-primary)', accent: 'var(--accent-editorial-primary)' },
-        ops: { root: 'var(--bg-ops-root)', card: 'var(--bg-ops-card)', navy: 'var(--accent-ops-lime)', orange: 'var(--accent-ops-orange)' },
+        ops: { root: 'var(--bg-ops-root)', card: 'var(--bg-ops-card)', lime: 'var(--accent-ops-lime)', navy: 'var(--navy-700)', orange: 'var(--accent-ops-orange)' },
       },
     },
   },
