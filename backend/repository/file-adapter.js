@@ -7,6 +7,7 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const {
   STATE_PATHS,
   APPEND_ONLY_COLLECTIONS,
+  canonicalCollectionName,
   assertAppendOnlyTransition,
   clone,
   getAtPath,
@@ -57,7 +58,7 @@ function createFileAdapter(options) {
   }
 
   function collectionPath(name) {
-    const pathValue = STATE_PATHS[name];
+    const pathValue = STATE_PATHS[canonicalCollectionName(name)];
     if (!pathValue) throw new Error('Unsupported file repository collection: ' + name);
     return pathValue;
   }
@@ -151,7 +152,7 @@ function createFileAdapter(options) {
     },
 
     async update(name, id, changes, options = {}) {
-      if (APPEND_ONLY_COLLECTIONS.has(name)) {
+      if (APPEND_ONLY_COLLECTIONS.has(canonicalCollectionName(name))) {
         const error = new Error(name + ' is append-only; updates are not permitted');
         error.code = 'IMMUTABLE_COLLECTION';
         throw error;
