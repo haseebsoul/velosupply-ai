@@ -9,7 +9,10 @@ const STATE_PATHS = {
   suppliers: ['suppliers'],
   stock: ['stock'],
   movements: ['movements'],
+  stockMovements: ['stockMovements'],
+  orderItems: ['orderItems'],
   orders: ['orders'],
+  tariffRules: ['tariffRules'],
   invoices: ['invoices'],
   returns: ['returns'],
   purchaseOrders: ['purchaseOrders'],
@@ -39,6 +42,7 @@ const INDEXES = {
   ],
   products: [
     { key: { sku: 1 }, unique: true, name: 'products_sku_unique' },
+    { key: { batchHash: 1 }, unique: true, sparse: true, name: 'products_batch_hash_unique' },
     { key: { name: 'text' }, name: 'products_name_text' }
   ],
   warehouses: [
@@ -52,6 +56,18 @@ const INDEXES = {
   ],
   movements: [
     { key: { sku: 1, at: -1 }, name: 'movements_sku_at' }
+  ],
+  stockMovements: [
+    { key: { sku: 1, createdAt: -1 }, name: 'stock_movements_sku_created' },
+    { key: { orderId: 1 }, sparse: true, name: 'stock_movements_order' }
+  ],
+  orderItems: [
+    { key: { orderId: 1 }, name: 'order_items_order' },
+    { key: { productId: 1, orderId: 1 }, name: 'order_items_product_order' }
+  ],
+  tariffRules: [
+    { key: { code: 1, version: -1 }, unique: true, name: 'tariff_rules_code_version_unique' },
+    { key: { effectiveFrom: 1, effectiveTo: 1 }, name: 'tariff_rules_effective_window' }
   ],
   orders: [
     { key: { code: 1 }, unique: true, sparse: true, name: 'orders_code_unique' },
