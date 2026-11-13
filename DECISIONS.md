@@ -28,3 +28,10 @@ D-013 | Enforce the single-administrator invariant in registration and role chan
 D-014 | Require at least eight password characters, one uppercase letter and one number; change new local seeds to Velo@12345 | This matches the Pakistan Edition password policy while preserving production's no-demo-user startup behavior | backend/server.js, backend/seed.js
 
 D-015 | Use exponential reconnect backoff and REST resync for telemetry clients | Short-lived WebSocket interruptions should recover without a fixed retry storm or stale dashboard snapshot | frontend/src/lib/useWebSocket.ts
+D-016 | Centralize all frontend brand hex values in frontend/src/styles/tokens.css and reference CSS variables elsewhere | A CI check can now reject local one-off colors and keep the three-family Pakistan Edition palette consistent | frontend/src/styles/tokens.css, scripts/check-hex.mjs
+
+D-017 | Keep four separate SRE AreaCharts and a 500-line terminal buffer fed by the existing telemetry WebSocket | The Reliability and Activity screens must show separate request, p95, error-rate and throughput series while preserving realtime events | frontend/src/pages/dashboard/ReliabilityPage.tsx, frontend/src/components/dashboard/TerminalPanel.tsx
+
+D-018 | Calculate one-hour burn rates from each SLO's own event stream | Browse, checkout, WebSocket, health, stock accuracy and dispatch have different bad-event definitions and must not share only the HTTP request sample set | backend/sre.js
+
+D-019 | Exercise the 25-failure breaker threshold and browse SLO calculations in backend tests | Critical SRE behavior should be verified by automated assertions, not only manual dashboard actions | backend/test/sre.test.mjs
