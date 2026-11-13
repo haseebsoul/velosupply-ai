@@ -44,11 +44,12 @@ function createFileAdapter(options) {
       mutator();
       return Promise.resolve();
     }
-    queue = queue.catch(() => {}).then(async () => {
+    const operation = queue.catch(() => {}).then(async () => {
       mutator();
       await flush();
     });
-    return queue;
+    queue = operation.catch(() => {});
+    return operation;
   }
 
   function collectionPath(name) {
@@ -171,7 +172,7 @@ function createFileAdapter(options) {
     },
 
     async withTransaction(callback) {
-      queue = queue.catch(() => {}).then(async () => {
+      const operation = queue.catch(() => {}).then(async () => {
         const before = clone(state);
         transactionActive = true;
         try {
@@ -186,7 +187,8 @@ function createFileAdapter(options) {
           transactionActive = false;
         }
       });
-      return queue;
+      queue = operation.catch(() => {});
+      return operation;
     }
   };
 
