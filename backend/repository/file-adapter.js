@@ -6,6 +6,8 @@ const { randomUUID } = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const {
   STATE_PATHS,
+  APPEND_ONLY_COLLECTIONS,
+  assertAppendOnlyTransition,
   clone,
   getAtPath,
   setAtPath,
@@ -93,7 +95,13 @@ function createFileAdapter(options) {
     async writeState(nextState) {
       const next = normalizeStateShape(nextState);
       next.stock = recordsForState(next, 'stock');
-      await serializeWrite(() => { state = next; });
+      await serializeWrite(() => {
+        for (const name of APPEND_ONLY_COLLECTIONS) {
+          const pathValue = collectionPath(name);
+          assertAppendOnlyTransition(name, getAtPath(state, pathValue), getAtPath(next, pathValue));
+        }
+        state = next;
+      });
     },
 
     async findById(name, id) {
@@ -143,6 +151,11 @@ function createFileAdapter(options) {
     },
 
     async update(name, id, changes, options = {}) {
+      if (APPEND_ONLY_COLLECTIONS.has(name)) {
+        const error = new Error(name + ' is append-only; updates are not permitted');
+        error.code = 'IMMUTABLE_COLLECTION';
+        throw error;
+      }
       let updated = null;
       await serializeWrite(() => {
         const records = getAtPath(state, collectionPath(name));
@@ -161,6 +174,11 @@ function createFileAdapter(options) {
     },
 
     async remove(name, id) {
+      if (APPEND_ONLY_COLLECTIONS.has(name)) {
+        const error = new Error(name + ' is append-only; deletes are not permitted');
+        error.code = 'IMMUTABLE_COLLECTION';
+        throw error;
+      }
       let deleted = 0;
       await serializeWrite(() => {
         const pathValue = collectionPath(name);
