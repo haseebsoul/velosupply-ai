@@ -92,7 +92,7 @@ class MongoAdapter {
 
     const legacyCollection = this.database.collection(this.legacyCollectionName);
     const legacy = await legacyCollection.findOne({ _id: 'primary' });
-    const namesToCheck = Object.keys(STATE_PATHS).filter((name) => name !== 'stock');
+    const namesToCheck = COLLECTION_NAMES.filter((name) => name !== META_COLLECTION && name !== BACKUP_COLLECTION);
     const counts = await Promise.all(namesToCheck.map((name) => this.collection(name).countDocuments({})));
     const collectionRecordsExist = counts.some((count) => count > 0);
 
