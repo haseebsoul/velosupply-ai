@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { TelemetryEvent } from '../types'
+import { api } from './apiClient'
 
 export function useWebSocket() {
   const [connected, setConnected] = useState(false)
@@ -9,22 +10,42 @@ export function useWebSocket() {
   useEffect(() => {
     let socket: WebSocket | null = null
     let retry: number | undefined
+    let retryDelay = 1000
     let closed = false
     const connect = () => {
       socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/telemetry`)
-      socket.onopen = () => setConnected(true)
+      socket.onopen = () => {
+        setConnected(true)
+        retryDelay = 1000
+        api.get('/metrics').then(({ data }) => {
+          const event = {
+            type: 'RESYNC',
+            level: 'INFO',
+            message: 'Telemetry snapshot restored after reconnect.',
+            timestamp: new Date().toISOString(),
+            metrics: data
+          } as TelemetryEvent
+          setLatest(event)
+          setEvents((current) => [...current.slice(-499), event])
+        }).catch((error: unknown) => {
+          console.error('Unable to resync telemetry snapshot', error)
+        })
+      }
       socket.onmessage = (message) => {
         try {
           const event = JSON.parse(message.data) as TelemetryEvent
           setLatest(event)
-          setEvents((current) => [...current.slice(-99), event])
+          setEvents((current) => [...current.slice(-499), event])
         } catch (error) {
           console.error('Unable to decode telemetry event', error)
         }
       }
       socket.onclose = () => {
         setConnected(false)
-        if (!closed) retry = window.setTimeout(connect, 2000)
+        if (!closed) {
+          retry = window.setTimeout(connect, retryDelay)
+          retryDelay = Math.min(retryDelay * 2, 30_000)
+        }
       }
       socket.onerror = () => socket?.close()
     }
