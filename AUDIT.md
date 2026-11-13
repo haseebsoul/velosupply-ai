@@ -460,3 +460,24 @@ These are specification-level ambiguities, not claims about current source code.
 This is a read-only source audit of the branch snapshot. It did not execute the application, connect to Atlas, modify live data, run migration, perform browser click-through, or test checkout, authentication, role CRUD, WebSocket privacy or performance. The missing lockfile dependency is confirmed by comparing the committed manifest and lockfile contents; npm ci failure is an expected consequence, not a command executed during this audit.
 
 No files were identified for removal during Phase 1. Existing routes, behavior and files should be retained or refactored unless a later phase proves they block the build or contradict an explicit requirement. Any removal must be logged in DECISIONS.md.
+## 18. Implementation update — Pakistan Edition SRE (branch `pakistan/v15`)
+
+The following implementation has been committed after the Phase 1 read-only audit:
+
+- Added `backend/sre.js` with six SLO definitions, 30-day rolling request observations, error-budget remaining/burn calculations, a 3,600-sample one-second process ring, persistent five-minute aggregates, structured request logs, request IDs, alert evaluation, service health checks, incident lifecycle endpoints, runbook checklist persistence, bounded chaos controls, and backup export/scheduling.
+- Integrated the SRE service into `backend/server.js`. Existing `GET /api/health`, `GET /health`, `GET /api/metrics`, `/ws/telemetry`, and `POST /api/orders/checkout` remain. Added `/livez`, `/readyz`, `GET /api/checkout`-compatible POST alias, authenticated `/api/sre/*`, and administrator-only `GET /api/admin/backup`.
+- Added operator/admin Reliability UI at `/dashboard/reliability`, live terminal stream, SLO/error budget tiles, service probes, alerts, incident CRUD/timeline, seven runbooks, chaos controls, and admin backup export.
+- Added helmet headers, 300/minute API and 10/minute login rate limits, 5-failures/15-minute email lockout, registration password complexity, generated local JWT/CORS defaults, production startup checks for JWT_SECRET and CORS_ORIGIN, single-admin checks in registration and role changes, buyer order scoping, and reduced WebSocket order data.
+- Added backend SRE tests and CI test execution. Added root setup/dev/seed/test/build/check scripts. Seeded new local databases use `Velo@12345`; the seeded operator email in code is `operator@velosupply.ai`.
+
+### SRE implementation boundaries still open
+
+- The primary store remains the existing `application_state` document / `backend/db.json`; the Section 13.4 multi-collection repository layer and migration have not been implemented.
+- No immutable `movements` stock ledger exists. The Stock ledger health probe deliberately reports degraded and SLO-3 currently detects negative stock only; it cannot prove ledger reconciliation.
+- No external payment provider is configured. Payment gateway health deliberately reports degraded because checkout remains the current simulated adapter.
+- The API's 30-day SLO observations are in-process and reset on process restart. Five-minute aggregates and health-check history are persisted; a restart-safe historical SLO query engine is still required for durable 30-day budgets.
+- The one-second telemetry ring is process-local; five-minute aggregates are persisted in the application state. It has not been load-tested for the complete 30-day SLO horizon.
+- Atlas connectivity, production backup configuration, restoration drills, TLS/proxy behavior, chaos behavior against a deployed environment, and end-to-end role acceptance have not been exercised in this implementation session.
+- CI has verified backend syntax, the automated backend SRE tests, and frontend production build on the commits noted in GitHub Actions. Passing CI does not establish production readiness or completion of the entire Pakistan Edition.
+
+The branch does not claim the SRE section or the full SRS is complete while these boundaries remain.
