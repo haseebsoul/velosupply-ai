@@ -7,7 +7,11 @@ on:
     branches: ["main"]
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: project-checks-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   verify:
@@ -22,12 +26,19 @@ jobs:
       - name: Install backend dependencies
         working-directory: backend
         run: npm install --no-audit --no-fund
-      - name: Upload resolved backend lockfile (temporary)
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-lockfile-${{ github.sha }}
-          path: backend/package-lock.json
-          retention-days: 1
+      - name: Commit refreshed backend lockfile on Pakistan Edition branch
+        if: github.event_name == 'push' && github.ref == 'refs/heads/pakistan/v15'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/package-lock.json
+          if ! git diff --cached --quiet; then
+            git commit -m "build: refresh backend dependency lockfile"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+      - name: Verify reproducible backend install
+        working-directory: backend
+        run: npm ci --no-audit --no-fund
       - name: Check backend JavaScript syntax
         working-directory: backend
         run: node --check server.js && node --check seed.js && node --check sre.js
