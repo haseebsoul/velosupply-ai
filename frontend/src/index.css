@@ -4,43 +4,43 @@
 @tailwind utilities;
 
 :root {
-  /* Unified Editorial & Obsidian Theme Tokens */
-  --bg-root: #09090B;              /* Deep Obsidian Base */
-  --bg-sidebar: #0C0C0E;           /* Deep Charcoal Sidebar */
-  --bg-card: #121216;              /* Elevated Glass Card Surface */
-  --bg-editorial-cream: #F3EEE3;   /* Warm Cream Accent Surface */
-  --text-primary: #FFFFFF;         /* Pure White Primary Text */
-  --text-secondary: #A1A1AA;       /* Zinc 400 Secondary Text */
-  --text-muted: #52525B;           /* Zinc 600 Muted Text */
-  --accent-lime: #B6FF00;          /* Volt Lime Active / Live Sync Highlight */
-  --accent-burnt-orange: #D9541E;  /* Editorial Burnt Orange Brand Accent */
-  --accent-gradient: linear-gradient(135deg, #F59E0B, #EA580C, #E11D48);
-  --status-positive: #10B981;      /* Emerald 500 */
-  --status-warning: #F59E0B;       /* Amber 500 */
-  --status-critical: #F43F5E;      /* Rose 500 */
-  --border-glass: rgba(255, 255, 255, 0.08);
-  --border-subtle: rgba(255, 255, 255, 0.06);
+  --bg-root: var(--navy-900);
+  --bg-sidebar: var(--navy-900);
+  --bg-card: var(--white);
+  --bg-editorial-cream: var(--sand);
+  --text-primary: var(--ink);
+  --text-secondary: var(--ink-soft);
+  --text-muted: var(--ink-muted);
+  --accent-lime: var(--navy-700);
+  --accent-burnt-orange: var(--orange-600);
+  --accent-gradient: linear-gradient(135deg, var(--navy-900), var(--navy-700));
+  --status-positive: var(--navy-700);
+  --status-warning: var(--orange-500);
+  --status-critical: var(--danger);
+  --border-glass: var(--line);
+  --border-subtle: var(--line);
 
-  /* Semantic Aliases for Editorial & Ops compatibility */
-  --bg-editorial-root: #F3EEE3;
-  --bg-editorial-surface: #EAE4D8;
-  --bg-editorial-elevated: #FFFFFF;
-  --text-editorial-primary: #111111;
-  --text-editorial-secondary: #52525B;
-  --accent-editorial-primary: #D9541E;
-  --border-editorial: rgba(17, 17, 17, 0.08);
-  --bg-ops-root: #09090B;
-  --bg-ops-sidebar: #0C0C0E;
-  --bg-ops-card: #121216;
-  --text-ops-primary: #FFFFFF;
-  --text-ops-secondary: #A1A1AA;
-  --text-ops-muted: #52525B;
-  --accent-ops-lime: #B6FF00;
-  --accent-ops-gradient: linear-gradient(135deg, #F59E0B, #EA580C, #E11D48);
-  --border-ops: rgba(255, 255, 255, 0.08);
-  --border-ops-subtle: rgba(255, 255, 255, 0.06);
+  --bg-editorial-root: var(--sand);
+  --bg-editorial-surface: var(--navy-50);
+  --bg-editorial-elevated: var(--white);
+  --text-editorial-primary: var(--ink);
+  --text-editorial-secondary: var(--ink-soft);
+  --accent-editorial-primary: var(--orange-600);
+  --border-editorial: var(--line);
+  --bg-ops-root: var(--navy-50);
+  --bg-ops-sidebar: var(--navy-900);
+  --bg-ops-card: var(--white);
+  --text-ops-primary: var(--ink);
+  --text-ops-secondary: var(--ink-soft);
+  --text-ops-muted: var(--ink-muted);
+  --accent-ops-lime: var(--navy-700);
+  --accent-ops-orange: var(--orange-500);
+  --accent-ops-gradient: linear-gradient(135deg, var(--navy-900), var(--navy-700));
+  --border-ops: var(--line);
+  --border-ops-subtle: var(--line);
 
-  font-family: Inter, sans-serif;
+  --shadow-card: var(--shadow-card);
+  font-family: 'Public Sans', Inter, sans-serif;
   color: var(--text-editorial-primary);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
