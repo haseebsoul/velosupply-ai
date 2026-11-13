@@ -50,6 +50,14 @@ describe('domain repositories and immutable ledgers', () => {
     )).rejects.toThrow('integer');
   });
 
+  it('rejects non-PKR order currency', async () => {
+    const { domain } = await harness();
+    await expect(domain.orders.createWithItems(
+      { userId: 'buyer-1', totalMinor: 1250, currency: 'USD' },
+      [{ productId: 'p-1', quantity: 1, unitPriceMinor: 1250 }]
+    )).rejects.toThrow('currency must be PKR');
+  });
+
   it('creates an order and its items atomically using integer minor units', async () => {
     const { adapter, domain } = await harness();
     const result = await domain.orders.createWithItems(
