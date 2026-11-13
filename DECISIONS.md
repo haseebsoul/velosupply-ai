@@ -11,3 +11,20 @@ D-004 | Preserve existing files and routes during Phase 1 | No file was shown to
 D-005 | Treat legacy role user as a migration concern, not as if it already equals buyer | Existing stored users and JWT claims use user; the target uses buyer; migration must preserve IDs and relationships | AUDIT.md
 
 D-006 | Do not run a live migration or write to Atlas during Phase 1 | The repository audit does not authorize destructive data conversion; migration requires backup, idempotency and explicit verification in its implementation phase | AUDIT.md
+D-007 | Keep the 3,600 one-second SRE sample ring in process memory and persist five-minute aggregate buckets | This preserves detailed near-real-time charts without writing every second into the existing single-document state store | backend/sre.js
+
+D-008 | Report Stock ledger and Payment gateway as degraded until real implementations exist | The audited baseline has neither an immutable movement ledger nor an external payment provider; showing UP would be misleading | backend/sre.js
+
+D-009 | Scope chaos injection only to product browse and checkout and expire effects after 60 seconds | This follows Section 14.8 and prevents experiments from affecting authentication, SRE management, or telemetry sockets | backend/sre.js
+
+D-010 | Retain POST /api/orders/checkout and add POST /api/checkout as an alias | Existing clients keep working while the target SRE/SLO route name is supported | backend/server.js
+
+D-011 | Remove buyer order details from public WebSocket telemetry | The existing socket is unauthenticated; only non-sensitive order metadata is broadcast until audience authentication is implemented | backend/server.js
+
+D-012 | Generate a fresh development JWT secret and localhost CORS default when environment values are absent | Local startup stays simple while production refuses missing JWT_SECRET or CORS_ORIGIN | backend/server.js
+
+D-013 | Enforce the single-administrator invariant in registration and role changes, and scope buyer order reads | A registration-only check can be bypassed through role promotion; buyer accounts must not see other customers' orders | backend/server.js
+
+D-014 | Require at least eight password characters, one uppercase letter and one number; change new local seeds to Velo@12345 | This matches the Pakistan Edition password policy while preserving production's no-demo-user startup behavior | backend/server.js, backend/seed.js
+
+D-015 | Use exponential reconnect backoff and REST resync for telemetry clients | Short-lived WebSocket interruptions should recover without a fixed retry storm or stale dashboard snapshot | frontend/src/lib/useWebSocket.ts
