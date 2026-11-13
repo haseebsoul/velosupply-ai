@@ -249,7 +249,7 @@ const registerSchema = z.object({
   email: z.string().trim().email().transform((value) => value.toLowerCase()),
   password: z.string().min(8).max(128),
   role: z.enum(['admin', 'operator', 'user']).default('user'),
-  adminInviteCode: z.string().max(200).optional()
+  registrationInviteCode: z.string().max(200).optional()
 }).strict();
 const checkoutSchema = z.object({
   customerName: z.string().trim().min(2).max(100),
@@ -322,16 +322,18 @@ app.post('/api/auth/login', validate(loginSchema), asyncRoute(async (req, res) =
 }));
 
 async function register(req, res) {
-  if (req.body.role === 'admin') {
-    const expectedCode = process.env.ADMIN_REGISTRATION_KEY || '';
-    const suppliedCode = req.body.adminInviteCode || '';
+  if (req.body.role === 'admin' || req.body.role === 'operator') {
+    const roleName = req.body.role;
+    const keyName = roleName === 'admin' ? 'ADMIN_REGISTRATION_KEY' : 'OPERATOR_REGISTRATION_KEY';
+    const expectedCode = process.env[keyName] || '';
+    const suppliedCode = req.body.registrationInviteCode || '';
     const expectedBuffer = Buffer.from(expectedCode);
     const suppliedBuffer = Buffer.from(suppliedCode);
     const validCode = expectedBuffer.length > 0 &&
       expectedBuffer.length === suppliedBuffer.length &&
       timingSafeEqual(expectedBuffer, suppliedBuffer);
     if (!validCode) {
-      return res.status(403).json({ error: 'Administrator registration requires a valid invitation key' });
+      return res.status(403).json({ error: `${roleName === 'admin' ? 'Administrator' : 'Operations'} registration requires a valid invitation key` });
     }
   }
 
