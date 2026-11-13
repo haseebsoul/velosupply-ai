@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { Copy, Download, RefreshCw, ShieldCheck, Truck } from 'lucide-react'
+import { Boxes, Copy, Download, RefreshCw, ShieldCheck, Truck } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
 import { api, errorMessage } from '../../lib/apiClient'
 import { useWebSocket } from '../../lib/useWebSocket'
