@@ -10,6 +10,8 @@ const jwt = require('jsonwebtoken');
 const { WebSocketServer, WebSocket } = require('ws');
 const { z } = require('zod');
 const { DB_PATH, seedDatabase, productStatus } = require('./seed');
+const helmet = require('helmet');
+const { createSRE } = require('./sre');
 
 
 const envFilePath = path.join(__dirname, '.env');
@@ -45,6 +47,7 @@ let db;
 let mongoClient = null;
 let stateCollection = null;
 let writeQueue = Promise.resolve();
+let sre = null;
 
 const rewardOffers = [
   { id: 'priority-routing', title: 'Priority carrier allocation', description: 'Reserve preferred routing capacity during regional demand peaks.', points: 150, minimumScore: 400 },
@@ -53,11 +56,31 @@ const rewardOffers = [
 ];
 
 app.disable('x-powered-by');
+sre = createSRE({
+  getDb: () => db,
+  persist: () => persist(),
+  broadcast,
+  getMongoClient: () => mongoClient,
+  getStateCollection: () => stateCollection,
+  getWebSocketServer: () => websocketServer,
+  getWebSocketClients: () => websocketServer.clients.size,
+  isApiReady: () => server.listening,
+  isWebSocketReady: () => server.listening,
+  getDbPath: () => DB_PATH
+});
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false
+}));
+app.use(sre.middleware());
 const allowedOrigins = (process.env.CORS_ORIGIN || '').split(',').map((origin) => origin.trim()).filter(Boolean);
 app.use(cors({ origin: allowedOrigins.length ? allowedOrigins : process.env.NODE_ENV === 'production' ? false : true }));
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '100kb' }));
+app.use('/api', sre.rateLimit({ limit: 300, windowMs: 60_000, name: 'api' }));
+app.use(sre.chaosMiddleware);
 
 function persist() {
+  const startedAt = Date.now();
   writeQueue = writeQueue.catch(() => {}).then(async () => {
     if (stateCollection) {
       await stateCollection.updateOne(
@@ -76,7 +99,7 @@ function persist() {
       await fs.rm(temporaryPath, { force: true });
       throw error;
     }
-  });
+  }).finally(() => sre?.recordDbLatency(Date.now() - startedAt));
   return writeQueue;
 }
 
@@ -287,18 +310,33 @@ const simulationSchema = z.object({
   }).strict().optional().default({})
 }).strict();
 
-app.get('/api/health', (_req, res) => res.json({
-  status: 'ok',
-  service: 'velosupply-api',
-  storage: stateCollection ? 'mongodb' : 'file',
-  timestamp: new Date().toISOString()
-}));
+app.get('/api/health', (_req, res) => {
+  const summary = sre.healthSummary();
+  res.json({
+    status: summary.status,
+    service: 'velosupply-api',
+    storage: stateCollection ? 'mongodb' : 'file',
+    timestamp: new Date().toISOString(),
+    services: summary.services,
+    checkedAt: summary.checkedAt
+  });
+});
 app.get('/health', (_req, res) => res.json({
-  status: 'ok',
+  status: sre.healthSummary().status,
   service: 'velosupply-api',
-  timestamp: new Date().toISOString()
+  timestamp: new Date().toISOString(),
+  services: sre.healthSummary().services
 }));
-app.get('/api/metrics', (_req, res) => res.json(refreshMetrics()));
+app.get('/livez', (_req, res) => res.json({ status: 'ok', service: 'velosupply-api' }));
+app.get('/readyz', (_req, res) => {
+  const summary = sre.healthSummary();
+  res.status(summary.status === 'ok' ? 200 : 503).json(summary);
+});
+app.get('/api/metrics', (_req, res) => res.json({
+  ...refreshMetrics(),
+  sre: sre.currentMetrics(),
+  slos: sre.sloReport()
+}));
 app.get('/api/products', (req, res) => {
   const search = String(req.query.search || '').trim().toLowerCase();
   const category = String(req.query.category || '').trim().toLowerCase();
@@ -320,11 +358,23 @@ app.post('/api/newsletter', validate(newsletterSchema), asyncRoute(async (req, r
   await persist();
   res.status(201).json({ success: true, subscribed: true, alreadySubscribed: false });
 }));
-app.post('/api/auth/login', validate(loginSchema), asyncRoute(async (req, res) => {
+app.post('/api/auth/login', sre.rateLimit({ limit: 10, windowMs: 60_000, name: 'login' }), validate(loginSchema), asyncRoute(async (req, res) => {
+  if (!db.sre) db.sre = {};
+  if (!Array.isArray(db.sre.loginAttempts)) db.sre.loginAttempts = [];
+  const now = Date.now();
+  db.sre.loginAttempts = db.sre.loginAttempts.filter((entry) => now - Date.parse(entry.at) < 60 * 60 * 1000);
+  const recentFailures = db.sre.loginAttempts.filter((entry) => entry.email === req.body.email && now - Date.parse(entry.at) < 15 * 60 * 1000);
+  if (recentFailures.length >= 5) return res.status(423).json({ error: 'Account temporarily locked. Try again in 15 minutes.' });
   const user = db.users.find((entry) => entry.email === req.body.email);
   if (!user || !(await bcrypt.compare(req.body.password, user.passwordHash))) {
+    db.sre.loginAttempts.push({ email: req.body.email, ip: req.ip, at: new Date().toISOString() });
+    await persist();
     return res.status(401).json({ error: 'Invalid email or password' });
   }
+  if (user.status === 'suspended') return res.status(403).json({ error: 'Account is suspended. Contact an administrator.' });
+  db.sre.loginAttempts = db.sre.loginAttempts.filter((entry) => entry.email !== req.body.email);
+  user.lastLoginAt = new Date().toISOString();
+  await persist();
   const token = jwt.sign({ sub: user.id, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
   res.json({ token, user: safeUser(user) });
 }));
@@ -362,8 +412,8 @@ async function register(req, res) {
   const token = jwt.sign({ sub: user.id, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
   res.status(201).json({ token, user: safeUser(user) });
 }
-app.post('/api/auth/register', validate(registerSchema), asyncRoute(register));
-app.post('/api/register', validate(registerSchema), asyncRoute(register));
+app.post('/api/auth/register', sre.rateLimit({ limit: 10, windowMs: 60_000, name: 'register' }), validate(registerSchema), asyncRoute(register));
+app.post('/api/register', sre.rateLimit({ limit: 10, windowMs: 60_000, name: 'register-legacy' }), validate(registerSchema), asyncRoute(register));
 
 app.post('/api/orders/checkout', validate(checkoutSchema), asyncRoute(async (req, res) => {
   const quantities = new Map();
@@ -415,6 +465,13 @@ app.post('/api/orders/checkout', validate(checkoutSchema), asyncRoute(async (req
 }));
 
 app.use('/api', authenticate);
+app.use('/api/sre', requireRoles('admin', 'operator'), sre.router);
+app.get('/api/admin/backup', requireRoles('admin'), (_req, res) => {
+  const snapshot = sre.exportSnapshot();
+  res.setHeader('content-type', 'application/json; charset=utf-8');
+  res.setHeader('content-disposition', 'attachment; filename="velosupply-backup.json"');
+  res.json(snapshot);
+});
 
 app.get('/api/auth/me', (req, res) => res.json({ user: safeUser(req.user) }));
 app.post('/api/auth/logout', (_req, res) => res.json({ success: true }));
@@ -601,6 +658,7 @@ server.on('upgrade', (request, socket, head) => {
   });
 });
 websocketServer.on('connection', (websocket) => {
+  sre.attachWebSocket(websocket);
   websocket.send(JSON.stringify(telemetryEvent({
     type: 'CONNECTED',
     message: 'Connected to VeloSupply live telemetry.'
@@ -612,7 +670,10 @@ async function start() {
   if (!Array.isArray(db.newsletter)) db.newsletter = [];
   if (!Array.isArray(db.rewardClaims)) db.rewardClaims = [];
   refreshMetrics();
-  server.listen(PORT, () => console.log(`VeloSupply API listening on http://localhost:${PORT}`));
+  server.listen(PORT, () => {
+    console.log(`VeloSupply API listening on http://localhost:${PORT}`);
+    sre.start();
+  });
   const timer = setInterval(tickTelemetry, 2000);
   timer.unref();
 }
@@ -624,4 +685,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server, start, refreshMetrics };
+module.exports = { app, server, start, refreshMetrics, sre };
