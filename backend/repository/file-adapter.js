@@ -175,7 +175,7 @@ function createFileAdapter(options) {
     },
 
     async remove(name, id) {
-      if (APPEND_ONLY_COLLECTIONS.has(name)) {
+      if (APPEND_ONLY_COLLECTIONS.has(canonicalCollectionName(name))) {
         const error = new Error(name + ' is append-only; deletes are not permitted');
         error.code = 'IMMUTABLE_COLLECTION';
         throw error;
