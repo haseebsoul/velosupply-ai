@@ -11,16 +11,16 @@ VeloSupply AI is a local-first inventory, fulfillment, and commerce demo. It com
 
 ## Start locally
 
-Install dependencies once:
+Recommended single-command workflow from the repository root:
 
 ```powershell
-cd backend
-npm install
-cd ..\frontend
-npm install
+npm run setup
+npm run dev
 ```
 
-Then run these two commands in separate terminals from the repository root:
+The root launcher starts the backend on port 8000 and Vite on port 5173. It is Windows-safe and stops both services when either process exits.
+
+The original two-terminal workflow remains supported. Install dependencies with `npm run setup`, then run these commands in separate terminals from the repository root:
 
 ```powershell
 cd backend; npm start
@@ -30,7 +30,7 @@ cd backend; npm start
 cd frontend; npm run dev
 ```
 
-Open the Vite URL printed in the frontend terminal (normally `http://localhost:5173`). The backend health probe is available at `http://localhost:8000/api/health`.
+Open the Vite URL printed in the frontend terminal (normally `http://localhost:5173`). The backend health probe is available at `http://localhost:8000/api/health`. Run `npm run check` for backend tests, palette validation and the frontend production build.
 
 ## Demo accounts
 
