@@ -8,7 +8,7 @@ const STATE_PATHS = {
   warehouses: ['warehouses'],
   suppliers: ['suppliers'],
   stock: ['stock'],
-  movements: ['movements'],
+  stockMovements: ['movements'],
   orderItems: ['orderItems'],
   orders: ['orders'],
   tariffRules: ['tariffRules'],
@@ -52,8 +52,9 @@ const INDEXES = {
   stock: [
     { key: { sku: 1, hubCode: 1 }, unique: true, name: 'stock_sku_hub_unique' }
   ],
-  movements: [
-    { key: { sku: 1, at: -1 }, name: 'movements_sku_at' }
+  stockMovements: [
+    { key: { sku: 1, hubCode: 1, at: -1 }, name: 'stock_movements_sku_hub_at' },
+    { key: { refType: 1, refId: 1 }, name: 'stock_movements_reference' }
   ],
   orderItems: [
     { key: { orderId: 1 }, name: 'order_items_order' },
@@ -165,6 +166,7 @@ function normalizeStateShape(input) {
 }
 
 function recordsForState(state, name) {
+  name = canonicalCollectionName(name);
   if (name === 'stock') {
     return (state.products || []).map((product) => ({
       id: String(product.sku || product.id) + ':' + String(product.warehouse_hub || 'unassigned'),
@@ -209,10 +211,16 @@ function stripMongoId(document) {
   return result;
 }
 
-const APPEND_ONLY_COLLECTIONS = new Set(['movements', 'auditLogs']);
+const COLLECTION_ALIASES = Object.freeze({ movements: 'stockMovements' });
+
+function canonicalCollectionName(name) {
+  return COLLECTION_ALIASES[name] || name;
+}
+
+const APPEND_ONLY_COLLECTIONS = new Set(['stockMovements', 'auditLogs']);
 
 function assertAppendOnlyTransition(name, before = [], after = []) {
-  if (!APPEND_ONLY_COLLECTIONS.has(name)) return;
+  if (!APPEND_ONLY_COLLECTIONS.has(canonicalCollectionName(name))) return;
   if (!Array.isArray(before) || !Array.isArray(after) || after.length < before.length) {
     const error = new Error(name + ' is append-only; existing records cannot be removed');
     error.code = 'IMMUTABLE_COLLECTION';
@@ -247,6 +255,8 @@ module.exports = {
   COLLECTION_NAMES,
   INDEXES,
   APPEND_ONLY_COLLECTIONS,
+  COLLECTION_ALIASES,
+  canonicalCollectionName,
   assertAppendOnlyTransition,
   clone,
   getAtPath,
