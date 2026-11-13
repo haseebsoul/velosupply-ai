@@ -150,6 +150,13 @@ describe('SRE API', () => {
     expect(resolved.body.alert.status).toBe('resolved');
   });
 
+  it('keeps application readiness distinct from optional degraded integrations', async () => {
+    await harness.sre.healthCheck();
+    expect(harness.sre.healthSummary().status).toBe('degraded');
+    expect(harness.sre.readinessSummary().status).toBe('ok');
+    expect(harness.sre.readinessSummary().services).toHaveLength(3);
+  });
+
   it('records health for all five dependencies and marks unavailable integrations honestly', async () => {
     const rows = await harness.sre.healthCheck();
     expect(rows.map((row) => row.service)).toEqual(['API', 'Database', 'WebSocket', 'Stock ledger', 'Payment gateway']);
