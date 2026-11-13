@@ -23,6 +23,8 @@ export function CommandPages() {
   const [orders, setOrders] = useState<Order[]>([])
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [users, setUsers] = useState<User[]>([])
+  const [rewardOffers, setRewardOffers] = useState<Array<{ id: string; title: string; description: string; points: number; minimumScore: number }>>([])
+  const [rewardClaims, setRewardClaims] = useState<Array<{ id: string; offerId: string; title: string; points: number; claimedAt: string }>>([])
   const [selectedHub, setSelectedHub] = useState<Warehouse | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -41,6 +43,14 @@ export function CommandPages() {
     if (latest?.warehouses) setWarehouses(latest.warehouses)
     if (latest?.type === 'ORDER_CREATED' || latest?.type === 'THREAT_RESOLVED') void refresh()
   }, [latest, refresh])
+  useEffect(() => {
+    if (pathname === '/dashboard/rewards') {
+      api.get<{ offers: typeof rewardOffers; claims: typeof rewardClaims }>('/rewards')
+        .then(({ data }) => { setRewardOffers(data.offers); setRewardClaims(data.claims) })
+        .catch((reason: unknown) => setError(errorMessage(reason)))
+    }
+  }, [pathname])
+
   useEffect(() => {
     if (pathname === '/dashboard/admin' && user?.role === 'admin') api.get<User[]>('/admin/users').then(({ data }) => setUsers(data)).catch((reason: unknown) => setError(errorMessage(reason)))
   }, [pathname, user?.role])
@@ -124,9 +134,39 @@ export function CommandPages() {
     </>}
 
     {pathname === '/dashboard/rewards' && <>
-      <div className="card-ops dash-card" style={{ padding: 35, background: 'var(--accent-ops-gradient)' }}><span className="mono-label" style={{ color: 'var(--text-ops-primary)' }}>VELOSUPPLY AI EFFICIENCY PROGRAM</span><h1 style={{ fontSize: 44, margin: '16px 0' }}>Every smart move counts.</h1><div className="mono" style={{ fontSize: 30 }}>{metrics.efficiencyScore} <span style={{ fontSize: 14 }}>/ 1,000 PTS</span></div><div style={{ height: 8, background: 'var(--border-ops)', borderRadius: 9, marginTop: 18 }}><div style={{ width: `${Math.min(metrics.efficiencyScore / 10, 100)}%`, height: '100%', background: 'var(--text-ops-primary)', borderRadius: 9 }} /></div></div>
-      <h2>Unlocked network perks</h2><div className="dash-grid">{[['Priority carrier allocation', 'Expedited capacity during regional peaks'], ['Supplier early access', 'Preferred replenishment windows'], ['Resilience insights', 'Advanced predictive demand analytics']].map(([title, copy]) => <div className="card-ops dash-card" key={title}><ShieldCheck color="var(--accent-ops-lime)" /><h3>{title}</h3><p className="ops-copy">{copy}</p><span className="status-pill">UNLOCKED</span></div>)}</div>
-      <div className="card-ops dash-card"><span className="mono-label">POINTS HISTORY</span><p className="ops-copy">AI restock POs and resilience actions add efficiency points to your account.</p></div>
+      <div className="page-intro"><div><span className="mono-label">PROGRAM / EFFICIENCY</span><h1 className="ops-heading">VeloSupply program</h1><p className="ops-copy">Recognition for the decisions that keep your network moving.</p></div><span className="status-pill">Active member</span></div>
+      <section className="rewards-hero">
+        <div className="rewards-hero-copy"><span className="mono-label">YOUR NETWORK SCORE</span><h2>{metrics.efficiencyScore.toLocaleString()} <span>/ 1,000 points</span></h2><p>Points reflect replenishment, routing and resilience activity across your workspace.</p><div className="rewards-progress"><span style={{ width: `${Math.min(metrics.efficiencyScore / 10, 100)}%` }} /></div><div className="rewards-progress-meta"><span>{Math.min(metrics.efficiencyScore, 1000).toLocaleString()} points earned</span><span>{Math.max(0, 1000 - metrics.efficiencyScore).toLocaleString()} to next tier</span></div></div>
+        <div className="rewards-tier"><span className="mono-label">CURRENT TIER</span><strong>{metrics.efficiencyScore >= 800 ? 'Momentum' : metrics.efficiencyScore >= 500 ? 'Connected' : 'Foundation'}</strong><small>{metrics.efficiencyScore >= 800 ? 'Priority network status' : metrics.efficiencyScore >= 500 ? 'Growing network status' : 'Member network status'}</small></div>
+      </section>
+
+      <div className="rewards-section-heading"><div><span className="mono-label">AVAILABLE BENEFITS</span><h2>Offers for your workspace</h2></div><span className="ops-copy">{rewardOffers.length} current offers</span></div>
+      <div className="rewards-offer-grid">{rewardOffers.map((offer) => {
+        const claimed = rewardClaims.some((claim) => claim.offerId === offer.id)
+        const eligible = metrics.efficiencyScore >= offer.minimumScore
+        return <article className="card-ops rewards-offer-card" key={offer.id}>
+          <div className="rewards-offer-top"><span className="rewards-offer-icon"><ShieldCheck size={17} /></span><span className="mono-label">{offer.points} POINTS</span></div>
+          <h3>{offer.title}</h3><p className="ops-copy">{offer.description}</p>
+          <div className="rewards-offer-footer"><span className={eligible ? 'reward-eligible' : 'reward-locked'}>{claimed ? 'Claimed' : eligible ? 'Available to claim' : `Unlock at ${offer.minimumScore} pts`}</span>
+            <button className="small-button" disabled={claimed || !eligible} onClick={() => {
+              void request(() => api.post(`/rewards/${offer.id}/claim`), `${offer.title} added to your account.`, () => {
+                api.get<{ offers: typeof rewardOffers; claims: typeof rewardClaims }>('/rewards').then(({ data }) => { setRewardOffers(data.offers); setRewardClaims(data.claims) })
+              })
+            }}>{claimed ? 'Claimed' : 'Claim offer'}</button>
+          </div>
+        </article>
+      })}</div>
+
+      <div className="dash-two rewards-lower-grid">
+        <section className="card-ops dash-card"><div className="rewards-section-heading compact"><div><span className="mono-label">TIER BENEFITS</span><h2>Unlocked for your team</h2></div></div>
+          <div className="reward-benefit-row"><ShieldCheck size={17} /><div><strong>Priority carrier allocation</strong><p className="ops-copy">Expedited capacity during regional demand peaks</p></div><span className="status-pill">Included</span></div>
+          <div className="reward-benefit-row"><Boxes size={17} /><div><strong>Supplier early access</strong><p className="ops-copy">Preferred replenishment windows from partners</p></div><span className="status-pill">Included</span></div>
+          <div className="reward-benefit-row"><Truck size={17} /><div><strong>Resilience insights</strong><p className="ops-copy">Advanced inventory and warehouse risk analytics</p></div><span className="status-pill">Included</span></div>
+        </section>
+        <section className="card-ops dash-card"><div className="rewards-section-heading compact"><div><span className="mono-label">ACCOUNT HISTORY</span><h2>Recent claims</h2></div></div>
+          {rewardClaims.length ? rewardClaims.slice().sort((a,b) => b.claimedAt.localeCompare(a.claimedAt)).slice(0,5).map((claim) => <div className="reward-history-row" key={claim.id}><span><strong>{claim.title}</strong><small>{new Date(claim.claimedAt).toLocaleDateString()}</small></span><span className="mono">+{claim.points} pts</span></div>) : <p className="ops-copy rewards-history-empty">Offers you claim for this account will appear here.</p>}
+        </section>
+      </div>
     </>}
 
     {pathname === '/dashboard/reports' && <>
