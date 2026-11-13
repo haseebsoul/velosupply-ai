@@ -12,7 +12,7 @@ const warehouses = [
   { id: 'HUB-RTM', name: 'Rotterdam Edge Hub', coords: [0.51, 0.22], capacity: 91, latency: 28, status: 'warning' },
   { id: 'HUB-DXB', name: 'Dubai Edge Hub', coords: [0.66, 0.47], capacity: 74, latency: 23, status: 'online' },
   { id: 'HUB-SIN', name: 'Singapore Edge Hub', coords: [0.82, 0.65], capacity: 77, latency: 17, status: 'online' }
-].map((warehouse) => ({ ...warehouse, updatedAt: new Date().toISOString() }));
+].map((warehouse) => ({ ...warehouse, seedOrigin: true, updatedAt: new Date().toISOString() }));
 
 const productDefinitions = [
   ['EG-1001', 'VeloEdge Gateway X1', 'Edge Gateways', 'Industrial multi-protocol edge gateway with secure remote management.', 649, 36, 12, 8.4],
