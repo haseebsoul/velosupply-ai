@@ -5,7 +5,7 @@ VeloSupply AI is a local-first inventory, fulfillment, and commerce demo. It com
 ## Architecture
 
 - **Backend:** Node.js, Express, Zod, JWT, bcrypt, MongoDB Node.js driver, and `ws`; listens on port `8000`.
-- **Persistence:** MongoDB Atlas is the production source of truth (`velosupply.application_state`); local development falls back to `backend/db.json` with atomic file replacement.
+- **Persistence:** Atlas uses a collection-aware repository (`users`, `products`, `warehouses`, `stock`, `orders`, and the other domain collections); local development keeps `backend/db.json` with atomic replacement. Both adapters expose collection CRUD and transaction methods.
 - **Frontend:** React, TypeScript, Vite, React Router, Zustand, TanStack Query, Recharts, and Tailwind CSS.
 - **API proxy:** Vite forwards `/api` and `/ws` requests to the local backend.
 
@@ -42,7 +42,7 @@ All seeded local-development demo accounts use password `Velo@12345`. Production
 | `operator@velosupply.ai` | Operator |
 | `buyer@velosupply.ai` | Buyer |
 
-Copy `backend/.env.example` to `backend/.env` and set `MONGODB_URI`, `MONGODB_DB_NAME=velosupply`, and a long random `JWT_SECRET`. The Atlas database user must have `readWrite` access to the `velosupply` database. Atlas starts with an empty application state unless an existing state document is present. Sample catalog, demo users and demo orders are only loaded into Atlas when `SEED_DEMO_DATA=true` is explicitly set in a non-production environment. Local JSON mode continues to seed demo data for development. Set `ADMIN_REGISTRATION_KEY` to a private invitation key before creating an Administrator account; never commit `.env` or real credentials. Production deployments must also set `CORS_ORIGIN` to the deployed frontend origin and terminate TLS at a trusted proxy. After adding the MongoDB driver, run `npm install` in `backend` to refresh the lockfile before using `npm ci` in your deployment pipeline.
+Copy `backend/.env.example` to `backend/.env` and set `MONGODB_URI`, `MONGODB_DB_NAME=velosupply`, and a long random `JWT_SECRET`. The Atlas database user must have `readWrite` access to the `velosupply` database. On startup, Atlas creates indexes for the named collections. If the legacy `application_state` document exists and the new collections are empty, the repository backs it up into `migrationBackups` before migrating its data. If neither old state nor new collection data exists, the adapter creates an empty production state. Existing populated new collections without `application_meta` cause startup to fail closed rather than being overwritten. Sample catalog, demo users and demo orders are only loaded into Atlas when `SEED_DEMO_DATA=true` is explicitly set in a non-production environment. Local JSON mode continues to seed demo data for development. Set `ADMIN_REGISTRATION_KEY` to a private invitation key before creating an Administrator account; never commit `.env` or real credentials. Production deployments must also set `CORS_ORIGIN` to the deployed frontend origin and terminate TLS at a trusted proxy. The `MONGODB_STATE_COLLECTION` variable identifies the legacy source collection to read during migration; new application writes do not go back into that collection.
 
 ## Routes
 
@@ -95,6 +95,16 @@ The Reliability layer measures actual API request timing/status, process memory 
 The existing Atlas project already contains the free `VeloSupplyCluster` (AWS Singapore, MongoDB 8.0). The `velosupply` database uses `application_state`; its existing `velosupply_app` database user has `readWrite` on that database. The initial `_id: "primary"` document is now bootstrapped with `dataMode: "production"` and empty arrays for users, warehouses, products and orders. No customer or sample business records were loaded into Atlas.
 
 Atlas Network Access currently has no IP/CIDR entries. Before a local or deployed application can connect directly, add only that application's actual public egress IP/CIDR. Do not use `0.0.0.0/0`. Put the existing database-user password and the SRV connection string in `backend/.env` or deployment secrets; never commit them.
+
+
+### Repository and migration status
+
+- The Atlas adapter writes domain records into named collections and stores only shared application metadata in `application_meta`. It creates the indexes from SRS Section 12.1 and exposes `findById`, `find`, `insert`, `update`, `remove`, `count`, and `withTransaction` operations.
+- The file adapter retains the existing `backend/db.json` format, with serialized writes, temporary-file replacement and snapshot rollback for `withTransaction`.
+- Automatic migration runs only when `application_meta` and the new collections have no records and the legacy `_id: "primary"` document exists. The source document is copied to `migrationBackups` before the new collections are populated. The backup is not deleted.
+- `npm run migrate:state` runs the migration/verification flow manually. It never loads sample records into a production database.
+- **Compatibility limitation:** the existing HTTP handlers still work against the in-memory state shape and call the repository's state-save operation. The next refactor must move their reads/writes to collection-specific repository calls before multiple backend instances can safely write concurrently. The stock collection is currently a projection of each product's on-hand quantity; immutable stock movements and ledger reconciliation remain separate unfinished work.
+- The live Atlas migration has not yet been executed from the application runtime. The previously inspected Atlas Network Access list was empty, so the actual backend host's public egress IP/CIDR must be allowlisted before the application driver can connect.
 
 ## Reliability and SRE
 
