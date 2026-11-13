@@ -83,24 +83,34 @@ function createDomainRepositories(adapter) {
   const stockMovements = {
     async append(input) {
       const sku = requiredString(input.sku, 'sku');
-      const warehouseId = requiredString(input.warehouseId, 'warehouseId');
+      const hubCode = requiredString(input.hubCode || input.warehouseId, 'hubCode');
       const reason = requiredString(input.reason, 'reason');
       if (!MOVEMENT_REASONS.has(reason)) throw new TypeError('Unsupported stock movement reason');
       if (!Number.isSafeInteger(input.quantityDelta) || input.quantityDelta === 0) throw new TypeError('quantityDelta must be a non-zero integer');
       if (reason === 'sale' && input.quantityDelta >= 0) throw new TypeError('sale movement must reduce stock');
       if (reason === 'restock' && input.quantityDelta <= 0) throw new TypeError('restock movement must increase stock');
-      if (!input.orderId && !input.adminActionId && reason !== 'opening_balance') {
-        throw new TypeError('A stock movement must reference its order or admin action');
-      }
-      return adapter.insert('stockMovements', {
-        ...input, id: input.id || 'MOV-' + randomUUID(), sku, warehouseId, reason,
-        createdAt: input.createdAt || new Date().toISOString()
+      const refType = input.refType || (input.orderId ? 'order' : input.adminActionId ? 'admin_action' : reason === 'opening_balance' ? 'opening_balance' : '');
+      const refId = input.refId || input.orderId || input.adminActionId || (reason === 'opening_balance' ? 'opening:' + randomUUID() : '');
+      if (!refType || !refId) throw new TypeError('A stock movement must reference an order or administrative action');
+      const at = input.at || input.createdAt || new Date().toISOString();
+      const actorId = input.actorId || 'system';
+      return adapter.insert('movements', {
+        id: input.id || 'MOV-' + randomUUID(),
+        sku,
+        hubCode,
+        type: input.type || (input.quantityDelta > 0 ? 'IN' : 'OUT'),
+        qty: Math.abs(input.quantityDelta),
+        reason,
+        refType,
+        refId,
+        actorId,
+        at
       });
     },
-    async reconcile(sku, warehouseId, expectedOnHand) {
-      const rows = await adapter.find('stockMovements', { sku, warehouseId });
-      const ledgerOnHand = rows.reduce((sum, movement) => sum + movement.quantityDelta, 0);
-      return { sku, warehouseId, ledgerOnHand, expectedOnHand, matches: ledgerOnHand === expectedOnHand, movementCount: rows.length };
+    async reconcile(sku, hubCode, expectedOnHand) {
+      const rows = await adapter.find('movements', { sku, hubCode });
+      const ledgerOnHand = rows.reduce((sum, movement) => sum + (movement.type === 'IN' ? movement.qty : -movement.qty), 0);
+      return { sku, hubCode, ledgerOnHand, expectedOnHand, matches: ledgerOnHand === expectedOnHand, movementCount: rows.length };
     }
   };
 
