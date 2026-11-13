@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { LandingPage } from './pages/LandingPage'
 import { StorePage } from './pages/StorePage'
 import { LoginPage } from './pages/LoginPage'
+import { RegisterPage } from './pages/RegisterPage'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { DashboardLayout } from './components/dashboard/DashboardLayout'
 import { CommandPages } from './pages/dashboard/CommandPages'
@@ -18,12 +19,14 @@ function AnimatedRoutes() {
       <Route path="/" element={<LandingPage />} />
       <Route path="/store" element={<StorePage />} />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
       <Route element={<ProtectedRoute />}>
         <Route path="/dashboard" element={<DashboardLayout />}>
           <Route index element={<CommandPages />} />
           <Route path="topology" element={<CommandPages />} />
           <Route path="threats" element={<CommandPages />} />
           <Route path="activity" element={<CommandPages />} />
+          <Route path="messages" element={<CommandPages />} />
           <Route path="manage" element={<CommandPages />} />
           <Route path="rewards" element={<CommandPages />} />
           <Route path="reports" element={<CommandPages />} />
