@@ -63,7 +63,8 @@ class FakeCollection {
     }
     return { insertedCount: documents.length };
   }
-  async insertOne(document) {
+  async insertOne(document, options = {}) {
+    this.lastSession = options.session || null;
     if (this.documents.has(document._id)) throw new Error('duplicate');
     this.documents.set(document._id, structuredClone(document));
     return { insertedId: document._id };
@@ -143,6 +144,7 @@ describe('collection repository adapters', () => {
 
     const transaction = adapter.withTransaction(async ({ repository }) => {
       await repository.insert('users', { id: 'tx-user', email: 'tx@example.com' });
+      expect(await repository.findById('users', 'tx-user')).not.toBeNull();
       entered();
       await gate;
       throw new Error('rollback');
@@ -193,6 +195,16 @@ describe('collection repository adapters', () => {
     expect(metadata.users).toBeUndefined();
     expect(metadata.sre.alerts).toBeUndefined();
     expect(metadata.metrics.efficiencyScore).toBe(12);
+  });
+
+  it('automatically carries repository writes into the active Atlas transaction session', async () => {
+    const database = new FakeDatabase();
+    const adapter = createMongoAdapter({ client: new FakeClient(), database });
+    await adapter.withTransaction(async ({ repository }) => {
+      await repository.insert('users', { id: 'tx-user', email: 'tx@example.com' });
+    });
+    expect(database.collection('users').lastSession).not.toBeNull();
+    expect(await adapter.findById('users', 'tx-user')).not.toBeNull();
   });
 
   it('backs up and migrates the old application_state document exactly once', async () => {
