@@ -131,6 +131,33 @@ describe('collection repository adapters', () => {
     expect(await adapter.remove('users', 'u-2')).toBe(1);
   });
 
+  it('keeps unrelated concurrent file writes outside a transaction rollback', async () => {
+    const { adapter } = await createTempAdapter({
+      users: [], products: [], warehouses: [], orders: [], logs: [],
+      newsletter: [], rewardClaims: [], metrics: {}, telemetry: { tick: 0 }
+    });
+    let entered;
+    let release;
+    const started = new Promise((resolve) => { entered = resolve; });
+    const gate = new Promise((resolve) => { release = resolve; });
+
+    const transaction = adapter.withTransaction(async ({ repository }) => {
+      await repository.insert('users', { id: 'tx-user', email: 'tx@example.com' });
+      entered();
+      await gate;
+      throw new Error('rollback');
+    });
+
+    await started;
+    const outsideWrite = adapter.insert('users', { id: 'outside-user', email: 'outside@example.com' });
+    release();
+    await expect(transaction).rejects.toThrow('rollback');
+    await outsideWrite;
+
+    expect(await adapter.findById('users', 'tx-user')).toBeNull();
+    expect(await adapter.findById('users', 'outside-user')).not.toBeNull();
+  });
+
   it('projects legacy product quantities into stock rows without inventing movement events', () => {
     const records = recordsForState({
       products: [{ id: 'p-1', sku: 'SKU-1', stock: 4, warehouse_hub: 'HUB-1' }]
