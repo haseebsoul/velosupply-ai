@@ -278,6 +278,30 @@ function updateProductStock(product, stock) {
   product.updatedAt = new Date().toISOString();
 }
 
+function appendStockMovement(product, quantityDelta, reason, reference, actorId = 'system') {
+  if (!Number.isSafeInteger(quantityDelta) || quantityDelta === 0) {
+    throw new TypeError('Stock movement quantityDelta must be a non-zero integer');
+  }
+  const refType = reference?.type;
+  const refId = reference?.id;
+  if (!refType || !refId) throw new TypeError('Stock movement requires a reference');
+  if (!Array.isArray(db.movements)) db.movements = [];
+  const movement = {
+    id: `MOV-${randomUUID()}`,
+    sku: product.sku,
+    hubCode: product.warehouse_hub || 'unassigned',
+    type: quantityDelta > 0 ? 'IN' : 'OUT',
+    qty: Math.abs(quantityDelta),
+    reason,
+    refType,
+    refId,
+    actorId: actorId || 'system',
+    at: new Date().toISOString()
+  };
+  db.movements.push(movement);
+  return movement;
+}
+
 const loginSchema = z.object({
   email: z.string().trim().email().transform((value) => value.toLowerCase()),
   password: z.string().min(1).max(128)
@@ -483,6 +507,9 @@ const checkoutHandler = asyncRoute(async (req, res) => {
     updatedAt: new Date().toISOString()
   };
   db.orders.unshift(order);
+  for (const { product, quantity } of resolved) {
+    appendStockMovement(product, -quantity, 'sale', { type: 'order', id: order.id }, 'guest-checkout');
+  }
   const event = publish('ORDER_CREATED', `Order ${order.id} accepted and routed to ${hub.id}.`, 'INFO', { order });
   refreshMetrics();
   await persist();
@@ -588,7 +615,11 @@ app.delete('/api/admin/users/:id', requireRoles('admin'), asyncRoute(async (req,
 
 app.patch('/api/inventory/:id', requireRoles('admin', 'operator'), validate(inventoryUpdateSchema), asyncRoute(async (req, res) => {
   const product = findById(db.products, req.params.id, 'Product');
+  const previousStock = product.stock;
   if (req.body.stock !== undefined) updateProductStock(product, req.body.stock);
+  if (req.body.stock !== undefined && req.body.stock !== previousStock) {
+    appendStockMovement(product, req.body.stock - previousStock, 'adjustment', { type: 'admin_action', id: randomUUID() }, req.user.id);
+  }
   if (req.body.price !== undefined) product.price = req.body.price;
   product.updatedAt = new Date().toISOString();
   addLog(`Inventory updated for ${product.sku}.`, 'INFO', 'INVENTORY', { productId: product.id });
@@ -600,6 +631,7 @@ app.post('/api/inventory/restock/:id', requireRoles('admin', 'operator'), valida
   const product = findById(db.products, req.params.id, 'Product');
   const quantity = req.body.quantity || Math.max(product.reorder_threshold * 2 - product.stock, 10);
   updateProductStock(product, product.stock + quantity);
+  appendStockMovement(product, quantity, 'restock', { type: 'admin_action', id: randomUUID() }, req.user.id);
   const event = publish('THREAT_RESOLVED', `Restock purchase order executed for ${product.sku}: +${quantity} units.`, 'INFO', { productId: product.id });
   sre.audit?.('inventory.restock', req.user, { productId: product.id, quantity });
   refreshMetrics();
@@ -641,6 +673,7 @@ app.post('/api/simulation/trigger', requireRoles('admin', 'operator'), validate(
       product.velocity_per_hr = Number((product.velocity_per_hr * multiplier).toFixed(1));
       const simulatedDemand = Math.min(product.stock, Math.max(1, Math.ceil(product.velocity_per_hr / 4)));
       updateProductStock(product, product.stock - simulatedDemand);
+      if (simulatedDemand > 0) appendStockMovement(product, -simulatedDemand, 'adjustment', { type: 'simulation', id: 'demand_spike' }, req.user.id);
     }
     message = `Demand spike simulated at ${multiplier}x; inventory risk scores recalculated.`;
     level = 'WARN';
