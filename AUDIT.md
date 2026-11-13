@@ -546,8 +546,8 @@ This direct Atlas inspection confirms the cluster and empty bootstrap record exi
 ## v16 Domain Repository Follow-up
 
 - Added domain services for buyer soft-deletion, product archival, atomic order plus order-item creation, append-only stock movements in the SRS `movements` collection, stock reconciliation, append-only audit events and versioned tariff rules.
-- Domain order writes validate integer minor-unit totals, verify the total equals item quantity x unit price, and constrain currency to PKR. Buyer creation requires filer/non-filer status.
-- Movement records use the SRS fields: `sku`, `hubCode`, `type`, `qty`, `reason`, `refType`, `refId`, `actorId`, and `at`. Append-only enforcement prevents update/delete/replacement; audit events are also append-only.
+- Domain order writes snapshot the SRS item fields, round each line to whole PKR, calculate GST per line at the configured/default 18 percent, apply the city delivery-fee table (free only above Rs 150,000 subtotal), and store the nested price breakdown. Buyer creation requires filer/non-filer status.
+- Movement records use the SRS fields: `sku`, `hubCode`, `type`, `qty`, `reason`, `refType`, `refId`, `actorId`, and `at`. The service implements RECEIVE, RESERVE, RELEASE, SHIP, ADJUST, TRANSFER_OUT, TRANSFER_IN and RETURN_IN effects, prevents negative available stock, and performs paired hub transfers in one adapter transaction. Append-only enforcement prevents update/delete/replacement; audit events are also append-only.
 - These services are covered by unit tests but **are not yet wired into the existing HTTP checkout, restock, inventory update, or admin routes**. Production stock behavior must not be described as ledger-backed until that integration is complete.
 - The SRS calls for Zod validation at API/domain boundaries; these new service validations are explicit runtime checks, not yet a complete Zod schema layer for every collection.
 - No live Atlas runtime migration or persistence smoke test has been performed; the known Atlas IP allowlist gap remains.
