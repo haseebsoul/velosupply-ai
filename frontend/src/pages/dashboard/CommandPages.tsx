@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { Copy, Download, RefreshCw, ShieldCheck, Truck } from 'lucide-react'
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Boxes, Copy, Download, RefreshCw, ShieldCheck, Truck } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
 import { api, errorMessage } from '../../lib/apiClient'
 import { useWebSocket } from '../../lib/useWebSocket'
@@ -11,7 +11,7 @@ import { ThreatRow } from '../../components/dashboard/ThreatRow'
 import { TerminalPanel } from '../../components/dashboard/TerminalPanel'
 import { TopologyCanvas } from '../../components/dashboard/TopologyCanvas'
 
-const palette = ['var(--accent-ops-lime)', 'var(--status-positive)', 'var(--status-warning)', 'var(--status-critical)', 'var(--text-ops-muted)']
+const palette = ['var(--accent-ops-lime)', '#968B80', '#6C665F', '#494641', '#2E2B27']
 const initialMetrics: Metrics = { gmv24h: 0, activeOrders: 0, fulfillmentHealth: 0, packetsPerSec: 0, avgLatencyMs: 0, threatsBlocked: 0, detectionTimeMs: 0, efficiencyScore: 0, hubCapacities: [] }
 
 export function CommandPages() {
@@ -23,9 +23,12 @@ export function CommandPages() {
   const [orders, setOrders] = useState<Order[]>([])
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [users, setUsers] = useState<User[]>([])
+  const [rewardOffers, setRewardOffers] = useState<Array<{ id: string; title: string; description: string; points: number; minimumScore: number }>>([])
+  const [rewardClaims, setRewardClaims] = useState<Array<{ id: string; offerId: string; title: string; points: number; claimedAt: string }>>([])
   const [selectedHub, setSelectedHub] = useState<Warehouse | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [priorityMessageDismissed, setPriorityMessageDismissed] = useState(false)
   const [simulation, setSimulation] = useState({ safetyBuffer: 20, surgeMultiplier: 2, maxLatency: 50 })
   const [search, setSearch] = useState('')
   const refresh = useCallback(async () => {
@@ -41,10 +44,17 @@ export function CommandPages() {
     if (latest?.type === 'ORDER_CREATED' || latest?.type === 'THREAT_RESOLVED') void refresh()
   }, [latest, refresh])
   useEffect(() => {
+    if (pathname === '/dashboard/rewards') {
+      api.get<{ offers: typeof rewardOffers; claims: typeof rewardClaims }>('/rewards')
+        .then(({ data }) => { setRewardOffers(data.offers); setRewardClaims(data.claims) })
+        .catch((reason: unknown) => setError(errorMessage(reason)))
+    }
+  }, [pathname])
+
+  useEffect(() => {
     if (pathname === '/dashboard/admin' && user?.role === 'admin') api.get<User[]>('/admin/users').then(({ data }) => setUsers(data)).catch((reason: unknown) => setError(errorMessage(reason)))
   }, [pathname, user?.role])
   const productsAtRisk = useMemo(() => products.filter((product) => product.stock <= product.reorder_threshold), [products])
-  const data = warehouses.map((hub) => ({ name: hub.id.replace('HUB-', ''), capacity: hub.capacity }))
   const history = events.slice(-20).map((event, index) => ({ name: index.toString(), orders: event.metrics?.activeOrders ?? Math.max(0, metrics.activeOrders + (index % 5) - 2), throughput: event.metrics?.packetsPerSec ?? metrics.packetsPerSec }))
   const request = async (operation: () => Promise<unknown>, success: string, then?: () => void) => {
     try { await operation(); setNotice(success); setError(''); then?.(); await refresh() }
@@ -64,9 +74,16 @@ export function CommandPages() {
     {notice && <div role="status" className="success-text" style={{ marginBottom: 15 }}>{notice}</div>}
 
     {pathname === '/dashboard' && <>
-      <div className="drawer-head"><div><h1 className="ops-heading">Good day, {user?.name ?? 'Operator'}.</h1><p className="ops-copy">Your global fulfillment network is in view.</p></div><span className="mono-label"><i className="live-dot" /> {connected ? 'TELEMETRY SYNC ACTIVE' : 'RECONNECTING'}</span></div>
+      <div className="drawer-head"><div><h1 className="ops-heading">Good morning, {user?.name ?? 'Operator'}.</h1><p className="ops-copy">Your global fulfillment network is in view.</p></div><span className="mono-label"><i className="live-dot" /> {connected ? 'TELEMETRY SYNC ACTIVE' : 'RECONNECTING'}</span></div>
       <div className="dash-grid"><StatCard title="24H GROSS MERCHANDISE VALUE" value={metrics.gmv24h} prefix="$" note="Real-time order value" /><StatCard title="ACTIVE ORDERS IN TRANSIT" value={metrics.activeOrders} note="Across all fulfillment nodes" /><StatCard title="GLOBAL FULFILLMENT HEALTH" value={metrics.fulfillmentHealth} suffix="%" note="Network-wide SLA performance" /></div>
-      <div className="dash-two"><section className="card-ops dash-card"><span className="mono-label">WAREHOUSE CAPACITY ALLOCATION</span><div style={{ height: 245 }}><ResponsiveContainer><PieChart><Pie data={data} dataKey="capacity" nameKey="name" innerRadius={62} outerRadius={94} paddingAngle={4}>{data.map((entry, index) => <Cell key={entry.name} fill={palette[index % palette.length]} />)}</Pie><Tooltip contentStyle={{ background: 'var(--bg-ops-card)', border: '1px solid var(--border-ops)', color: 'white' }} /></PieChart></ResponsiveContainer></div>{warehouses.map((hub, i) => <span className="mono-label" key={hub.id} style={{ marginRight: 10, color: palette[i % palette.length] }}>{hub.id.replace('HUB-', '')} {hub.capacity}%</span>)}</section>
+      <div className="dash-two"><section className="card-ops dash-card capacity-card">
+          <div className="capacity-card-heading"><div><span className="mono-label">WAREHOUSE CAPACITY</span><h3>Network utilization</h3></div><strong className="capacity-total">{Math.round(warehouses.reduce((sum, hub) => sum + hub.capacity, 0) / Math.max(warehouses.length, 1))}%</strong></div>
+          <div className="capacity-meter-list">{warehouses.map((hub) => <div className="capacity-meter-row" key={hub.id}>
+            <div className="capacity-meter-meta"><span>{hub.name}</span><span className="mono">{hub.capacity}%</span></div>
+            <div className="capacity-meter-track"><span style={{ width: `${hub.capacity}%` }} /></div>
+          </div>)}</div>
+          <p className="ops-copy capacity-footnote">Live allocation across {warehouses.length} fulfillment nodes.</p>
+        </section>
         <section className="card-ops dash-card"><span className="mono-label">LIVE ORDER &amp; FULFILLMENT VELOCITY</span><div style={{ height: 270 }}><ResponsiveContainer><AreaChart data={history}><defs><linearGradient id="velocityFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--accent-ops-lime)" stopOpacity={.3} /><stop offset="95%" stopColor="var(--accent-ops-lime)" stopOpacity={0} /></linearGradient></defs><CartesianGrid stroke="var(--border-ops)" vertical={false} /><XAxis dataKey="name" hide /><YAxis stroke="var(--text-ops-muted)" /><Tooltip contentStyle={{ background: 'var(--bg-ops-card)', border: '1px solid var(--border-ops)' }} /><Area type="monotone" dataKey="orders" stroke="var(--accent-ops-lime)" fill="url(#velocityFill)" /></AreaChart></ResponsiveContainer></div></section></div>
       <section className="card-ops dash-card"><div className="drawer-head"><div><span className="mono-label">RECENT ACTIVITY</span><h3>Live orders &amp; SKU routing</h3></div><button className="small-button" onClick={() => void refresh()}><RefreshCw size={14} /> Refresh</button></div><OrdersTable orders={orders.slice(0, 8)} routeOrder={(id) => request(() => api.post(`/orders/${id}/route`), 'Order route optimized.')} /></section>
     </>}
@@ -87,6 +104,23 @@ export function CommandPages() {
       <div className="dash-grid"><StatCard title="AI EFFICIENCY SCORE" value={metrics.efficiencyScore} suffix=" pts" /><StatCard title="DETECTION TIME" value={metrics.detectionTimeMs} suffix="ms" /><StatCard title="THREATS BLOCKED" value={metrics.threatsBlocked} /></div>
     </>}
 
+    {pathname === '/dashboard/messages' && <>
+      <div className="page-intro">
+        <div><span className="mono-label">INBOX / SUPPORT</span><h1 className="ops-heading">Messages</h1><p className="ops-copy">Important updates for your operations workspace.</p></div>
+        <span className="status-pill">1 priority update</span>
+      </div>
+      {!priorityMessageDismissed ? <section className="card-ops dash-card message-priority">
+        <div className="message-priority-mark"><ShieldCheck size={19} /></div>
+        <div className="message-priority-copy">
+          <div className="drawer-head"><span className="mono-label">PRIORITY SUPPORT · ACCOUNT NOTICE</span><span className="status-pill status-warning">Action available</span></div>
+          <h2>Priority support is ready for your workspace</h2>
+          <p className="ops-copy">Your workspace has priority support access for the next 30 days. Contact your account administrator to review carrier coverage and service eligibility.</p>
+          <div className="inline-actions"><button className="button ops-button" onClick={() => setPriorityMessageDismissed(true)}>Mark as resolved</button><button className="small-button" onClick={() => setPriorityMessageDismissed(true)}>Dismiss</button></div>
+        </div>
+      </section> : <section className="card-ops dash-card empty-messages"><h3>You're all caught up</h3><p className="ops-copy">No unread priority messages at the moment.</p><button className="small-button" onClick={() => setPriorityMessageDismissed(false)}>Restore message</button></section>}
+      <section className="card-ops dash-card"><span className="mono-label">RECENT UPDATES</span><div className="message-list-row"><span className="message-bullet" /><div><strong>Network report is available</strong><p className="ops-copy">Your latest operations summary can be downloaded from Reports.</p></div><span className="mono-label">Today</span></div><div className="message-list-row"><span className="message-bullet muted-bullet" /><div><strong>Warehouse synchronization completed</strong><p className="ops-copy">All active nodes have reported their latest inventory snapshots.</p></div><span className="mono-label">Yesterday</span></div></section>
+    </>}
+
     {pathname === '/dashboard/activity' && <>
       <h1 className="ops-heading">Live system activity</h1><p className="ops-copy">Event stream and regional throughput update as telemetry arrives.</p>
       <div className="dash-two"><section className="card-ops dash-card"><span className="mono-label">NETWORK THROUGHPUT · PACKETS / SEC</span><div style={{ height: 360 }}><ResponsiveContainer><AreaChart data={history}><CartesianGrid stroke="var(--border-ops)" /><XAxis dataKey="name" hide /><YAxis stroke="var(--text-ops-muted)" /><Tooltip /><Area dataKey="throughput" stroke="var(--accent-ops-lime)" fill="var(--accent-ops-lime)" fillOpacity={.1} /></AreaChart></ResponsiveContainer></div></section><TerminalPanel events={events} /></div>
@@ -100,9 +134,39 @@ export function CommandPages() {
     </>}
 
     {pathname === '/dashboard/rewards' && <>
-      <div className="card-ops dash-card" style={{ padding: 35, background: 'var(--accent-ops-gradient)' }}><span className="mono-label" style={{ color: 'var(--text-ops-primary)' }}>VELOSUPPLY AI EFFICIENCY PROGRAM</span><h1 style={{ fontSize: 44, margin: '16px 0' }}>Every smart move counts.</h1><div className="mono" style={{ fontSize: 30 }}>{metrics.efficiencyScore} <span style={{ fontSize: 14 }}>/ 1,000 PTS</span></div><div style={{ height: 8, background: 'var(--border-ops)', borderRadius: 9, marginTop: 18 }}><div style={{ width: `${Math.min(metrics.efficiencyScore / 10, 100)}%`, height: '100%', background: 'var(--text-ops-primary)', borderRadius: 9 }} /></div></div>
-      <h2>Unlocked network perks</h2><div className="dash-grid">{[['Priority carrier allocation', 'Expedited capacity during regional peaks'], ['Supplier early access', 'Preferred replenishment windows'], ['Resilience insights', 'Advanced predictive demand analytics']].map(([title, copy]) => <div className="card-ops dash-card" key={title}><ShieldCheck color="var(--accent-ops-lime)" /><h3>{title}</h3><p className="ops-copy">{copy}</p><span className="status-pill">UNLOCKED</span></div>)}</div>
-      <div className="card-ops dash-card"><span className="mono-label">POINTS HISTORY</span><p className="ops-copy">AI restock POs and resilience actions add efficiency points to your account.</p></div>
+      <div className="page-intro"><div><span className="mono-label">PROGRAM / EFFICIENCY</span><h1 className="ops-heading">VeloSupply program</h1><p className="ops-copy">Recognition for the decisions that keep your network moving.</p></div><span className="status-pill">Active member</span></div>
+      <section className="rewards-hero">
+        <div className="rewards-hero-copy"><span className="mono-label">YOUR NETWORK SCORE</span><h2>{metrics.efficiencyScore.toLocaleString()} <span>/ 1,000 points</span></h2><p>Points reflect replenishment, routing and resilience activity across your workspace.</p><div className="rewards-progress"><span style={{ width: `${Math.min(metrics.efficiencyScore / 10, 100)}%` }} /></div><div className="rewards-progress-meta"><span>{Math.min(metrics.efficiencyScore, 1000).toLocaleString()} points earned</span><span>{Math.max(0, 1000 - metrics.efficiencyScore).toLocaleString()} to next tier</span></div></div>
+        <div className="rewards-tier"><span className="mono-label">CURRENT TIER</span><strong>{metrics.efficiencyScore >= 800 ? 'Momentum' : metrics.efficiencyScore >= 500 ? 'Connected' : 'Foundation'}</strong><small>{metrics.efficiencyScore >= 800 ? 'Priority network status' : metrics.efficiencyScore >= 500 ? 'Growing network status' : 'Member network status'}</small></div>
+      </section>
+
+      <div className="rewards-section-heading"><div><span className="mono-label">AVAILABLE BENEFITS</span><h2>Offers for your workspace</h2></div><span className="ops-copy">{rewardOffers.length} current offers</span></div>
+      <div className="rewards-offer-grid">{rewardOffers.map((offer) => {
+        const claimed = rewardClaims.some((claim) => claim.offerId === offer.id)
+        const eligible = metrics.efficiencyScore >= offer.minimumScore
+        return <article className="card-ops rewards-offer-card" key={offer.id}>
+          <div className="rewards-offer-top"><span className="rewards-offer-icon"><ShieldCheck size={17} /></span><span className="mono-label">{offer.points} POINTS</span></div>
+          <h3>{offer.title}</h3><p className="ops-copy">{offer.description}</p>
+          <div className="rewards-offer-footer"><span className={eligible ? 'reward-eligible' : 'reward-locked'}>{claimed ? 'Claimed' : eligible ? 'Available to claim' : `Unlock at ${offer.minimumScore} pts`}</span>
+            <button className="small-button" disabled={claimed || !eligible} onClick={() => {
+              void request(() => api.post(`/rewards/${offer.id}/claim`), `${offer.title} added to your account.`, () => {
+                api.get<{ offers: typeof rewardOffers; claims: typeof rewardClaims }>('/rewards').then(({ data }) => { setRewardOffers(data.offers); setRewardClaims(data.claims) })
+              })
+            }}>{claimed ? 'Claimed' : 'Claim offer'}</button>
+          </div>
+        </article>
+      })}</div>
+
+      <div className="dash-two rewards-lower-grid">
+        <section className="card-ops dash-card"><div className="rewards-section-heading compact"><div><span className="mono-label">TIER BENEFITS</span><h2>Unlocked for your team</h2></div></div>
+          <div className="reward-benefit-row"><ShieldCheck size={17} /><div><strong>Priority carrier allocation</strong><p className="ops-copy">Expedited capacity during regional demand peaks</p></div><span className="status-pill">Included</span></div>
+          <div className="reward-benefit-row"><Boxes size={17} /><div><strong>Supplier early access</strong><p className="ops-copy">Preferred replenishment windows from partners</p></div><span className="status-pill">Included</span></div>
+          <div className="reward-benefit-row"><Truck size={17} /><div><strong>Resilience insights</strong><p className="ops-copy">Advanced inventory and warehouse risk analytics</p></div><span className="status-pill">Included</span></div>
+        </section>
+        <section className="card-ops dash-card"><div className="rewards-section-heading compact"><div><span className="mono-label">ACCOUNT HISTORY</span><h2>Recent claims</h2></div></div>
+          {rewardClaims.length ? rewardClaims.slice().sort((a,b) => b.claimedAt.localeCompare(a.claimedAt)).slice(0,5).map((claim) => <div className="reward-history-row" key={claim.id}><span><strong>{claim.title}</strong><small>{new Date(claim.claimedAt).toLocaleDateString()}</small></span><span className="mono">+{claim.points} pts</span></div>) : <p className="ops-copy rewards-history-empty">Offers you claim for this account will appear here.</p>}
+        </section>
+      </div>
     </>}
 
     {pathname === '/dashboard/reports' && <>
