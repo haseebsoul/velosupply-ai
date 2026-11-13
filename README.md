@@ -34,7 +34,7 @@ Open the Vite URL printed in the frontend terminal (normally `http://localhost:5
 
 ## Demo accounts
 
-All seeded local-development demo accounts use password `1234`. Production startup intentionally does not seed these demo users. Create the first production administrator using the private `ADMIN_REGISTRATION_KEY` invitation key.
+All seeded local-development demo accounts use password `1234`. Production startup intentionally does not seed these demo users. Create Administrator and Operations team accounts using the private `ADMIN_REGISTRATION_KEY` and `OPERATOR_REGISTRATION_KEY` invitation keys. Public self-registration is limited to Buyers.
 
 | Email | Role |
 | --- | --- |
