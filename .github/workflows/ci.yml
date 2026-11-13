@@ -22,6 +22,12 @@ jobs:
       - name: Install backend dependencies
         working-directory: backend
         run: npm install --no-audit --no-fund
+      - name: Upload resolved backend lockfile (temporary)
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-lockfile-${{ github.sha }}
+          path: backend/package-lock.json
+          retention-days: 1
       - name: Check backend JavaScript syntax
         working-directory: backend
         run: node --check server.js && node --check seed.js && node --check sre.js
