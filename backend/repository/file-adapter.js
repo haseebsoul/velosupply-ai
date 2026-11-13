@@ -1,0 +1,196 @@
+'use strict';
+
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const { randomUUID } = require('node:crypto');
+const {
+  STATE_PATHS,
+  clone,
+  getAtPath,
+  setAtPath,
+  normalizeStateShape,
+  documentId,
+  matchesFilter
+} = require('./collection-map');
+
+async function writeAtomic(filePath, data) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const temporaryPath = filePath + '.' + process.pid + '.' + randomUUID() + '.tmp';
+  await fs.writeFile(temporaryPath, JSON.stringify(data, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+  try {
+    await fs.rename(temporaryPath, filePath);
+  } catch (error) {
+    await fs.rm(temporaryPath, { force: true });
+    throw error;
+  }
+}
+
+function createFileAdapter(options) {
+  const filePath = options.filePath;
+  const loadInitial = options.loadInitial;
+  if (!filePath) throw new Error('fileAdapter requires filePath');
+  if (typeof loadInitial !== 'function') throw new Error('fileAdapter requires loadInitial');
+
+  let state = null;
+  let queue = Promise.resolve();
+  let transactionActive = false;
+
+  async function flush() {
+    await writeAtomic(filePath, state);
+  }
+
+  function serializeWrite(mutator) {
+    if (transactionActive) {
+      mutator();
+      return Promise.resolve();
+    }
+    queue = queue.catch(() => {}).then(async () => {
+      mutator();
+      await flush();
+    });
+    return queue;
+  }
+
+  function collectionPath(name) {
+    const pathValue = STATE_PATHS[name];
+    if (!pathValue) throw new Error('Unsupported file repository collection: ' + name);
+    return pathValue;
+  }
+
+  async function currentRecords(name) {
+    await queue;
+    const pathValue = collectionPath(name);
+    const records = getAtPath(state, pathValue);
+    return Array.isArray(records) ? records : [];
+  }
+
+  const adapter = {
+    kind: 'file',
+    filePath,
+
+    async initialize() {
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      try {
+        state = normalizeStateShape(JSON.parse(await fs.readFile(filePath, 'utf8')));
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        state = normalizeStateShape(await loadInitial());
+        await flush();
+      }
+      return adapter;
+    },
+
+    async readState() {
+      await queue;
+      return clone(state);
+    },
+
+    async writeState(nextState) {
+      const next = normalizeStateShape(nextState);
+      await serializeWrite(() => { state = next; });
+    },
+
+    async findById(name, id) {
+      const records = await currentRecords(name);
+      return clone(records.find((item) => String(documentId(item)) === String(id)) || null);
+    },
+
+    async find(name, filter = {}, options = {}) {
+      let records = (await currentRecords(name)).filter((item) => matchesFilter(item, filter));
+      if (options.sort) {
+        const fields = Object.entries(options.sort);
+        records.sort((a, b) => {
+          for (const [field, direction] of fields) {
+            const av = field.split('.').reduce((v, k) => v == null ? undefined : v[k], a);
+            const bv = field.split('.').reduce((v, k) => v == null ? undefined : v[k], b);
+            if (av === bv) continue;
+            if (av == null) return -1 * direction;
+            if (bv == null) return 1 * direction;
+            return (av < bv ? -1 : 1) * direction;
+          }
+          return 0;
+        });
+      }
+      const skip = Math.max(0, Number(options.skip) || 0);
+      if (skip) records = records.slice(skip);
+      if (Number.isFinite(options.limit) && options.limit >= 0) records = records.slice(0, options.limit);
+      return clone(records);
+    },
+
+    async insert(name, document) {
+      const record = clone(document);
+      if (!record.id && !record.code && !record.key && !(record.sku && record.hubCode)) record.id = randomUUID();
+      const id = documentId(record);
+      let inserted;
+      await serializeWrite(() => {
+        const pathValue = collectionPath(name);
+        const records = getAtPath(state, pathValue);
+        if (records.some((item) => String(documentId(item)) === id)) {
+          const error = new Error('Duplicate repository key: ' + id);
+          error.code = 'DUPLICATE_KEY';
+          throw error;
+        }
+        records.push(record);
+        inserted = clone(record);
+      });
+      return inserted;
+    },
+
+    async update(name, id, changes, options = {}) {
+      let updated = null;
+      await serializeWrite(() => {
+        const records = getAtPath(state, collectionPath(name));
+        const index = records.findIndex((item) => String(documentId(item)) === String(id));
+        if (index < 0) {
+          if (!options.upsert) return;
+          const created = { ...clone(changes), id: String(id) };
+          records.push(created);
+          updated = clone(created);
+          return;
+        }
+        records[index] = { ...records[index], ...clone(changes), id: records[index].id || String(id) };
+        updated = clone(records[index]);
+      });
+      return updated;
+    },
+
+    async remove(name, id) {
+      let deleted = 0;
+      await serializeWrite(() => {
+        const pathValue = collectionPath(name);
+        const records = getAtPath(state, pathValue);
+        const kept = records.filter((item) => String(documentId(item)) !== String(id));
+        deleted = records.length - kept.length;
+        setAtPath(state, pathValue, kept);
+      });
+      return deleted;
+    },
+
+    async count(name, filter = {}) {
+      return (await currentRecords(name)).filter((item) => matchesFilter(item, filter)).length;
+    },
+
+    async withTransaction(callback) {
+      queue = queue.catch(() => {}).then(async () => {
+        const before = clone(state);
+        transactionActive = true;
+        try {
+          const result = await callback({ session: null, repository: adapter });
+          await flush();
+          return result;
+        } catch (error) {
+          state = before;
+          await flush();
+          throw error;
+        } finally {
+          transactionActive = false;
+        }
+      });
+      return queue;
+    }
+  };
+
+  return adapter;
+}
+
+module.exports = { createFileAdapter, writeAtomic };
