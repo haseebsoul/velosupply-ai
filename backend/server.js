@@ -15,7 +15,7 @@ const { DB_PATH, seedDatabase, productStatus } = require('./seed');
 const envFilePath = path.join(__dirname, '.env');
 try {
   const envFile = fsSync.readFileSync(envFilePath, 'utf8');
-  for (const line of envFile.split(/\\r?\\n/)) {
+  for (const line of envFile.split(/\r?\n/)) {
     const valueLine = line.trim();
     if (!valueLine || valueLine.startsWith('#')) continue;
     const separator = valueLine.indexOf('=');
@@ -47,7 +47,8 @@ let stateCollection = null;
 let writeQueue = Promise.resolve();
 
 app.disable('x-powered-by');
-app.use(cors());
+const allowedOrigins = (process.env.CORS_ORIGIN || '').split(',').map((origin) => origin.trim()).filter(Boolean);
+app.use(cors({ origin: allowedOrigins.length ? allowedOrigins : process.env.NODE_ENV === 'production' ? false : true }));
 app.use(express.json({ limit: '1mb' }));
 
 function persist() {
@@ -99,6 +100,9 @@ async function loadDatabaseState() {
   if (stored?.state && typeof stored.state === 'object') {
     return stored.state;
   }
+
+  // Demo credentials are for local development only; production starts with an empty user registry.
+  if (process.env.NODE_ENV === 'production') seededState.users = [];
 
   await stateCollection.updateOne(
     { _id: 'primary' },
@@ -278,6 +282,7 @@ const simulationSchema = z.object({
 app.get('/api/health', (_req, res) => res.json({
   status: 'ok',
   service: 'velosupply-api',
+  storage: stateCollection ? 'mongodb' : 'file',
   timestamp: new Date().toISOString()
 }));
 app.get('/health', (_req, res) => res.json({
