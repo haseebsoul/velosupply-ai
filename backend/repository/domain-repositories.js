@@ -82,8 +82,7 @@ function createDomainRepositories(adapter) {
 
       const items = itemInputs.map((item) => {
         const qty = integer(item.qty ?? item.quantity, 'qty', 1);
-        const unitExGstPkr = Number(item.unitExGstPkr);
-        if (!Number.isFinite(unitExGstPkr) || unitExGstPkr < 0) throw new TypeError('unitExGstPkr must be a non-negative PKR amount');
+        const unitExGstPkr = integer(item.unitExGstPkr, 'unitExGstPkr', 0);
         const sku = requiredString(item.sku, 'sku');
         const name = requiredString(item.name, 'name');
         const lineEx = Math.round(unitExGstPkr * qty);
@@ -93,7 +92,7 @@ function createDomainRepositories(adapter) {
           sku,
           name,
           qty,
-          unitExGstPkr: Math.round(unitExGstPkr),
+          unitExGstPkr,
           lineEx,
           lineGst
         };
@@ -185,7 +184,6 @@ function createDomainRepositories(adapter) {
 
       return adapter.withTransaction(async ({ repository }) => {
         const rows = await repository.find('movements', { sku, hubCode });
-        const before = movementBalance(rows);
         const after = movementBalance([...rows, movement]);
         if (after.onHand < 0 || after.reserved < 0 || after.reserved > after.onHand) {
           const error = new Error('Stock movement would make available inventory negative');
