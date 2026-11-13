@@ -36,6 +36,8 @@ function createHarness() {
   });
   app.use(sre.chaosMiddleware);
   app.use('/api/sre', sre.router);
+  app.use('/limited', sre.rateLimit({ limit: 1, windowMs: 60_000, name: 'test' }));
+  app.get('/limited', (_req, res) => res.json({ ok: true }));
   app.get('/api/products', (_req, res) => res.json(state.products));
   return { app, state, sre, broadcast };
 }
@@ -63,6 +65,15 @@ describe('SRE API', () => {
   let harness;
   beforeEach(() => { harness = createHarness(); });
   afterEach(() => harness.sre.stop());
+
+  it('denies operator access to the administrator-only SRE audit log', async () => {
+    await request(harness.app).get('/api/sre/audit').expect(403);
+  });
+
+  it('enforces a per-IP rate limit', async () => {
+    await request(harness.app).get('/limited').expect(200);
+    await request(harness.app).get('/limited').expect(429);
+  });
 
   it('returns the reliability dashboard and SLO samples', async () => {
     const response = await request(harness.app).get('/api/sre').expect(200);
