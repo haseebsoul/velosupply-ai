@@ -41,6 +41,31 @@ const productDefinitions = [
   ['PM-4006', 'Three-Phase Power Module', 'Power Modules', 'High-capacity modular power unit for server and network racks.', 1399, 11, 6, 1.8]
 ];
 
+function createDemoTariffRules(now = new Date()) {
+  const at = now.toISOString();
+  const rows = [
+    ['PK-GST', { ratePct: 18 }],
+    ['PK-FREE-DELIVERY-THRESHOLD', { amountPkr: 150000 }],
+    ['PK-DELIVERY-KARACHI', { amountPkr: 350 }],
+    ['PK-DELIVERY-LAHORE', { amountPkr: 400 }],
+    ['PK-DELIVERY-ISLAMABAD', { amountPkr: 450 }],
+    ['PK-DELIVERY-RAWALPINDI', { amountPkr: 450 }],
+    ['PK-DELIVERY-FAISALABAD', { amountPkr: 500 }],
+    ['PK-DELIVERY-MULTAN', { amountPkr: 550 }],
+    ['PK-DELIVERY-PESHAWAR', { amountPkr: 650 }],
+    ['PK-DELIVERY-QUETTA', { amountPkr: 900 }]
+  ];
+  return rows.map(([code, values], index) => ({
+    id: 'TARIFF-DEMO-' + String(index + 1).padStart(2, '0'),
+    code,
+    version: 1,
+    ...values,
+    source: 'demo-estimate',
+    effectiveFrom: at,
+    createdAt: at
+  }));
+}
+
 function productStatus(stock, threshold) {
   if (stock <= Math.min(3, threshold)) return 'critical';
   if (stock <= threshold) return 'low_stock';
@@ -121,6 +146,7 @@ async function createSeedData() {
     warehouses,
     products,
     orders,
+    tariffRules: createDemoTariffRules(now),
     logs,
     newsletter: [],
     metrics: {
@@ -207,7 +233,13 @@ async function seedDatabase(options = {}) {
   if (!options.force) {
     try {
       const current = JSON.parse(await fs.readFile(filePath, 'utf8'));
-      if (hasCurrentSchema(current)) return current;
+      if (hasCurrentSchema(current)) {
+        if (current.dataMode === 'demo' && (!Array.isArray(current.tariffRules) || current.tariffRules.length === 0)) {
+          current.tariffRules = createDemoTariffRules(new Date());
+          await writeAtomic(filePath, current);
+        }
+        return current;
+      }
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
     }
@@ -226,4 +258,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { DB_PATH, DB_SCHEMA_VERSION, seedDatabase, productStatus, hasCurrentSchema };
+module.exports = { DB_PATH, DB_SCHEMA_VERSION, seedDatabase, productStatus, hasCurrentSchema, createDemoTariffRules };
