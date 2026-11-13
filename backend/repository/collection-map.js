@@ -41,6 +41,8 @@ const INDEXES = {
   ],
   products: [
     { key: { sku: 1 }, unique: true, name: 'products_sku_unique' },
+    { key: { batchHash: 1 }, unique: true, sparse: true, name: 'products_batch_hash_unique' },
+    { key: { originWarehouseId: 1 }, name: 'products_origin_warehouse' },
     { key: { name: 'text' }, name: 'products_name_text' }
   ],
   warehouses: [
@@ -66,7 +68,8 @@ const INDEXES = {
   ],
   orders: [
     { key: { code: 1 }, unique: true, sparse: true, name: 'orders_code_unique' },
-    { key: { buyerId: 1, status: 1 }, name: 'orders_buyer_status' }
+    { key: { userId: 1, status: 1 }, name: 'orders_user_status' },
+    { key: { buyerId: 1, status: 1 }, name: 'orders_buyer_status_legacy' }
   ],
   invoices: [
     { key: { code: 1 }, unique: true, name: 'invoices_code_unique' }
