@@ -422,12 +422,17 @@ async function register(req, res) {
   if (db.users.some((entry) => entry.email === req.body.email)) {
     return res.status(409).json({ error: 'Email already registered' });
   }
+  const passwordHash = await bcrypt.hash(req.body.password, 12);
+  // Re-check after bcrypt yields: concurrent admin registrations must not create a second administrator.
+  if (req.body.role === 'admin' && db.users.some((entry) => entry.role === 'admin')) {
+    return res.status(409).json({ error: 'ADMIN_EXISTS' });
+  }
   const user = {
     id: `USER-${randomUUID()}`,
     name: req.body.name,
     email: req.body.email,
     role: req.body.role || 'user',
-    passwordHash: await bcrypt.hash(req.body.password, 12),
+    passwordHash,
     createdAt: new Date().toISOString()
   };
   db.users.push(user);
@@ -552,6 +557,15 @@ app.get('/api/admin/users', requireRoles('admin'), (_req, res) => {
 });
 app.patch('/api/admin/users/:id', requireRoles('admin'), validate(roleSchema), asyncRoute(async (req, res) => {
   const user = findById(db.users, req.params.id, 'User');
+  if (req.params.id === req.user.id && req.body.role !== 'admin') {
+    return res.status(400).json({ error: 'You cannot demote your own administrator account' });
+  }
+  if (req.body.role === 'admin' && user.role !== 'admin' && db.users.some((entry) => entry.role === 'admin')) {
+    return res.status(409).json({ error: 'ADMIN_EXISTS' });
+  }
+  if (user.role === 'admin' && req.body.role !== 'admin' && db.users.filter((entry) => entry.role === 'admin').length <= 1) {
+    return res.status(409).json({ error: 'The last administrator cannot be demoted' });
+  }
   user.role = req.body.role;
   user.updatedAt = new Date().toISOString();
   addLog(`Role updated for ${user.name}: ${user.role}.`, 'INFO', 'USER', { userId: user.id });
