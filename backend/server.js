@@ -825,4 +825,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server, start, refreshMetrics, sre };
+module.exports = { app, server, start, loadDatabaseState, refreshMetrics, sre };
