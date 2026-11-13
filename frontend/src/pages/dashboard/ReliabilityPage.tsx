@@ -3,6 +3,8 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YA
 import { Activity, AlertTriangle, BookOpen, RefreshCw, ShieldAlert, Siren } from 'lucide-react'
 import { api, errorMessage } from '../../lib/apiClient'
 import { useAppStore } from '../../store/useAppStore'
+import { useWebSocket } from '../../lib/useWebSocket'
+import { TerminalPanel } from '../../components/dashboard/TerminalPanel'
 
 type Slo = { id: string; name: string; target: number; observed: number; totalEvents: number; badEvents: number; budgetRemaining: number; burnRate: number | string; budgetState: string; description: string }
 type Service = { service: string; status: string; latencyMs: number | null; error: string | null; at: string | null }
@@ -29,6 +31,7 @@ function badgeClass(status: string) {
 
 export function ReliabilityPage() {
   const { user } = useAppStore()
+  const { events } = useWebSocket()
   const [data, setData] = useState<Dashboard | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -235,7 +238,11 @@ export function ReliabilityPage() {
           <p className="ops-copy"><Activity size={14} /> Verification: {book.verify}</p>
         </details>)}
       </section>
-      <p className="ops-copy"><Activity size={14} /> Telemetry samples each second; this dashboard polls persisted SRE state every 10 seconds.</p>
+      <section className="card-ops dash-card">
+        <div className="drawer-head"><div><span className="mono-label">LIVE EVENT STREAM</span><h2>Realtime SRE telemetry</h2></div><span className="status-pill">{events.length} buffered</span></div>
+        <TerminalPanel events={events} />
+      </section>
+      <p className="ops-copy"><Activity size={14} /> Telemetry samples each second; this dashboard also refreshes persisted SRE state every 10 seconds.</p>
     </>}
   </main>
 }
