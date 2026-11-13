@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Copy, Download, RefreshCw, ShieldCheck, Truck } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
 import { api, errorMessage } from '../../lib/apiClient'
@@ -11,7 +11,7 @@ import { ThreatRow } from '../../components/dashboard/ThreatRow'
 import { TerminalPanel } from '../../components/dashboard/TerminalPanel'
 import { TopologyCanvas } from '../../components/dashboard/TopologyCanvas'
 
-const palette = ['var(--accent-ops-lime)', 'var(--status-positive)', 'var(--status-warning)', 'var(--status-critical)', 'var(--text-ops-muted)']
+const palette = ['var(--accent-ops-lime)', '#968B80', '#6C665F', '#494641', '#2E2B27']
 const initialMetrics: Metrics = { gmv24h: 0, activeOrders: 0, fulfillmentHealth: 0, packetsPerSec: 0, avgLatencyMs: 0, threatsBlocked: 0, detectionTimeMs: 0, efficiencyScore: 0, hubCapacities: [] }
 
 export function CommandPages() {
@@ -45,7 +45,6 @@ export function CommandPages() {
     if (pathname === '/dashboard/admin' && user?.role === 'admin') api.get<User[]>('/admin/users').then(({ data }) => setUsers(data)).catch((reason: unknown) => setError(errorMessage(reason)))
   }, [pathname, user?.role])
   const productsAtRisk = useMemo(() => products.filter((product) => product.stock <= product.reorder_threshold), [products])
-  const data = warehouses.map((hub) => ({ name: hub.id.replace('HUB-', ''), capacity: hub.capacity }))
   const history = events.slice(-20).map((event, index) => ({ name: index.toString(), orders: event.metrics?.activeOrders ?? Math.max(0, metrics.activeOrders + (index % 5) - 2), throughput: event.metrics?.packetsPerSec ?? metrics.packetsPerSec }))
   const request = async (operation: () => Promise<unknown>, success: string, then?: () => void) => {
     try { await operation(); setNotice(success); setError(''); then?.(); await refresh() }
@@ -65,9 +64,16 @@ export function CommandPages() {
     {notice && <div role="status" className="success-text" style={{ marginBottom: 15 }}>{notice}</div>}
 
     {pathname === '/dashboard' && <>
-      <div className="drawer-head"><div><h1 className="ops-heading">Good day, {user?.name ?? 'Operator'}.</h1><p className="ops-copy">Your global fulfillment network is in view.</p></div><span className="mono-label"><i className="live-dot" /> {connected ? 'TELEMETRY SYNC ACTIVE' : 'RECONNECTING'}</span></div>
+      <div className="drawer-head"><div><h1 className="ops-heading">Good morning, {user?.name ?? 'Operator'}.</h1><p className="ops-copy">Your global fulfillment network is in view.</p></div><span className="mono-label"><i className="live-dot" /> {connected ? 'TELEMETRY SYNC ACTIVE' : 'RECONNECTING'}</span></div>
       <div className="dash-grid"><StatCard title="24H GROSS MERCHANDISE VALUE" value={metrics.gmv24h} prefix="$" note="Real-time order value" /><StatCard title="ACTIVE ORDERS IN TRANSIT" value={metrics.activeOrders} note="Across all fulfillment nodes" /><StatCard title="GLOBAL FULFILLMENT HEALTH" value={metrics.fulfillmentHealth} suffix="%" note="Network-wide SLA performance" /></div>
-      <div className="dash-two"><section className="card-ops dash-card"><span className="mono-label">WAREHOUSE CAPACITY ALLOCATION</span><div style={{ height: 245 }}><ResponsiveContainer><PieChart><Pie data={data} dataKey="capacity" nameKey="name" innerRadius={62} outerRadius={94} paddingAngle={4}>{data.map((entry, index) => <Cell key={entry.name} fill={palette[index % palette.length]} />)}</Pie><Tooltip contentStyle={{ background: 'var(--bg-ops-card)', border: '1px solid var(--border-ops)', color: 'white' }} /></PieChart></ResponsiveContainer></div>{warehouses.map((hub, i) => <span className="mono-label" key={hub.id} style={{ marginRight: 10, color: palette[i % palette.length] }}>{hub.id.replace('HUB-', '')} {hub.capacity}%</span>)}</section>
+      <div className="dash-two"><section className="card-ops dash-card capacity-card">
+          <div className="capacity-card-heading"><div><span className="mono-label">WAREHOUSE CAPACITY</span><h3>Network utilization</h3></div><strong className="capacity-total">{Math.round(warehouses.reduce((sum, hub) => sum + hub.capacity, 0) / Math.max(warehouses.length, 1))}%</strong></div>
+          <div className="capacity-meter-list">{warehouses.map((hub) => <div className="capacity-meter-row" key={hub.id}>
+            <div className="capacity-meter-meta"><span>{hub.name}</span><span className="mono">{hub.capacity}%</span></div>
+            <div className="capacity-meter-track"><span style={{ width: `${hub.capacity}%` }} /></div>
+          </div>)}</div>
+          <p className="ops-copy capacity-footnote">Live allocation across {warehouses.length} fulfillment nodes.</p>
+        </section>
         <section className="card-ops dash-card"><span className="mono-label">LIVE ORDER &amp; FULFILLMENT VELOCITY</span><div style={{ height: 270 }}><ResponsiveContainer><AreaChart data={history}><defs><linearGradient id="velocityFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--accent-ops-lime)" stopOpacity={.3} /><stop offset="95%" stopColor="var(--accent-ops-lime)" stopOpacity={0} /></linearGradient></defs><CartesianGrid stroke="var(--border-ops)" vertical={false} /><XAxis dataKey="name" hide /><YAxis stroke="var(--text-ops-muted)" /><Tooltip contentStyle={{ background: 'var(--bg-ops-card)', border: '1px solid var(--border-ops)' }} /><Area type="monotone" dataKey="orders" stroke="var(--accent-ops-lime)" fill="url(#velocityFill)" /></AreaChart></ResponsiveContainer></div></section></div>
       <section className="card-ops dash-card"><div className="drawer-head"><div><span className="mono-label">RECENT ACTIVITY</span><h3>Live orders &amp; SKU routing</h3></div><button className="small-button" onClick={() => void refresh()}><RefreshCw size={14} /> Refresh</button></div><OrdersTable orders={orders.slice(0, 8)} routeOrder={(id) => request(() => api.post(`/orders/${id}/route`), 'Order route optimized.')} /></section>
     </>}
@@ -98,7 +104,7 @@ export function CommandPages() {
         <div className="message-priority-copy">
           <div className="drawer-head"><span className="mono-label">PRIORITY SUPPORT · ACCOUNT NOTICE</span><span className="status-pill status-warning">Action available</span></div>
           <h2>Priority support is ready for your workspace</h2>
-          <p className="ops-copy">Your VeloSupply account is eligible for a zero-fee wallet funding window for the next 30 days. Review the terms with your account administrator before activating it.</p>
+          <p className="ops-copy">Your workspace has priority support access for the next 30 days. Contact your account administrator to review carrier coverage and service eligibility.</p>
           <div className="inline-actions"><button className="button ops-button" onClick={() => setPriorityMessageDismissed(true)}>Mark as resolved</button><button className="small-button" onClick={() => setPriorityMessageDismissed(true)}>Dismiss</button></div>
         </div>
       </section> : <section className="card-ops dash-card empty-messages"><h3>You're all caught up</h3><p className="ops-copy">No unread priority messages at the moment.</p><button className="small-button" onClick={() => setPriorityMessageDismissed(false)}>Restore message</button></section>}
