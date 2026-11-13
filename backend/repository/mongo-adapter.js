@@ -257,7 +257,7 @@ class MongoAdapter {
   }
 
   async update(name, id, changes, options = {}) {
-    if (APPEND_ONLY_COLLECTIONS.has(name)) {
+    if (APPEND_ONLY_COLLECTIONS.has(canonicalCollectionName(name))) {
       const error = new Error(name + ' is append-only; updates are not permitted');
       error.code = 'IMMUTABLE_COLLECTION';
       throw error;
