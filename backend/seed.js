@@ -157,7 +157,7 @@ async function createInitialSeedData() {
   const email = process.env.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase();
   const password = process.env.BOOTSTRAP_ADMIN_PASSWORD || '';
 
-  if (!name || name.length < 2 || !email || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email) || password.length < 16) {
+  if (!name || name.length < 2 || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 16) {
     throw new Error(
       'For a new production database, set BOOTSTRAP_ADMIN_NAME, BOOTSTRAP_ADMIN_EMAIL, and BOOTSTRAP_ADMIN_PASSWORD (16+ characters) before starting the API.'
     );
@@ -238,7 +238,12 @@ async function seedDatabase(options = {}) {
   if (!options.force) {
     try {
       const current = JSON.parse(await fs.readFile(filePath, 'utf8'));
-      if (hasCurrentSchema(current)) return current;
+      if (hasCurrentSchema(current)) {
+        if (process.env.NODE_ENV !== 'production') return current;
+        current.users = (await createInitialSeedData()).users;
+        await writeAtomic(filePath, current);
+        return current;
+      }
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
     }
