@@ -6,6 +6,7 @@ const {
   COLLECTION_NAMES,
   INDEXES,
   APPEND_ONLY_COLLECTIONS,
+  canonicalCollectionName,
   assertAppendOnlyTransition,
   STATE_PATHS,
   clone,
@@ -66,8 +67,9 @@ class MongoAdapter {
   }
 
   collection(name) {
-    if (!COLLECTION_NAMES.includes(name)) throw new Error('Unknown repository collection: ' + name);
-    return this.database.collection(name);
+    const canonical = canonicalCollectionName(name);
+    if (!COLLECTION_NAMES.includes(canonical)) throw new Error('Unknown repository collection: ' + name);
+    return this.database.collection(canonical);
   }
 
   async createIndexes() {
@@ -168,7 +170,7 @@ class MongoAdapter {
       const records = recordsForState(state, name) || [];
       const serialized = JSON.stringify(records);
       if (this.lastCollectionJson.get(name) !== serialized) {
-        if (APPEND_ONLY_COLLECTIONS.has(name)) {
+        if (APPEND_ONLY_COLLECTIONS.has(canonicalCollectionName(name))) {
           const previous = JSON.parse(this.lastCollectionJson.get(name) || '[]');
           assertAppendOnlyTransition(name, previous, records);
         }
@@ -184,7 +186,7 @@ class MongoAdapter {
     await this.withTransaction(async ({ session }) => {
       for (const entry of changedCollections) {
         const collection = this.collection(entry.name);
-        if (APPEND_ONLY_COLLECTIONS.has(entry.name)) {
+        if (APPEND_ONLY_COLLECTIONS.has(canonicalCollectionName(entry.name))) {
           const previous = JSON.parse(this.lastCollectionJson.get(entry.name) || '[]');
           const appended = entry.records.slice(previous.length);
           if (appended.length) {
