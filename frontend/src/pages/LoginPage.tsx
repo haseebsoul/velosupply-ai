@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Eye, EyeOff, Boxes } from 'lucide-react'
+import { Eye, EyeOff } from 'lucide-react'
 import { z } from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -85,13 +85,13 @@ export function LoginPage() {
     } catch (reason) { setError(errorMessage(reason)) }
   }
   return <main className="login-screen">
-    <section className="login-art"><NetworkCanvas /><div className="login-art-copy"><Link className="brand" to="/" style={{ color: 'var(--text-ops-primary)' }}><span className="brand-mark"><Boxes size={16} /></span> VeloSupply AI</Link><h1 style={{ fontSize: 46, maxWidth: 470, lineHeight: 1.05, letterSpacing: '-.05em' }}>Decode the future with autonomous logistics.</h1><p className="ops-muted">One network. Every signal. Always in motion.</p></div></section>
-    <section className="login-form-wrap"><form className="login-form" onSubmit={handleSubmit(submit)}><span className="mono-label" style={{ color: 'var(--accent-ops-lime)' }}>SECURE OPERATIONS ACCESS</span><h2 style={{ fontSize: 32, letterSpacing: '-.05em' }}>Welcome back.</h2><p className="ops-copy">Sign in to your VeloSupply command center.</p>
-      <button type="button" className="small-button" style={{ width: '100%', margin: '12px 0 24px' }} onClick={() => { setValue('email', 'admin@velosupply.ai'); setValue('password', '1234') }}>Fill Admin Demo · admin@velosupply.ai</button>
+    <section className="login-art"><NetworkCanvas /><div className="login-art-copy"><Link className="brand" to="/" style={{ color: 'var(--text-ops-primary)' }}><span className="brand-mark">V</span> VeloSupply AI</Link><h1 style={{ fontSize: 46, maxWidth: 470, lineHeight: 1.05, letterSpacing: '-.05em' }}>Supply chain operations, in one clear view.</h1><p className="ops-muted">One network. Every signal. Always in motion.</p></div></section>
+    <section className="login-form-wrap"><form className="login-form" onSubmit={handleSubmit(submit)}><span className="mono-label" style={{ color: 'var(--accent-ops-lime)' }}>SECURE OPERATIONS ACCESS</span><h2 style={{ fontSize: 32, letterSpacing: '-.05em' }}>Sign in</h2><p className="ops-copy">Sign in to your VeloSupply command center.</p>
+      {import.meta.env.DEV && <button type="button" className="small-button" style={{ width: '100%', margin: '12px 0 24px' }} onClick={() => { setValue('email', 'admin@velosupply.ai'); setValue('password', '1234') }}>Fill demo administrator</button>}
       <label className="ops-copy">Email<input className="field" type="email" autoComplete="email" {...register('email')} /></label>{errors.email && <small className="danger-text">{errors.email.message}</small>}
       <label className="ops-copy" style={{ display: 'block', marginTop: 16 }}>Password<div style={{ position: 'relative' }}><input className="field" type={visible ? 'text' : 'password'} autoComplete="current-password" {...register('password')} /><button type="button" aria-label={visible ? 'Hide password' : 'Show password'} className="small-button" style={{ position: 'absolute', right: 7, top: 7 }} onClick={() => setVisible((value) => !value)}>{visible ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>{errors.password && <small className="danger-text">{errors.password.message}</small>}
       {error && <p role="alert" className="danger-text">{error}</p>}<button className="button ops-button" style={{ width: '100%', marginTop: 22 }} disabled={isSubmitting}>{isSubmitting ? 'Authenticating…' : 'Sign in to console'}</button>
-      <p className="ops-copy" style={{ marginTop: 22 }}>New to VeloSupply? <Link to="/" style={{ color: 'var(--accent-ops-lime)' }}>Explore the platform</Link></p>
+      <p className="ops-copy" style={{ marginTop: 22 }}>New to VeloSupply? <Link to="/register" style={{ color: 'var(--accent-ops-lime)' }}>Create an account</Link></p>
     </form></section>
   </main>
 }
