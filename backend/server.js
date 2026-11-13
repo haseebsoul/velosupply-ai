@@ -627,6 +627,29 @@ app.patch('/api/inventory/:id', requireRoles('admin', 'operator'), validate(inve
   await persist();
   res.json({ product });
 }));
+app.get('/api/inventory/:id/ledger', requireRoles('admin', 'operator'), (req, res) => {
+  const product = findById(db.products, req.params.id, 'Product');
+  const hubCode = product.warehouse_hub || 'unassigned';
+  const movements = (db.movements || []).filter((entry) => entry.sku === product.sku && entry.hubCode === hubCode);
+  const onHand = movements.reduce((balance, entry) => {
+    if (entry.type === 'RECEIVE' || entry.type === 'TRANSFER_IN' || entry.type === 'RETURN_IN') return balance + entry.qty;
+    if (entry.type === 'SHIP' || entry.type === 'TRANSFER_OUT') return balance - entry.qty;
+    if (entry.type === 'ADJUST') return balance + entry.qty;
+    return balance;
+  }, 0);
+  const initialized = movements.length > 0;
+  res.json({
+    productId: product.id,
+    sku: product.sku,
+    hubCode,
+    ledgerOnHand: initialized ? onHand : null,
+    productStock: product.stock,
+    matches: initialized ? onHand === product.stock : null,
+    movementCount: movements.length,
+    ledgerStatus: initialized ? (onHand === product.stock ? 'reconciled' : 'mismatch') : 'baseline-required',
+    note: initialized ? undefined : 'Legacy stock has no opening-balance movement; record a verified opening balance before treating the ledger as reconciled.'
+  });
+});
 app.post('/api/inventory/restock/:id', requireRoles('admin', 'operator'), validate(restockSchema), asyncRoute(async (req, res) => {
   const product = findById(db.products, req.params.id, 'Product');
   const quantity = req.body.quantity || Math.max(product.reorder_threshold * 2 - product.stock, 10);
