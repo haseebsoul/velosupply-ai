@@ -496,3 +496,36 @@ The implementation was verified by GitHub Actions run [43523910861](https://gith
 The Activity terminal now has pause/resume, reusable clear behavior, a level filter and a 500-event buffer. The Reliability page displays four distinct telemetry charts. The readiness endpoint checks API, Database and WebSocket independently of stock-ledger and payment-gateway degradation.
 
 This green run verifies CI/build and isolated SRE tests. It does not establish live Atlas availability, deployed payment-provider integration, ledger integrity, production backup restore, load-test SLO achievement, or completion of the full Pakistan Edition requirements.
+## 20. Atlas inspection and data-provenance review
+
+Inspected the connected MongoDB Atlas project directly on 13 November 2026:
+
+- Project: `VeloSupply AI` (`6af76e96f139053a1df1c4e9`).
+- Existing cluster: `VeloSupplyCluster`, FREE tier, AWS `AP_SOUTHEAST_1` (Singapore), MongoDB 8.0.37, state IDLE.
+- Existing database user: `velosupply_app`, scoped to cluster `VeloSupplyCluster`, role `readWrite` on database `velosupply`.
+- `velosupply` initially contained only collection `application_state`, with zero documents. Atlas Network Access had zero IP/CIDR entries.
+- Bootstrapped one `application_state` document with `_id: "primary"`, `dataMode: "production"`, schema version 2, empty users/warehouses/products/orders/logs/newsletter/rewardClaims arrays, and zero-valued metrics. This is an empty application-state envelope, not customer or demo data.
+
+No new cluster was created because the existing free cluster already satisfies the project's development storage need. No second database user was created because the existing scoped `velosupply_app` user already has the needed database role. No public `0.0.0.0/0` network rule was added. The app runtime's outbound IP/CIDR still needs to be allowlisted by its owner/deployment operator before its own MongoDB driver can connect.
+
+### Data provenance findings
+
+- Local JSON fallback: seeded demo dataset when `MONGODB_URI` is absent in development.
+- Seed records: 5 demo hubs (Newark, Austin, Rotterdam, Dubai, Singapore), 24 synthetic products, 12 synthetic orders, three development users and generated logs.
+- Seeded demo login: `admin@velosupply.ai`, `operator@velosupply.ai`, `buyer@velosupply.ai`; seeded password is `Velo@12345`. Production's empty Atlas bootstrap contains no demo users.
+- The sample packet-rate and detection-time metrics are generated/random demo values; they do not come from packet capture or an intrusion detection engine.
+- `GET /api/threats` currently derives inventory/warehouse operational warnings from stock thresholds and hub status. It is not a cyber-threat detection feed.
+- Scenario `/api/simulation/trigger` changes the stored state (hub status/latency, product stock/velocity, order routing). It is blocked in production by default unless `SIMULATIONS_ENABLED=true`.
+- Checkout creates an application order and decrements stored stock, but it does not process money or book a real carrier. Payments and carrier services are not integrated.
+- Actual SRE observations include HTTP request duration/status, process resource metrics, WebSocket ping/pong and API/DB/WebSocket health checks while running. The one-second ring is process-local; five-minute aggregate records are persisted through the active adapter. The full 30-day SLO history is not restart-safe.
+
+### Safe Atlas bootstrap changes committed
+
+- Added `backend/production-state.js` for a zero-record state envelope.
+- Atlas no longer silently imports the demo catalog/order dataset when `application_state` is empty. Demo seeding in Atlas requires explicit `SEED_DEMO_DATA=true` in a non-production environment.
+- Local JSON demo mode remains available for development.
+- Added `dataMode` to health/metrics responses; seeded data is tagged `demo`, new Atlas state is tagged `production`, and pre-existing older state without provenance is tagged `unclassified`.
+- Synthetic packet-rate/detection-time generation now runs only for demo data outside production.
+- Production scenario simulation is blocked unless explicitly enabled.
+
+This direct Atlas inspection confirms the cluster and empty bootstrap record exist; it does not verify the user's local `.env`, GitHub deployment secrets, application IP allowlisting, or a live Express-to-Atlas runtime connection.
