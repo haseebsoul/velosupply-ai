@@ -42,7 +42,7 @@ All seeded local-development demo accounts use password `Velo@12345`. Production
 | `operator@velosupply.ai` | Operator |
 | `buyer@velosupply.ai` | Buyer |
 
-Copy `backend/.env.example` to `backend/.env` and set `MONGODB_URI`, `MONGODB_DB_NAME=velosupply`, and a long random `JWT_SECRET`. The Atlas database user must have `readWrite` access to the `velosupply` database. Set `ADMIN_REGISTRATION_KEY` to a private invitation key before creating an Administrator account; never commit `.env` or real credentials. Production deployments must also set `CORS_ORIGIN` to the deployed frontend origin and terminate TLS at a trusted proxy. After adding the MongoDB driver, run `npm install` in `backend` to refresh the lockfile before using `npm ci` in your deployment pipeline.
+Copy `backend/.env.example` to `backend/.env` and set `MONGODB_URI`, `MONGODB_DB_NAME=velosupply`, and a long random `JWT_SECRET`. The Atlas database user must have `readWrite` access to the `velosupply` database. Atlas starts with an empty application state unless an existing state document is present. Sample catalog, demo users and demo orders are only loaded into Atlas when `SEED_DEMO_DATA=true` is explicitly set in a non-production environment. Local JSON mode continues to seed demo data for development. Set `ADMIN_REGISTRATION_KEY` to a private invitation key before creating an Administrator account; never commit `.env` or real credentials. Production deployments must also set `CORS_ORIGIN` to the deployed frontend origin and terminate TLS at a trusted proxy. After adding the MongoDB driver, run `npm install` in `backend` to refresh the lockfile before using `npm ci` in your deployment pipeline.
 
 ## Routes
 
