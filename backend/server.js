@@ -19,11 +19,21 @@ if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
 const app = express();
 const server = http.createServer(app);
 const websocketServer = new WebSocketServer({ noServer: true });
+const allowedOrigins = new Set(
+  (process.env.CORS_ORIGINS || 'http://localhost:5173')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+);
 let db;
 let writeQueue = Promise.resolve();
 
 app.disable('x-powered-by');
-app.use(cors());
+app.use(cors({
+  origin(origin, callback) {
+    callback(null, !origin || allowedOrigins.has(origin));
+  }
+}));
 app.use(express.json({ limit: '1mb' }));
 
 function persist() {
@@ -504,6 +514,13 @@ function tickTelemetry() {
 }
 
 server.on('upgrade', (request, socket, head) => {
+  const origin = request.headers.origin;
+  if (origin && !allowedOrigins.has(origin)) {
+    socket.write('HTTP/1.1 403 Forbidden\\r\\n\\r\\n');
+    socket.destroy();
+    return;
+  }
+
   let pathname;
   try {
     pathname = new URL(request.url, 'http://localhost').pathname;
