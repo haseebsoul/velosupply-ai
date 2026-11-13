@@ -48,7 +48,7 @@ function productStatus(stock, threshold) {
 }
 
 async function createSeedData() {
-  const passwordHash = await bcrypt.hash('1234', 10);
+  const passwordHash = await bcrypt.hash('Velo@12345', 10);
   const now = new Date();
   const users = [
     { id: 'USER-001', name: 'Haseeb Khan', email: 'admin@velosupply.ai', role: 'admin', passwordHash, createdAt: now.toISOString() },
