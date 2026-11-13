@@ -61,7 +61,7 @@ function createFileAdapter(options) {
   }
 
   async function currentRecords(name) {
-    await queue;
+    if (!transactionContext.getStore()) await queue;
     const pathValue = collectionPath(name);
     const records = getAtPath(state, pathValue);
     return Array.isArray(records) ? records : [];
