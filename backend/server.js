@@ -10,6 +10,7 @@ const jwt = require('jsonwebtoken');
 const { WebSocketServer, WebSocket } = require('ws');
 const { z } = require('zod');
 const { DB_PATH, seedDatabase, productStatus } = require('./seed');
+const { createEmptyProductionState } = require('./production-state');
 const helmet = require('helmet');
 const { createSRE } = require('./sre');
 
@@ -120,14 +121,14 @@ function persist() {
 }
 
 async function loadDatabaseState() {
-  const seededState = await seedDatabase();
   const mongoUri = process.env.MONGODB_URI;
 
   if (!mongoUri) {
     if (process.env.NODE_ENV === 'production') {
       throw new Error('MONGODB_URI must be set in production');
     }
-    return seededState;
+    // Local JSON mode remains a deliberate demo/development environment.
+    return seedDatabase();
   }
 
   const { MongoClient } = require('mongodb');
@@ -146,15 +147,24 @@ async function loadDatabaseState() {
     return stored.state;
   }
 
-  // Demo credentials are for local development only; production starts with an empty user registry.
-  if (process.env.NODE_ENV === 'production') seededState.users = [];
+  // Never silently copy demo catalog/orders into Atlas. It must be an explicit, non-production opt-in.
+  if (process.env.SEED_DEMO_DATA === 'true' && process.env.NODE_ENV !== 'production') {
+    const demoState = await seedDatabase();
+    await stateCollection.updateOne(
+      { _id: 'primary' },
+      { $set: { state: demoState, updatedAt: new Date().toISOString() } },
+      { upsert: true }
+    );
+    return demoState;
+  }
 
+  const emptyState = createEmptyProductionState();
   await stateCollection.updateOne(
     { _id: 'primary' },
-    { $set: { state: seededState, updatedAt: new Date().toISOString() } },
+    { $set: { state: emptyState, updatedAt: new Date().toISOString() } },
     { upsert: true }
   );
-  return seededState;
+  return emptyState;
 }
 function metricsScore() { return Number(db.metrics?.efficiencyScore || 0); }
 
@@ -179,18 +189,18 @@ function refreshMetrics() {
   const now = Date.now();
   const activeOrders = db.orders.filter((order) => !['delivered', 'cancelled'].includes(order.status));
   const activeWarehouses = db.warehouses.filter((hub) => hub.status === 'online').length;
-  const fulfillmentHealth = Math.round((activeWarehouses / db.warehouses.length) * 100);
+  const fulfillmentHealth = db.warehouses.length ? Math.round((activeWarehouses / db.warehouses.length) * 100) : 0;
   db.metrics = {
     gmv24h: Number(db.orders
       .filter((order) => now - Date.parse(order.createdAt) <= 24 * 60 * 60 * 1000 && order.status !== 'cancelled')
       .reduce((sum, order) => sum + order.total, 0).toFixed(2)),
     activeOrders: activeOrders.length,
     fulfillmentHealth,
-    packetsPerSec: db.metrics?.packetsPerSec || 1284,
+    packetsPerSec: db.metrics?.packetsPerSec ?? 0,
     avgLatencyMs: Math.round(db.warehouses.reduce((sum, hub) => sum + hub.latency, 0) / Math.max(db.warehouses.length, 1)),
-    threatsBlocked: db.metrics?.threatsBlocked || 0,
-    detectionTimeMs: db.metrics?.detectionTimeMs || 14,
-    efficiencyScore: db.metrics?.efficiencyScore || 842,
+    threatsBlocked: db.metrics?.threatsBlocked ?? 0,
+    detectionTimeMs: db.metrics?.detectionTimeMs ?? 0,
+    efficiencyScore: db.metrics?.efficiencyScore ?? 0,
     hubCapacities: db.warehouses.map(({ name, capacity }) => ({ name, capacity }))
   };
   return db.metrics;
