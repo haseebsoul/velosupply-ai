@@ -230,8 +230,9 @@ class MongoAdapter {
   }
 
   async insert(name, record, options = {}) {
-    const document = toMongoDocument(name, record);
-    if (!document.id) document.id = String(document._id);
+    const input = clone(record);
+    if (!input.id && !input._id && !input.code && !input.key && !(input.sku && input.hubCode)) input.id = randomUUID();
+    const document = toMongoDocument(name, input);
     await this.collection(name).insertOne(document, this.transactionOptions(options));
     return fromMongoDocument(name, document);
   }
