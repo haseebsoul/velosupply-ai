@@ -200,12 +200,17 @@ function inviteMatches(provided, expected) {
 async function createUserAccount({ name, email, password, role }) {
   const normalizedEmail = email.trim().toLowerCase();
   if (db.users.some((entry) => entry.email === normalizedEmail)) return null;
+
+  const passwordHash = await bcrypt.hash(password, 12);
+  // Re-check after the asynchronous hash so concurrent sign-ups cannot race the duplicate check.
+  if (db.users.some((entry) => entry.email === normalizedEmail)) return null;
+
   const user = {
     id: `USER-${randomUUID()}`,
     name: name.trim(),
     email: normalizedEmail,
     role,
-    passwordHash: await bcrypt.hash(password, 12),
+    passwordHash,
     createdAt: new Date().toISOString()
   };
   db.users.push(user);
