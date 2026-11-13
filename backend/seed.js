@@ -116,6 +116,7 @@ async function createSeedData() {
   }
   return {
     schemaVersion: DB_SCHEMA_VERSION,
+    dataMode: 'demo',
     users,
     warehouses,
     products,
