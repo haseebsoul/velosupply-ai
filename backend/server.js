@@ -439,7 +439,7 @@ async function register(req, res) {
 app.post('/api/auth/register', sre.rateLimit({ limit: 10, windowMs: 60_000, name: 'register' }), validate(registerSchema), asyncRoute(register));
 app.post('/api/register', sre.rateLimit({ limit: 10, windowMs: 60_000, name: 'register-legacy' }), validate(registerSchema), asyncRoute(register));
 
-app.post('/api/orders/checkout', validate(checkoutSchema), asyncRoute(async (req, res) => {
+const checkoutHandler = asyncRoute(async (req, res) => {
   const quantities = new Map();
   for (const item of req.body.items) {
     quantities.set(item.productId, (quantities.get(item.productId) || 0) + item.quantity);
@@ -486,7 +486,9 @@ app.post('/api/orders/checkout', validate(checkoutSchema), asyncRoute(async (req
   refreshMetrics();
   await persist();
   res.status(201).json({ order, event });
-}));
+});
+app.post('/api/orders/checkout', validate(checkoutSchema), checkoutHandler);
+app.post('/api/checkout', validate(checkoutSchema), checkoutHandler);
 
 app.use('/api', authenticate);
 app.use('/api/sre', requireRoles('admin', 'operator'), sre.router);
@@ -658,7 +660,7 @@ app.use((error, req, res, _next) => {
     reqId: req.requestId || null,
     error: status === 500 ? undefined : error.message,
     ...(status === 500 && process.env.NODE_ENV !== 'production' ? { details: error.message } : {})
-  }) + '\\n');
+  }) + '\n');
   res.status(status).json({
     error: status === 500 ? 'Internal server error' : error.message,
     ...(status === 500 && process.env.NODE_ENV !== 'production' ? { details: error.message } : {})
