@@ -43,7 +43,7 @@ export function Sidebar() {
     <nav className="sidebar-navigation" aria-label="Dashboard navigation">
       <div className="side-section">
         <span className="side-section-label">Workspace</span>
-        {primaryLinks.map(([to, label, Icon]) => <NavLink
+        {primaryLinks.filter(([to]) => user?.role !== 'user' || ['/dashboard', '/dashboard/rewards', '/dashboard/messages', '/dashboard/account'].includes(to)).map(([to, label, Icon]) => <NavLink
           key={to}
           to={to}
           end={to === '/dashboard'}
@@ -56,7 +56,7 @@ export function Sidebar() {
         </NavLink>)}
       </div>
 
-      <div className="side-section side-operations">
+      {user?.role !== 'user' && <div className="side-section side-operations">
         <span className="side-section-label">Operations</span>
         {operationsLinks.map(([to, label, Icon]) => <NavLink
           key={to}
@@ -67,7 +67,7 @@ export function Sidebar() {
           <Icon size={17} strokeWidth={1.7} />
           <span className="side-label">{label}</span>
         </NavLink>)}
-      </div>
+      </div>}
 
       {user?.role === 'admin' && <div className="side-section side-admin">
         <span className="side-section-label">Administration</span>

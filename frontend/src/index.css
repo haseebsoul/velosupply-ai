@@ -446,3 +446,8 @@ a { color: inherit; text-decoration: none; }
   .stakeholder-option { grid-template-columns: 90px 1fr; align-items: center; }
   .stakeholder-option small { grid-column: 2; }
 }
+
+/* Final responsive and restraint adjustments */
+.live-dot { box-shadow: none; }
+.canvas-map { background: #141416; }
+@media (max-width: 1000px) { .sidebar { width: 76px; flex-basis: 76px; } }

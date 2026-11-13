@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Copy, Download, RefreshCw, ShieldCheck, Truck, MessageSquareText } from 'lucide-react'
-import { useLocation } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router-dom'
 import { api, errorMessage } from '../../lib/apiClient'
 import { useWebSocket } from '../../lib/useWebSocket'
 import { useAppStore } from '../../store/useAppStore'
@@ -31,16 +31,21 @@ export function CommandPages() {
   const [priorityDismissed, setPriorityDismissed] = useState(false)
   const refresh = useCallback(async () => {
     try {
-      const [m, p, o, h] = await Promise.all([api.get<Metrics>('/metrics'), api.get<Product[]>('/products'), api.get<Order[]>('/orders'), api.get<Warehouse[]>('/warehouses')])
+      const [m, p, o, h] = await Promise.all([
+        api.get<Metrics>('/metrics'),
+        api.get<Product[]>('/products'),
+        api.get<Order[]>('/orders'),
+        user?.role === 'user' ? Promise.resolve({ data: [] as Warehouse[] }) : api.get<Warehouse[]>('/warehouses')
+      ])
       setMetrics(m.data); setProducts(p.data); setOrders(o.data); setWarehouses(h.data); setError('')
     } catch (reason) { setError(errorMessage(reason)) }
-  }, [])
+  }, [user?.role])
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => {
     if (latest?.metrics) setMetrics(latest.metrics)
-    if (latest?.warehouses) setWarehouses(latest.warehouses)
+    if (latest?.warehouses && user?.role !== 'user') setWarehouses(latest.warehouses)
     if (latest?.type === 'ORDER_CREATED' || latest?.type === 'THREAT_RESOLVED') void refresh()
-  }, [latest, refresh])
+  }, [latest, refresh, user?.role])
   useEffect(() => {
     if (pathname === '/dashboard/admin' && user?.role === 'admin') api.get<User[]>('/admin/users').then(({ data }) => setUsers(data)).catch((reason: unknown) => setError(errorMessage(reason)))
   }, [pathname, user?.role])
@@ -59,6 +64,10 @@ export function CommandPages() {
     const link = document.createElement('a'); link.href = url; link.download = 'velosupply-audit-report.csv'; link.click(); URL.revokeObjectURL(url)
   }
 
+  if (user?.role === 'user' && ['/dashboard/topology', '/dashboard/threats', '/dashboard/activity', '/dashboard/manage', '/dashboard/reports'].includes(pathname)) {
+    return <Navigate to="/dashboard" replace />
+  }
+
   if (error && !products.length && !warehouses.length) return <main className="dashboard-content"><div role="alert" className="danger-text">{error}</div><button className="small-button" onClick={() => void refresh()}>Retry</button></main>
   return <main className="dashboard-content">
     {error && <div role="alert" className="danger-text" style={{ marginBottom: 15 }}>{error}</div>}
@@ -69,7 +78,7 @@ export function CommandPages() {
       <div className="dash-grid"><StatCard title="Gross merchandise value · 24h" value={metrics.gmv24h} prefix="$" note="Real-time order value" /><StatCard title="Active orders in transit" value={metrics.activeOrders} note="Across all fulfillment nodes" /><StatCard title="Global fulfillment health" value={metrics.fulfillmentHealth} suffix="%" note="Network-wide SLA performance" /></div>
       <div className="dash-two"><section className="card-ops dash-card"><span className="mono-label">Warehouse capacity allocation</span><div style={{ height: 245 }}><ResponsiveContainer><PieChart><Pie data={data} dataKey="capacity" nameKey="name" innerRadius={62} outerRadius={94} paddingAngle={4}>{data.map((entry, index) => <Cell key={entry.name} fill={palette[index % palette.length]} />)}</Pie><Tooltip contentStyle={{ background: 'var(--bg-ops-card)', border: '1px solid var(--border-ops)', color: 'white' }} /></PieChart></ResponsiveContainer></div>{warehouses.map((hub, i) => <span className="mono-label" key={hub.id} style={{ marginRight: 10, color: palette[i % palette.length] }}>{hub.id.replace('HUB-', '')} {hub.capacity}%</span>)}</section>
         <section className="card-ops dash-card"><span className="mono-label">Order and fulfillment velocity</span><div style={{ height: 270 }}><ResponsiveContainer><AreaChart data={history}><defs><linearGradient id="velocityFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--accent-ops-lime)" stopOpacity={.3} /><stop offset="95%" stopColor="var(--accent-ops-lime)" stopOpacity={0} /></linearGradient></defs><CartesianGrid stroke="var(--border-ops)" vertical={false} /><XAxis dataKey="name" hide /><YAxis stroke="var(--text-ops-muted)" /><Tooltip contentStyle={{ background: 'var(--bg-ops-card)', border: '1px solid var(--border-ops)' }} /><Area type="monotone" dataKey="orders" stroke="var(--accent-ops-lime)" fill="url(#velocityFill)" /></AreaChart></ResponsiveContainer></div></section></div>
-      <section className="card-ops dash-card"><div className="drawer-head"><div><span className="mono-label">Recent activity</span><h3>Live orders &amp; SKU routing</h3></div><button className="small-button" onClick={() => void refresh()}><RefreshCw size={14} /> Refresh</button></div><OrdersTable orders={orders.slice(0, 8)} routeOrder={(id) => request(() => api.post(`/orders/${id}/route`), 'Order route optimized.')} /></section>
+      <section className="card-ops dash-card"><div className="drawer-head"><div><span className="mono-label">Recent activity</span><h3>Live orders &amp; SKU routing</h3></div><button className="small-button" onClick={() => void refresh()}><RefreshCw size={14} /> Refresh</button></div><OrdersTable orders={orders.slice(0, 8)} canRoute={user?.role !== 'user'} routeOrder={(id) => request(() => api.post(`/orders/${id}/route`), 'Order route optimized.')} /></section>
     </>}
 
     {pathname === '/dashboard/topology' && <>
@@ -151,8 +160,8 @@ export function CommandPages() {
   </main>
 }
 
-function OrdersTable({ orders, routeOrder }: { orders: Order[]; routeOrder: (id: string) => void }) {
-  return <div className="table-wrap"><table className="dash-table"><thead><tr><th>Order</th><th>Customer</th><th>Fulfillment</th><th>Status</th><th>Total</th><th>Action</th></tr></thead><tbody>{orders.map((order) => <tr key={order.id}><td className="mono">{order.id}</td><td>{order.customerName}<div className="ops-muted">{order.shippingRegion}</div></td><td>{order.warehouse_hub ?? 'Routing'}</td><td><span className="status-pill">{order.status}</span></td><td className="mono">${(order.total ?? 0).toLocaleString()}</td><td><button className="small-button" onClick={() => routeOrder(order.id)}>Auto-route</button></td></tr>)}</tbody></table>{orders.length === 0 && <p className="ops-copy">No orders are available.</p>}</div>
+function OrdersTable({ orders, canRoute, routeOrder }: { orders: Order[]; canRoute: boolean; routeOrder: (id: string) => void }) {
+  return <div className="table-wrap"><table className="dash-table"><thead><tr><th>Order</th><th>Customer</th><th>Fulfillment</th><th>Status</th><th>Total</th>{canRoute && <th>Action</th>}</tr></thead><tbody>{orders.map((order) => <tr key={order.id}><td className="mono">{order.id}</td><td>{order.customerName}<div className="ops-muted">{order.shippingRegion}</div></td><td>{order.warehouse_hub ?? 'Routing'}</td><td><span className="status-pill">{order.status}</span></td><td className="mono">${(order.total ?? 0).toLocaleString()}</td>{canRoute && <td><button className="small-button" onClick={() => routeOrder(order.id)}>Auto-route</button></td>}</tr>)}</tbody></table>{orders.length === 0 && <p className="ops-copy">No orders are available.</p>}</div>
 }
 
 function UserRow({ account, isSelf, onRole, onDelete }: { account: User; isSelf: boolean; onRole: (role: UserRole) => void; onDelete: () => void }) {

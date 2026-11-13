@@ -75,9 +75,7 @@ function telemetryEvent(event = {}) {
     level: event.level || 'INFO',
     message: event.message || 'Network heartbeat received.',
     timestamp: new Date().toISOString(),
-    metrics: refreshMetrics(),
-    warehouses: db.warehouses,
-    ...(event.order ? { order: event.order } : {})
+    metrics: refreshMetrics()
   };
 }
 
@@ -344,10 +342,15 @@ app.use('/api', authenticate);
 app.get('/api/auth/me', (req, res) => res.json({ user: safeUser(req.user) }));
 app.post('/api/auth/logout', (_req, res) => res.json({ success: true }));
 
-app.get('/api/warehouses', (_req, res) => res.json(db.warehouses));
-app.get('/api/orders', (_req, res) => res.json(db.orders));
-app.get('/api/logs', (_req, res) => res.json(db.logs));
-app.get('/api/threats', (_req, res) => {
+app.get('/api/warehouses', requireRoles('admin', 'operator'), (_req, res) => res.json(db.warehouses));
+app.get('/api/orders', (req, res) => {
+  const orders = req.user.role === 'user'
+    ? db.orders.filter((order) => order.customerEmail.toLowerCase() === req.user.email.toLowerCase())
+    : db.orders;
+  res.json(orders);
+});
+app.get('/api/logs', requireRoles('admin', 'operator'), (_req, res) => res.json(db.logs));
+app.get('/api/threats', requireRoles('admin', 'operator'), (_req, res) => {
   const products = db.products.filter((product) => product.stock <= product.reorder_threshold).map((product) => ({
     id: product.id,
     type: 'inventory',

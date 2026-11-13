@@ -1,6 +1,6 @@
 # VeloSupply AI
 
-VeloSupply AI is a local-first inventory, fulfillment, and commerce demo. It combines an editorial hardware storefront with an authenticated operations console backed by a persistent Express API and live WebSocket telemetry.
+VeloSupply AI is an inventory, fulfillment, and commerce application. It combines an editorial hardware storefront with an authenticated operations console backed by a persistent Express API and live WebSocket telemetry.
 
 ## Architecture
 
@@ -50,8 +50,10 @@ The backend reads `backend/.env` on startup. Set `MONGODB_URI` and `MONGODB_DB_N
 
 - `/` — editorial landing page, network telemetry preview, ROI estimator, and pricing.
 - `/store` — searchable, filterable hardware catalog and checkout drawer.
-- `/login` — authenticated operations entry point.\n- `/register` — React Hook Form and Zod registration with Buyer, Operations and Administrator stakeholder choices; elevated roles require invitation codes.
-- `/dashboard` — live operations metrics and orders.\n- `/dashboard/messages` — system notices and priority-support guidance.
+- `/login` — authenticated operations entry point.
+- `/register` — React Hook Form and Zod registration with Buyer, Operations and Administrator stakeholder choices; elevated roles require invitation codes.
+- `/dashboard` — live operations metrics and orders.
+- `/dashboard/messages` — system notices and priority-support guidance.
 - `/dashboard/topology` — warehouse network and scenario simulations.
 - `/dashboard/threats` — low-stock alerts and AI restock actions.
 - `/dashboard/activity` — telemetry event stream and throughput chart.
@@ -64,7 +66,6 @@ The backend reads `backend/.env` on startup. Set `MONGODB_URI` and `MONGODB_DB_N
 ## API overview
 
 Public endpoints include `GET /api/health`, `GET /api/products`, `POST /api/auth/login`, and `POST /api/auth/register`. Authenticated routes provide profile, checkout, orders, metrics, warehouses, threats, inventory updates, and simulations. Admin user-management endpoints support create, read, role update and delete operations, and require an admin bearer token. Live telemetry is broadcast over `/ws/telemetry`.
-
 
 ## Design credit
 
