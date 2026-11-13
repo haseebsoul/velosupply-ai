@@ -41,7 +41,6 @@ const INDEXES = {
   ],
   products: [
     { key: { sku: 1 }, unique: true, name: 'products_sku_unique' },
-    { key: { batchHash: 1 }, unique: true, sparse: true, name: 'products_batch_hash_unique' },
     { key: { name: 'text' }, name: 'products_name_text' }
   ],
   warehouses: [
