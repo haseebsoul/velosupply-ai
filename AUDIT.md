@@ -529,3 +529,15 @@ No new cluster was created because the existing free cluster already satisfies t
 - Production scenario simulation is blocked unless explicitly enabled.
 
 This direct Atlas inspection confirms the cluster and empty bootstrap record exist; it does not verify the user's local `.env`, GitHub deployment secrets, application IP allowlisting, or a live Express-to-Atlas runtime connection.
+
+
+## Repository Layer Follow-up (v16)
+
+- Added a collection map for the Section 12.1 domain collections and the extra application collections already present in runtime state.
+- Added a MongoDB adapter with per-collection CRUD, index creation, Atlas sessions/transactions, collection hydration, and differential collection persistence. The old application_state record remains read-only during migration.
+- Added a file adapter with the same collection CRUD contract, serialized writes, temp-file/rename replacement, and snapshot rollback for failed transactions.
+- Added safe migration behavior: a legacy application_state/_id=primary document is copied into migrationBackups before migration; migration is attempted only when the new collections are empty. Ambiguous partially populated databases fail closed.
+- The product-level quantity is projected into the stock collection for compatibility. This is not an immutable stock movement ledger and is not yet a source-of-truth stock allocation model.
+- Express route handlers still mutate an in-memory compatibility state object and call repository.writeState; collection-specific controller/service reads and writes and safe multi-instance concurrency remain a follow-up. Do not represent this phase as the entire Section 13.4 requirement completed.
+- The Atlas migration has not been run through the application connection. The verified Atlas Network Access list had no entries; the deployment host's actual egress IP/CIDR is still required.
+- Added npm run migrate:state and repository tests for file CRUD/rollback, collection metadata separation, stock projection, legacy backup/migration, and fail-closed initialization.
