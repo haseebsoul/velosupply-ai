@@ -72,6 +72,8 @@ The Dashboard V14 redesign keeps the existing VeloSupply logistics product, oper
 
 ## Data provenance and what is real
 
+See [Real vs simulated behavior](docs/REAL_VS_SIMULATED.md) and [External dependencies and owner actions](docs/EXTERNAL_DEPENDENCIES.md) for the canonical integration status and required owner credentials/approvals.
+
 The application exposes `dataMode` from `GET /api/health` and `GET /api/metrics`:
 
 - `demo`: generated sample catalog and operational records. The local JSON development fallback uses this mode.
@@ -101,6 +103,8 @@ Atlas Network Access currently has no IP/CIDR entries. Before a local or deploye
 
 - The Atlas adapter writes domain records into named collections and stores only shared application metadata in `application_meta`. It creates the indexes from SRS Section 12.1 and exposes `findById`, `find`, `insert`, `update`, `remove`, `count`, and `withTransaction` operations.
 - The file adapter retains the existing `backend/db.json` format, with serialized writes, temporary-file replacement and snapshot rollback for `withTransaction`.
+- Domain repository services validate buyer filer status, product batch hashes, integer-minor-unit order totals, stock movement references, audit actions and tariff provenance. User and product deletion are modeled as soft-delete/archive operations.
+- `movements` and `auditLogs` are append-only in both adapters: update/delete calls fail, and full-state persistence rejects edits or truncation of existing ledger entries.
 - Automatic migration runs only when `application_meta` and the new collections have no records and the legacy `_id: "primary"` document exists. The source document is copied to `migrationBackups` before the new collections are populated. The backup is not deleted.
 - `npm run migrate:state` runs the migration/verification flow manually. It never loads sample records into a production database.
 - Domain services now define soft-delete behavior for buyers/products, atomic order + item writes using PKR integer minor units, append-only inventory movements with reconciliation, append-only audit events and versioned tariff rules. These services are tested separately but are not all connected to the existing API routes yet.
