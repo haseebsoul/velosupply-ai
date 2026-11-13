@@ -350,7 +350,7 @@ app.get('/health', (_req, res) => res.json({
 }));
 app.get('/livez', (_req, res) => res.json({ status: 'ok', service: 'velosupply-api' }));
 app.get('/readyz', (_req, res) => {
-  const summary = sre.healthSummary();
+  const summary = sre.readinessSummary();
   res.status(summary.status === 'ok' ? 200 : 503).json(summary);
 });
 app.get('/api/metrics', (_req, res) => res.json({
