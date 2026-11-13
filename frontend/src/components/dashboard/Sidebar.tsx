@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import {
-  Activity, Bell, Boxes, ChevronDown, ChevronLeft, ChevronRight,
+  Activity, Bell, Boxes, ChevronDown, ChevronLeft, ChevronRight, Menu, X,
   CircleGauge, FileText, Gift, LayoutDashboard, LogOut, Network,
-  Package, Settings2, Shield, ShoppingBag, Store, Users
+  Package, Settings2, Shield, Store, Users
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
@@ -93,7 +93,7 @@ export function Sidebar() {
       </div>
     </motion.aside>
     <button className="sidebar-mobile-toggle" type="button" aria-label={mobileOpen ? 'Close navigation' : 'Open navigation'} onClick={() => setMobileOpen((value) => !value)}>
-      {mobileOpen ? '×' : '☰'}
+      {mobileOpen ? <X size={18} /> : <Menu size={18} />}
     </button>
   </>
 }
