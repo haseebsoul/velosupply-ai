@@ -151,23 +151,19 @@ export function ReliabilityPage() {
         <p className="ops-copy">Budget above 50%: normal. 20–50%: freeze risky changes. Below 20% or burn rate above 14: danger.</p>
       </section>
 
-      <section className="dash-two">
-        <article className="card-ops dash-card">
-          <span className="mono-label">TELEMETRY · LAST 120 TICKS</span><h2>Request volume &amp; latency</h2>
-          <div style={{ height: 260 }}><ResponsiveContainer><AreaChart data={samples}>
-            <CartesianGrid stroke="var(--border-ops)" vertical={false} /><XAxis dataKey="label" hide /><YAxis yAxisId="left" stroke="var(--text-ops-muted)" /><YAxis yAxisId="right" orientation="right" stroke="var(--text-ops-muted)" /><Tooltip />
-            <Area yAxisId="left" type="monotone" dataKey="rps" name="Requests/sec" stroke="var(--accent-ops-lime)" fill="var(--accent-ops-lime)" fillOpacity={.12} />
-            <Area yAxisId="right" type="monotone" dataKey="p95" name="p95 ms" stroke="var(--accent-ops-orange)" fill="var(--accent-ops-orange)" fillOpacity={.08} />
+      <section className="dash-grid">
+        {[
+          { title: 'Requests per second', dataKey: 'rps', stroke: 'var(--navy-700)', fill: 'var(--navy-50)' },
+          { title: 'P95 latency · ms', dataKey: 'p95', stroke: 'var(--orange-500)', fill: 'var(--orange-50)' },
+          { title: 'Error rate · %', dataKey: 'errorPercent', stroke: 'var(--orange-600)', fill: 'var(--orange-50)' },
+          { title: 'Checkout throughput', dataKey: 'orderThroughput', stroke: 'var(--navy-700)', fill: 'var(--navy-50)' }
+        ].map((chart) => <article className="card-ops dash-card" key={chart.dataKey}>
+          <span className="mono-label">TELEMETRY · LAST 120 TICKS</span><h2>{chart.title}</h2>
+          <div style={{ height: 230 }}><ResponsiveContainer><AreaChart data={samples}>
+            <CartesianGrid stroke="var(--border-ops)" vertical={false} /><XAxis dataKey="label" hide /><YAxis stroke="var(--ink-muted)" /><Tooltip />
+            <Area type="monotone" dataKey={chart.dataKey} name={chart.title} stroke={chart.stroke} fill={chart.fill} fillOpacity={0.55} />
           </AreaChart></ResponsiveContainer></div>
-        </article>
-        <article className="card-ops dash-card">
-          <span className="mono-label">ERROR RATE &amp; ORDER THROUGHPUT</span><h2>Request quality</h2>
-          <div style={{ height: 260 }}><ResponsiveContainer><AreaChart data={samples}>
-            <CartesianGrid stroke="var(--border-ops)" vertical={false} /><XAxis dataKey="label" hide /><YAxis stroke="var(--text-ops-muted)" /><Tooltip />
-            <Area type="monotone" dataKey="errorPercent" name="Error rate %" stroke="var(--accent-ops-orange)" fill="var(--accent-ops-orange)" fillOpacity={.1} />
-            <Area type="monotone" dataKey="orderThroughput" name="Checkout throughput" stroke="var(--accent-ops-lime)" fill="var(--accent-ops-lime)" fillOpacity={.1} />
-          </AreaChart></ResponsiveContainer></div>
-        </article>
+        </article>)}
       </section>
 
       <section className="card-ops dash-card">
