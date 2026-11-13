@@ -3,6 +3,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const {
   STATE_PATHS,
   clone,
@@ -33,14 +34,14 @@ function createFileAdapter(options) {
 
   let state = null;
   let queue = Promise.resolve();
-  let transactionActive = false;
+  const transactionContext = new AsyncLocalStorage();
 
   async function flush() {
     await writeAtomic(filePath, state);
   }
 
   function serializeWrite(mutator) {
-    if (transactionActive) {
+    if (transactionContext.getStore()) {
       mutator();
       return Promise.resolve();
     }
@@ -174,18 +175,17 @@ function createFileAdapter(options) {
     async withTransaction(callback) {
       const operation = queue.catch(() => {}).then(async () => {
         const before = clone(state);
-        transactionActive = true;
-        try {
-          const result = await callback({ session: null, repository: adapter });
-          await flush();
-          return result;
-        } catch (error) {
-          state = before;
-          await flush();
-          throw error;
-        } finally {
-          transactionActive = false;
-        }
+        return transactionContext.run({ adapter }, async () => {
+          try {
+            const result = await callback({ session: null, repository: adapter });
+            await flush();
+            return result;
+          } catch (error) {
+            state = before;
+            await flush();
+            throw error;
+          }
+        });
       });
       queue = operation.catch(() => {});
       return operation;
