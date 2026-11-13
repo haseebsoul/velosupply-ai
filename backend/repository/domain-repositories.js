@@ -171,10 +171,11 @@ function createDomainRepositories(adapter) {
     return rows.reduce((balance, movement) => {
       const qty = Number(movement.qty) || 0;
       if (movement.type === 'RECEIVE' || movement.type === 'TRANSFER_IN' || movement.type === 'RETURN_IN') balance.onHand += qty;
-      if (movement.type === 'SHIP' || movement.type === 'TRANSFER_OUT') {
+      if (movement.type === 'SHIP') {
         balance.onHand -= qty;
         balance.reserved -= qty;
       }
+      if (movement.type === 'TRANSFER_OUT') balance.onHand -= qty;
       if (movement.type === 'ADJUST') balance.onHand += qty;
       if (movement.type === 'RESERVE') balance.reserved += qty;
       if (movement.type === 'RELEASE') balance.reserved -= qty;
