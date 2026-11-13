@@ -116,12 +116,13 @@ function createDomainRepositories(adapter) {
         };
       });
 
-      const subtotalEx = items.reduce((sum, item) => sum + item.lineEx, 0);
-      const gst = items.reduce((sum, item) => sum + item.lineGst, 0);
-      const deliveryFee = subtotalEx > 150000 ? 0 : Number(deliveryFees[city]);
-      if (!Number.isSafeInteger(deliveryFee) || deliveryFee < 0) throw new TypeError('Delivery fee must be a non-negative whole PKR amount');
-      const totalPkr = subtotalEx + gst + deliveryFee;
-      if (![subtotalEx, gst, totalPkr].every(Number.isSafeInteger)) throw new TypeError('PKR order totals exceed the safe integer range');
+      const subtotalExMinor = items.reduce((sum, item) => sum + item.lineExMinor, 0);
+      const gstMinor = items.reduce((sum, item) => sum + item.lineGstMinor, 0);
+      const deliveryFeePkr = subtotalExMinor > 15000000 ? 0 : Number(deliveryFees[city]);
+      if (!Number.isSafeInteger(deliveryFeePkr) || deliveryFeePkr < 0) throw new TypeError('Delivery fee must be a non-negative whole PKR amount');
+      const deliveryFeeMinor = deliveryFeePkr * 100;
+      const totalMinor = subtotalExMinor + gstMinor + deliveryFeeMinor;
+      if (![subtotalExMinor, gstMinor, deliveryFeeMinor, totalMinor].every(Number.isSafeInteger)) throw new TypeError('PKR order totals exceed the safe integer range');
 
       const at = new Date().toISOString();
       const order = {
@@ -131,8 +132,8 @@ function createDomainRepositories(adapter) {
         buyerId,
         userId: buyerId,
         city,
-        items: items.map(({ sku, name, qty, unitExGstPkr }) => ({ sku, name, qty, unitExGstPkr })),
-        price: { subtotalEx, gst, deliveryFee, totalPkr },
+        items: items.map(({ sku, name, qty, unitPriceMinor }) => ({ sku, name, qty, unitPriceMinor })),
+        price: { currency: 'PKR', subtotalExMinor, gstMinor, deliveryFeeMinor, totalMinor },
         paymentState: orderInput.paymentState || 'pending',
         status: orderInput.status || 'PLACED',
         hubs: Array.isArray(orderInput.hubs) ? orderInput.hubs : [],
@@ -153,7 +154,10 @@ function createDomainRepositories(adapter) {
             sku: item.sku,
             name: item.name,
             qty: item.qty,
-            unitExGstPkr: item.unitExGstPkr
+            unitPriceMinor: item.unitPriceMinor,
+            lineExMinor: item.lineExMinor,
+            lineGstMinor: item.lineGstMinor,
+            currency: 'PKR'
           }));
         }
         return { order: saved, items: savedItems };
