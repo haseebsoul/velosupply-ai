@@ -36,9 +36,9 @@ cd frontend; npm run dev
 
 Open the Vite URL printed in the frontend terminal (normally `http://localhost:5173`). The backend health probe is available at `http://localhost:8000/api/health`.
 
-## Demo accounts
+## Development and production accounts
 
-All seeded demo accounts use password `1234`.
+Development seed accounts use password `1234`. They are created only when `NODE_ENV` is not `production` and Atlas has no application state yet. A new production database instead requires a bootstrap administrator name, email and password (at least 16 characters), and starts without sample orders or demo users.
 
 | Email | Role |
 | --- | --- |
@@ -46,7 +46,7 @@ All seeded demo accounts use password `1234`.
 | `operator@velosupply.ai` | Operations |
 | `buyer@velosupply.ai` | Buyer |
 
-The backend reads `backend/.env` on startup. Set `MONGODB_URI` and `MONGODB_DB_NAME` there. Set strong, unique `JWT_SECRET`, `ADMIN_INVITE_CODE` and `OPERATOR_INVITE_CODE` values before sharing the app. Buyers can self-register; administrator and operations registrations require their matching invitation code. Keep `.env` out of Git and restrict the Atlas network access list to trusted application IPs. Production deployments must terminate TLS at a trusted proxy.
+The backend reads `backend/.env` on startup. Set `MONGODB_URI` and `MONGODB_DB_NAME` there. Set strong, unique `JWT_SECRET`, `ADMIN_INVITE_CODE` and `OPERATOR_INVITE_CODE` values before sharing the app. For first production startup, also set `BOOTSTRAP_ADMIN_NAME`, `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD`. Buyers can self-register; administrator and operations registrations require their matching invitation code. Keep `.env` out of Git and restrict the Atlas network access list to trusted application IPs. Production deployments must terminate TLS at a trusted proxy.
 
 ## Routes
 

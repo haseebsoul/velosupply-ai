@@ -47,14 +47,27 @@ function productStatus(stock, threshold) {
   return 'optimal';
 }
 
-async function createSeedData() {
-  const passwordHash = await bcrypt.hash('1234', 10);
+async function createSeedData(options = {}) {
+  const bootstrapAdmin = options.bootstrapAdmin;
+  const passwordHash = await bcrypt.hash(
+    bootstrapAdmin?.password || '1234',
+    options.production ? 12 : 10
+  );
   const now = new Date();
-  const users = [
-    { id: 'USER-001', name: 'Haseeb Khan', email: 'admin@velosupply.ai', role: 'admin', passwordHash, createdAt: now.toISOString() },
-    { id: 'USER-002', name: 'Sarah Chen', email: 'operator@velosupply.ai', role: 'operator', passwordHash, createdAt: now.toISOString() },
-    { id: 'USER-003', name: 'Marcus Vance', email: 'buyer@velosupply.ai', role: 'user', passwordHash, createdAt: now.toISOString() }
-  ];
+  const users = bootstrapAdmin
+    ? [{
+        id: 'USER-001',
+        name: bootstrapAdmin.name.trim(),
+        email: bootstrapAdmin.email.trim().toLowerCase(),
+        role: 'admin',
+        passwordHash,
+        createdAt: now.toISOString()
+      }]
+    : [
+        { id: 'USER-001', name: 'Haseeb Khan', email: 'admin@velosupply.ai', role: 'admin', passwordHash, createdAt: now.toISOString() },
+        { id: 'USER-002', name: 'Sarah Chen', email: 'operator@velosupply.ai', role: 'operator', passwordHash, createdAt: now.toISOString() },
+        { id: 'USER-003', name: 'Marcus Vance', email: 'buyer@velosupply.ai', role: 'user', passwordHash, createdAt: now.toISOString() }
+      ];
   const products = productDefinitions.map(([sku, name, category, description, price, stock, threshold, velocity], index) => {
     const warehouse = warehouses[index % warehouses.length];
     return {
@@ -68,7 +81,7 @@ async function createSeedData() {
       updatedAt: now.toISOString()
     };
   });
-  const orders = Array.from({ length: 12 }, (_, index) => {
+  const orders = options.production ? [] : Array.from({ length: 12 }, (_, index) => {
     const product = products[index * 2];
     const quantity = index % 3 + 1;
     return {
@@ -96,7 +109,7 @@ async function createSeedData() {
     message: 'VeloSupply AI network initialized; all services operational.',
     timestamp: now.toISOString()
   }];
-  for (let index = 0; index < 19; index += 1) {
+  for (let index = 0; !options.production && index < 19; index += 1) {
     const order = orders[index % orders.length];
     const product = products[index % products.length];
     const messages = [

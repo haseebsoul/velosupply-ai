@@ -34,7 +34,26 @@ async function connectState() {
     if (error.code !== 'ENOENT') throw error;
   }
 
-  if (!initialState) initialState = await createSeedData();
+  if (!initialState) {
+    if (process.env.NODE_ENV === 'production') {
+      const name = process.env.BOOTSTRAP_ADMIN_NAME?.trim();
+      const email = process.env.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase();
+      const password = process.env.BOOTSTRAP_ADMIN_PASSWORD || '';
+
+      if (!name || name.length < 2 || !email || !email.includes('@') || password.length < 16) {
+        throw new Error(
+          'For a new production database, set BOOTSTRAP_ADMIN_NAME, BOOTSTRAP_ADMIN_EMAIL, and BOOTSTRAP_ADMIN_PASSWORD (16+ characters) before starting the API.'
+        );
+      }
+
+      initialState = await createSeedData({
+        production: true,
+        bootstrapAdmin: { name, email, password }
+      });
+    } else {
+      initialState = await createSeedData();
+    }
+  }
 
   await stateCollection.insertOne({
     _id: 'primary',
