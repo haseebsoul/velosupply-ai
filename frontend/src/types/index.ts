@@ -14,6 +14,7 @@ export interface Product {
   description: string
   category: string
   price: number
+  priceExGstPkr?: number
   stock: number
   reorder_threshold: number
   warehouse_hub: string
