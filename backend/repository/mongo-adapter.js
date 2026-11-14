@@ -2,6 +2,7 @@
 
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { randomUUID } = require('node:crypto');
+const { Long } = require('mongodb');
 const {
   COLLECTION_NAMES,
   INDEXES,
@@ -24,8 +25,35 @@ const BACKUP_COLLECTION = 'migrationBackups';
 const STORAGE_SCHEMA_VERSION = 1;
 const TTL_COLLECTIONS = new Set(['healthChecks', 'idempotencyKeys', 'loginAttempts']);
 
+function convertMinorUnitsToLong(value) {
+  if (Array.isArray(value)) return value.map(convertMinorUnitsToLong);
+  if (!value || typeof value !== 'object') return value;
+  const result = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (/Minor$/.test(key) && typeof child === 'number' && Number.isSafeInteger(child)) {
+      result[key] = Long.fromNumber(child);
+    } else {
+      result[key] = convertMinorUnitsToLong(child);
+    }
+  }
+  return result;
+}
+
+function convertLongsToNumbers(value) {
+  if (Array.isArray(value)) return value.map(convertLongsToNumbers);
+  if (!value || typeof value !== 'object') return value;
+  if (value._bsontype === 'Long') {
+    const number = value.toNumber();
+    if (!Number.isSafeInteger(number)) throw new RangeError('MongoDB integer minor-unit value exceeds JavaScript safe integer range');
+    return number;
+  }
+  const result = {};
+  for (const [key, child] of Object.entries(value)) result[key] = convertLongsToNumbers(child);
+  return result;
+}
+
 function toMongoDocument(name, record) {
-  const document = clone(record);
+  const document = convertMinorUnitsToLong(clone(record));
   document._id = documentId(document);
   delete document._idOriginal;
   if (TTL_COLLECTIONS.has(name) && typeof document.at === 'string') {
@@ -36,7 +64,7 @@ function toMongoDocument(name, record) {
 }
 
 function fromMongoDocument(name, document) {
-  const result = stripMongoId(document);
+  const result = stripMongoId(convertLongsToNumbers(document));
   if (!result.id && document._id !== undefined) result.id = String(document._id);
   if (TTL_COLLECTIONS.has(name) && result.at instanceof Date) result.at = result.at.toISOString();
   return result;
@@ -279,7 +307,7 @@ class MongoAdapter {
       error.code = 'IMMUTABLE_COLLECTION';
       throw error;
     }
-    const cleanChanges = clone(changes);
+    const cleanChanges = convertMinorUnitsToLong(clone(changes));
     delete cleanChanges._id;
     await this.collection(name).updateOne(
       { _id: String(id) },
