@@ -468,6 +468,10 @@ const warehouseUpdateSchema = z.object({
 const refundRequestSchema = z.object({
   reason: z.string().trim().min(2).max(300)
 }).strict();
+const codCollectionSchema = z.object({
+  amountMinor: z.number().int().positive(),
+  receiptReference: z.string().trim().min(3).max(120)
+}).strict();
 const roleSchema = z.object({
   role: z.enum(['admin', 'operator', 'user'])
 }).strict();
@@ -912,6 +916,29 @@ app.get('/api/refunds', asyncRoute(async (req, res) => {
   const rows = await repository.find('refunds', {});
   if (req.user.role === 'admin' || req.user.role === 'operator') return res.json(rows);
   return res.json(rows.filter((entry) => entry.buyerId === req.user.id));
+}));
+app.post('/api/orders/:id/payment/collection', requireRoles('admin', 'operator'), validate(codCollectionSchema), asyncRoute(async (req, res) => {
+  const idempotencyKey = req.get('Idempotency-Key');
+  if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required' });
+  try {
+    const order = await domainRepositories.orders.recordCodCollection(req.params.id, {
+      ...req.body, idempotencyKey
+    }, { id: req.user.id, role: req.user.role });
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    db = await repository.readState();
+    return res.json({
+      order,
+      paymentCollection: order.paymentCollection,
+      verification: 'operator-attestation',
+      message: 'COD cash collection was recorded by an authorized operator. This is a manual attestation, not an external payment-provider verification.'
+    });
+  } catch (error) {
+    if (error.code === 'INVALID_TRANSITION' || error.code === 'PAYMENT_ALREADY_COLLECTED' || error.code === 'PAYMENT_AMOUNT_MISMATCH') {
+      return res.status(409).json({ error: error.code, message: error.message });
+    }
+    if (error.code === 'KEY_REUSED') return res.status(422).json({ error: error.code, message: error.message });
+    throw error;
+  }
 }));
 app.post('/api/orders/:id/refunds', validate(refundRequestSchema), asyncRoute(async (req, res) => {
   const order = await repository.findById('orders', req.params.id);
