@@ -698,7 +698,7 @@ app.patch('/api/inventory/:id', requireRoles('admin', 'operator'), validate(inve
       await domainRepositories.stockMovements.adjust({
         sku: product.sku,
         hubCode: product.warehouse_hub || 'unassigned',
-        delta: req.body.stock - product.stock,
+        targetOnHand: req.body.stock,
         reason: req.body.reason,
         actorId: req.user.id,
         actorRole: req.user.role,
