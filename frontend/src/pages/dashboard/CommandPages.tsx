@@ -74,8 +74,8 @@ export function CommandPages() {
     {notice && <div role="status" className="success-text" style={{ marginBottom: 15 }}>{notice}</div>}
 
     {pathname === '/dashboard' && <>
-      <div className="drawer-head"><div><h1 className="ops-heading">Good morning, {user?.name ?? 'Operator'}.</h1><p className="ops-copy">Your global fulfillment network is in view.</p></div><span className="mono-label"><i className="live-dot" /> {connected ? 'TELEMETRY SYNC ACTIVE' : 'RECONNECTING'}</span></div>
-      <div className="dash-grid"><StatCard title="24H GROSS MERCHANDISE VALUE" value={metrics.gmv24h} prefix="$" note="Real-time order value" /><StatCard title="ACTIVE ORDERS IN TRANSIT" value={metrics.activeOrders} note="Across all fulfillment nodes" /><StatCard title="GLOBAL FULFILLMENT HEALTH" value={metrics.fulfillmentHealth} suffix="%" note="Network-wide SLA performance" /></div>
+      <div className="drawer-head"><div><h1 className="ops-heading">Good morning, {user?.name ?? 'Operator'}.</h1><p className="ops-copy">Your Pakistan fulfillment network is in view.</p></div><span className="mono-label"><i className="live-dot" /> {connected ? 'TELEMETRY SYNC ACTIVE' : 'RECONNECTING'}</span></div>
+      <div className="dash-grid"><StatCard title="24H GROSS MERCHANDISE VALUE" value={metrics.gmv24h} prefix="Rs " note="PKR demo/order value" /><StatCard title="ACTIVE ORDERS IN TRANSIT" value={metrics.activeOrders} note="Across all fulfillment nodes" /><StatCard title="PAKISTAN FULFILLMENT HEALTH" value={metrics.fulfillmentHealth} suffix="%" note="Network-wide SLA performance" /></div>
       <div className="dash-two"><section className="card-ops dash-card capacity-card">
           <div className="capacity-card-heading"><div><span className="mono-label">WAREHOUSE CAPACITY</span><h3>Network utilization</h3></div><strong className="capacity-total">{Math.round(warehouses.reduce((sum, hub) => sum + hub.capacity, 0) / Math.max(warehouses.length, 1))}%</strong></div>
           <div className="capacity-meter-list">{warehouses.map((hub) => <div className="capacity-meter-row" key={hub.id}>
@@ -190,7 +190,7 @@ function OrdersTable({ orders, routeOrder }: { orders: Order[]; routeOrder: (id:
 
 function UserRow({ account, isSelf, onRole, onDelete }: { account: User; isSelf: boolean; onRole: (role: UserRole) => void; onDelete: () => void }) {
   const [confirm, setConfirm] = useState(false)
-  return <tr><td>{account.name}</td><td>{account.email}</td><td><select className="field" value={account.role} onChange={(event) => onRole(event.target.value as UserRole)} style={{ width: 125, padding: 8 }}><option value="admin">admin</option><option value="operator">operator</option><option value="user">user</option></select></td><td>{isSelf ? <span className="ops-muted">Current user</span> : confirm ? <span className="inline-actions"><button className="small-button danger-text" onClick={onDelete}>Confirm delete</button><button className="small-button" onClick={() => setConfirm(false)}>Cancel</button></span> : <button className="small-button" onClick={() => setConfirm(true)}>Delete</button>}</td></tr>
+  return <tr><td>{account.name}</td><td>{account.email}</td><td><select className="field" value={account.role} onChange={(event) => onRole(event.target.value as UserRole)} style={{ width: 125, padding: 8 }}><option value="admin">admin</option><option value="operator">operator</option><option value="buyer">buyer</option></select></td><td>{isSelf ? <span className="ops-muted">Current user</span> : confirm ? <span className="inline-actions"><button className="small-button danger-text" onClick={onDelete}>Confirm delete</button><button className="small-button" onClick={() => setConfirm(false)}>Cancel</button></span> : <button className="small-button" onClick={() => setConfirm(true)}>Delete</button>}</td></tr>
 }
 
 function AccountPanel() {
