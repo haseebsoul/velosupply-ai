@@ -676,27 +676,94 @@ function createDomainRepositories(adapter) {
       if (fromHubCode === toHubCode) throw new TypeError('Transfer hubs must be different');
       const qty = integer(input.qty, 'qty', 1);
       const actorId = requiredString(input.actorId || 'system', 'actorId');
+      const reason = requiredString(input.reason, 'reason');
       const at = input.at || new Date().toISOString();
       const refId = input.refId || 'TRANSFER-' + randomUUID();
 
       return adapter.withTransaction(async ({ repository }) => {
-        const sourceRows = await repository.find('movements', { sku, hubCode: fromHubCode });
-        const source = movementBalance(sourceRows);
-        if (source.onHand - source.reserved < qty) {
+        const warehousesFound = await repository.find('warehouses', {
+          code: { $in: [fromHubCode, toHubCode] }
+        });
+        if (warehousesFound.length !== 2) {
+          const error = new Error('Both transfer warehouses must exist');
+          error.code = 'WAREHOUSE_NOT_FOUND';
+          throw error;
+        }
+        const sourceStocks = await repository.find('stock', { sku, hubCode: fromHubCode }, { limit: 1 });
+        const destinationStocks = await repository.find('stock', { sku, hubCode: toHubCode }, { limit: 1 });
+        const sourceStock = sourceStocks[0];
+        if (!sourceStock) {
+          const error = new Error('Source stock row not found');
+          error.code = 'STOCK_NOT_FOUND';
+          throw error;
+        }
+        const destinationStock = destinationStocks[0] || {
+          id: sku + ':' + toHubCode, sku, hubCode: toHubCode,
+          onHand: 0, reserved: 0
+        };
+        const sourceHistory = await repository.find('movements', { sku, hubCode: fromHubCode });
+        const destinationHistory = await repository.find('movements', { sku, hubCode: toHubCode });
+        if (!sourceHistory.length && sourceStock.onHand > 0) {
+          await repository.insert('movements', {
+            id: 'MOV-' + randomUUID(), sku, hubCode: fromHubCode, type: 'RECEIVE',
+            qty: sourceStock.onHand, reason: 'opening_balance',
+            refType: 'opening_balance', refId: 'legacy-opening:' + sku + ':' + fromHubCode,
+            actorId: 'system', at
+          });
+        }
+        if (!destinationHistory.length && destinationStock.onHand > 0) {
+          await repository.insert('movements', {
+            id: 'MOV-' + randomUUID(), sku, hubCode: toHubCode, type: 'RECEIVE',
+            qty: destinationStock.onHand, reason: 'opening_balance',
+            refType: 'opening_balance', refId: 'legacy-opening:' + sku + ':' + toHubCode,
+            actorId: 'system', at
+          });
+        }
+        const sourceBalance = movementBalance(sourceHistory.length
+          ? sourceHistory
+          : sourceStock.onHand > 0 ? [{ type: 'RECEIVE', qty: sourceStock.onHand }] : []);
+        if (sourceBalance.onHand - sourceBalance.reserved < qty) {
           const error = new Error('Insufficient available stock for transfer');
           error.code = 'NEGATIVE_STOCK';
           throw error;
         }
+
         const transferOut = await repository.insert('movements', {
           id: 'MOV-' + randomUUID(), sku, hubCode: fromHubCode, type: 'TRANSFER_OUT',
-          qty, reason: requiredString(input.reason, 'reason'),
-          refType: 'transfer', refId, actorId, at
+          qty, reason, refType: 'transfer', refId, actorId, at
         });
         const transferIn = await repository.insert('movements', {
           id: 'MOV-' + randomUUID(), sku, hubCode: toHubCode, type: 'TRANSFER_IN',
-          qty, reason: input.reason, refType: 'transfer', refId, actorId, at
+          qty, reason, refType: 'transfer', refId, actorId, at
         });
-        return { transferOut, transferIn, refId };
+        await repository.update('stock', sourceStock.id, {
+          ...sourceStock, onHand: sourceStock.onHand - qty
+        });
+        if (destinationStocks[0]) {
+          await repository.update('stock', destinationStock.id, {
+            ...destinationStock, onHand: destinationStock.onHand + qty
+          });
+        } else {
+          await repository.insert('stock', { ...destinationStock, onHand: qty });
+        }
+        const productsAtSource = await repository.find('products', { sku, warehouse_hub: fromHubCode });
+        for (const product of productsAtSource) {
+          await repository.update('products', product.id, {
+            stock: sourceStock.onHand - qty, updatedAt: at
+          });
+        }
+        const productsAtDestination = await repository.find('products', { sku, warehouse_hub: toHubCode });
+        for (const product of productsAtDestination) {
+          await repository.update('products', product.id, {
+            stock: destinationStock.onHand + qty, updatedAt: at
+          });
+        }
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId, actorRole: input.actorRole || 'operator',
+          action: 'inventory.transfer', targetType: 'stock', targetId: sku,
+          meta: { fromHubCode, toHubCode, qty, refId }, at
+        });
+        return { transferOut, transferIn, refId, sourceOnHand: sourceStock.onHand - qty, destinationOnHand: destinationStock.onHand + qty };
       });
     },
 
