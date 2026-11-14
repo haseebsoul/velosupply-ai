@@ -142,9 +142,10 @@ function createDomainRepositories(adapter) {
       });
     },
     async update(id, changes, actor) {
-      const allowed = ['name', 'category', 'description', 'priceExGstPkr', 'leadDays', 'status', 'featured', 'supplierId'];
+      const allowed = ['name', 'category', 'description', 'price', 'priceExGstPkr', 'leadDays', 'status', 'featured', 'supplierId'];
       for (const key of Object.keys(changes)) if (!allowed.includes(key)) throw new TypeError('Unsupported product field: ' + key);
       if (changes.priceExGstPkr !== undefined) integer(changes.priceExGstPkr, 'priceExGstPkr');
+      if (changes.price !== undefined && (!Number.isFinite(changes.price) || changes.price < 0)) throw new TypeError('price must be a non-negative finite value');
       if (changes.leadDays !== undefined) integer(changes.leadDays, 'leadDays');
       return adapter.withTransaction(async ({ repository }) => {
         const product = await repository.findById('products', id);
