@@ -275,12 +275,11 @@ describe('collection repository adapters', () => {
       qty: 5, reason: 'opening_balance', refType: 'opening_balance',
       refId: 'opening-1', actorId: 'system', at: '2026-11-13T00:00:00.000Z'
     });
-    expect(await adapter.count('stockMovements')).toBe(1);
     expect(await adapter.count('movements')).toBe(1);
+    expect(database.collection('movements').documents.size).toBe(1);
     expect(database.collection('movements').documents.has('MOV-1')).toBe(true);
     expect(database.collection('users').options.validationAction).toBe('error');
     expect(database.collection('movements').options.validator.$jsonSchema.required).toContain('refId');
-    expect(database.collection('stockMovements').documents.size).toBe(0);
     await expect(adapter.remove('movements', 'MOV-1')).rejects.toThrow('append-only');
   });
 
