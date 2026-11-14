@@ -600,41 +600,82 @@ async function writeAtomic(filePath, data) {
 }
 
 function hasCurrentSchema(current) {
-  if (!current || typeof current !== 'object' || Array.isArray(current) || current.schemaVersion !== DB_SCHEMA_VERSION) {
-    return false;
-  }
-  const requiredHubIds = ['HUB-EWR', 'HUB-AUS', 'HUB-RTM', 'HUB-DXB', 'HUB-SIN'];
-  const productFieldsValid = Array.isArray(current.products) && current.products.length >= 24 &&
+  if (!current || typeof current !== 'object' || Array.isArray(current) ||
+      current.schemaVersion !== DB_SCHEMA_VERSION ||
+      current.demoSeedVersion !== DEMO_SEED_VERSION ||
+      current.dataMode !== 'demo') return false;
+
+  const requiredHubIds = ['HUB-KHI', 'HUB-LHE', 'HUB-ISB', 'HUB-FSD', 'HUB-PEW', 'HUB-UET'];
+  const expectedSkus = productDefinitions.map(([sku]) => sku).sort();
+  const productSkus = Array.isArray(current.products)
+    ? current.products.map((product) => product.sku).sort() : [];
+  const productFieldsValid = productSkus.length === expectedSkus.length &&
+    expectedSkus.every((sku, index) => productSkus[index] === sku) &&
     current.products.every((product) =>
-      ['Edge Gateways', 'Smart Sensors', 'Server Racks', 'Power Modules'].includes(product.category) &&
-      typeof product.reorder_threshold === 'number' &&
+      Number.isSafeInteger(product.priceExGstPkr) &&
+      product.priceExGstPkr > 0 &&
+      Number.isSafeInteger(product.stock) &&
+      typeof product.batchHash === 'string' &&
+      typeof product.originWarehouseId === 'string' &&
       typeof product.warehouse_hub === 'string' &&
-      typeof product.velocity_per_hr === 'number'
+      typeof product.leadDays === 'number'
     );
   const warehouseFieldsValid = Array.isArray(current.warehouses) &&
+    current.warehouses.length === requiredHubIds.length &&
     requiredHubIds.every((id) => current.warehouses.some((hub) =>
-      hub.id === id &&
-      Array.isArray(hub.coords) &&
-      typeof hub.capacity === 'number' &&
-      typeof hub.latency === 'number' &&
-      ['online', 'warning', 'offline'].includes(hub.status)
+      hub.id === id && hub.code === id && hub.seedOrigin === true &&
+      typeof hub.name === 'string' && typeof hub.city === 'string' &&
+      typeof hub.capacity === 'number' && Array.isArray(hub.coords)
     ));
-  const usersValid = Array.isArray(current.users) && current.users.length > 0 &&
+  const usersValid = Array.isArray(current.users) &&
+    current.users.length === 26 &&
+    current.users.filter((user) => user.role === 'admin').length === 1 &&
+    current.users.filter((user) => user.role === 'operator').length === 4 &&
+    current.users.filter((user) => user.role === 'buyer' &&
+      user.filerStatus === 'unverified').length === 21 &&
     current.users.every((user) =>
       typeof user.id === 'string' &&
       typeof user.name === 'string' &&
       typeof user.email === 'string' &&
-      ['admin', 'operator', 'user'].includes(user.role) &&
-      typeof user.passwordHash === 'string'
+      typeof user.passwordHash === 'string' &&
+      user.isActive === true && user.demoRecord === true
     );
-  const ordersValid = Array.isArray(current.orders) && current.orders.length >= 12 &&
+  const ordersValid = Array.isArray(current.orders) && current.orders.length === 60 &&
     current.orders.every((order) =>
       typeof order.id === 'string' &&
-      typeof order.shippingRegion === 'string' &&
-      typeof order.warehouse_hub === 'string' &&
-      typeof order.total === 'number' &&
-      Array.isArray(order.items)
+      typeof order.code === 'string' &&
+      typeof order.buyerId === 'string' &&
+      typeof order.city === 'string' &&
+      order.currency === 'PKR' &&
+      Number.isSafeInteger(order.totalMinor) &&
+      Array.isArray(order.items) && order.items.length > 0 &&
+      order.demoRecord === true
     );
+  const orderItemsValid = Array.isArray(current.orderItems) &&
+    current.orderItems.length === 60 &&
+    current.orderItems.every((item) =>
+      typeof item.orderId === 'string' &&
+      typeof item.sku === 'string' &&
+      Number.isSafeInteger(item.unitPriceMinor) &&
+      item.demoRecord === true
+    );
+  const movementValid = Array.isArray(current.movements) &&
+    current.movements.length >= 180 &&
+    current.movements.every((movement) =>
+      typeof movement.sku === 'string' &&
+      typeof movement.hubCode === 'string' &&
+      typeof movement.type === 'string' &&
+      movement.demoRecord === true
+    );
+  const requiredOtherRecords = Array.isArray(current.suppliers) && current.suppliers.length === 5 &&
+    Array.isArray(current.purchaseOrders) && current.purchaseOrders.length === 8 &&
+    Array.isArray(current.invoices) && current.invoices.length === 60 &&
+    Array.isArray(current.returns) &&
+    Array.isArray(current.messages) && current.messages.length === 6 &&
+    Array.isArray(current.sre?.incidents) && current.sre.incidents.length === 5 &&
+    Array.isArray(current.sre?.alerts) && current.sre.alerts.length === 8 &&
+    Array.isArray(current.sre?.audit) && current.sre.audit.length === 150 &&
+    Array.isArray(current.settings) && current.settings.length >= 5;
   const logsValid = Array.isArray(current.logs) && current.logs.length >= 20 &&
     current.logs.every((log) => typeof log.message === 'string' && typeof log.timestamp === 'string');
   const metricFieldsValid = current.metrics &&
@@ -642,32 +683,46 @@ function hasCurrentSchema(current) {
       .every((field) => typeof current.metrics[field] === 'number') &&
     Array.isArray(current.metrics.hubCapacities);
 
-  return usersValid &&
-    ordersValid &&
-    logsValid &&
-    Array.isArray(current.newsletter) &&
-    metricFieldsValid &&
-    typeof current.telemetry?.tick === 'number' &&
-    productFieldsValid &&
-    warehouseFieldsValid;
+  return usersValid && ordersValid && orderItemsValid && movementValid &&
+    requiredOtherRecords && logsValid && Array.isArray(current.newsletter) &&
+    metricFieldsValid && typeof current.telemetry?.tick === 'number' &&
+    productFieldsValid && warehouseFieldsValid &&
+    current.seedManifest?.syntheticOnly === true;
+}
+
+function isLegacyGlobalDemoSeed(current) {
+  if (!current || current.dataMode !== 'demo' || current.schemaVersion !== DB_SCHEMA_VERSION) return false;
+  const oldHubIds = ['HUB-EWR', 'HUB-AUS', 'HUB-RTM', 'HUB-DXB', 'HUB-SIN'];
+  const oldEmails = ['admin@velosupply.ai', 'operator@velosupply.ai', 'buyer@velosupply.ai'];
+  return Array.isArray(current.warehouses) &&
+    current.warehouses.length === 5 &&
+    oldHubIds.every((id) => current.warehouses.some((hub) => hub.id === id)) &&
+    Array.isArray(current.products) && current.products.length === 24 &&
+    Array.isArray(current.orders) && current.orders.length === 12 &&
+    Array.isArray(current.users) && current.users.length === 3 &&
+    oldEmails.every((email) => current.users.some((user) => user.email === email));
 }
 
 async function seedDatabase(options = {}) {
   const filePath = options.filePath || DB_PATH;
-  if (!options.force) {
-    try {
-      const current = JSON.parse(await fs.readFile(filePath, 'utf8'));
-      if (hasCurrentSchema(current)) {
-        if (current.dataMode === 'demo' && (!Array.isArray(current.tariffRules) || current.tariffRules.length === 0)) {
-          current.tariffRules = createDemoTariffRules(new Date());
-          await writeAtomic(filePath, current);
-        }
-        return current;
-      }
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-    }
+  let current = null;
+  try {
+    current = JSON.parse(await fs.readFile(filePath, 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
   }
+
+  if (current && current.dataMode !== 'demo') {
+    if (options.force) {
+      throw new Error('Refusing to overwrite a non-demo database with synthetic Pakistan seed data.');
+    }
+    return current;
+  }
+  if (!options.force && hasCurrentSchema(current)) return current;
+  if (!options.force && current && !isLegacyGlobalDemoSeed(current)) {
+    return current;
+  }
+
   const data = await createSeedData();
   await writeAtomic(filePath, data);
   return data;
@@ -682,4 +737,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { DB_PATH, DB_SCHEMA_VERSION, seedDatabase, productStatus, hasCurrentSchema, createDemoTariffRules };
+module.exports = { DB_PATH, DB_SCHEMA_VERSION, DEMO_SEED_VERSION, seedDatabase, productStatus, hasCurrentSchema, createDemoTariffRules };
