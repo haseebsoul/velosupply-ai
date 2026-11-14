@@ -144,6 +144,8 @@ class MongoAdapter {
           ? existingMeta.revision : 0;
 
         if (expectedRevision !== null && actualRevision !== expectedRevision) {
+          // Fail this stale request but allow a later retry to use the newest committed revision.
+          this.expectedRevision = actualRevision;
           const error = new Error('Concurrent MongoDB write detected; reload state and retry.');
           error.code = 'WRITE_CONFLICT';
           error.status = 409;

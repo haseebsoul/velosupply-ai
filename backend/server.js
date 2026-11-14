@@ -244,31 +244,43 @@ function validate(schema, source = 'body') {
 function authenticate(req, res, next) {
   const match = (req.get('authorization') || '').match(/^Bearer\s+(.+)$/i);
   if (!match) return res.status(401).json({ error: 'Authentication required' });
+  let payload;
   try {
-    const payload = jwt.verify(match[1], JWT_SECRET);
-    const user = db.users.find((entry) => entry.id === payload.sub);
-    if (!user || user.isActive === false || user.deletedAt) return res.status(401).json({ error: 'Invalid or expired token' });
-    req.user = user;
-    next();
+    payload = jwt.verify(match[1], JWT_SECRET);
   } catch (_error) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
+  Promise.resolve()
+    .then(() => repository?.findById('users', payload.sub))
+    .then((user) => {
+      if (!user || user.isActive === false || user.deletedAt) {
+        return res.status(401).json({ error: 'Invalid or expired token' });
+      }
+      req.user = user;
+      return next();
+    })
+    .catch(next);
 }
 
 function optionalAuthenticate(req, res, next) {
   const match = (req.get('authorization') || '').match(/^Bearer\s+(.+)$/i);
   if (!match) return next();
+  let payload;
   try {
-    const payload = jwt.verify(match[1], JWT_SECRET);
-    const user = db.users.find((entry) => entry.id === payload.sub);
-    if (!user || user.isActive === false || user.deletedAt) {
-      return res.status(401).json({ error: 'Invalid or expired token' });
-    }
-    req.user = user;
-    return next();
+    payload = jwt.verify(match[1], JWT_SECRET);
   } catch (_error) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
+  Promise.resolve()
+    .then(() => repository?.findById('users', payload.sub))
+    .then((user) => {
+      if (!user || user.isActive === false || user.deletedAt) {
+        return res.status(401).json({ error: 'Invalid or expired token' });
+      }
+      req.user = user;
+      return next();
+    })
+    .catch(next);
 }
 
 function requireRoles(...roles) {
@@ -404,6 +416,62 @@ const transferSchema = z.object({
   quantity: z.number().int().positive().max(10000),
   reason: z.string().trim().min(2).max(120)
 }).strict();
+const productCreateSchema = z.object({
+  sku: z.string().trim().min(1).max(80),
+  batchHash: z.string().trim().min(12).max(160),
+  originWarehouseId: z.string().trim().min(1).max(80),
+  name: z.string().trim().min(2).max(160),
+  category: z.string().trim().min(2).max(80),
+  description: z.string().trim().max(2000).optional().default(''),
+  priceExGstPkr: z.number().int().nonnegative().optional(),
+  initialStock: z.number().int().nonnegative().max(1000000).optional().default(0),
+  reorder_threshold: z.number().int().nonnegative().max(1000000).optional().default(3),
+  leadDays: z.number().int().nonnegative().max(365).optional(),
+  featured: z.boolean().optional().default(false),
+  status: z.enum(['optimal', 'low', 'critical', 'inactive']).optional().default('optimal')
+}).strict();
+const productUpdateSchema = z.object({
+  name: z.string().trim().min(2).max(160).optional(),
+  category: z.string().trim().min(2).max(80).optional(),
+  description: z.string().trim().max(2000).optional(),
+  price: z.number().finite().nonnegative().optional(),
+  priceExGstPkr: z.number().int().nonnegative().optional(),
+  leadDays: z.number().int().nonnegative().max(365).optional(),
+  status: z.enum(['optimal', 'low', 'critical', 'inactive']).optional(),
+  featured: z.boolean().optional(),
+  supplierId: z.string().trim().min(1).max(80).optional(),
+  reorder_threshold: z.number().int().nonnegative().max(1000000).optional()
+}).strict().refine((value) => Object.keys(value).length > 0, 'At least one product field is required');
+const warehouseCreateSchema = z.object({
+  code: z.string().trim().min(2).max(32),
+  name: z.string().trim().min(2).max(120),
+  city: z.string().trim().min(2).max(80),
+  address: z.string().trim().max(300).optional(),
+  region: z.string().trim().max(80).optional(),
+  status: z.enum(['online', 'degraded', 'offline']).optional().default('online'),
+  capacity: z.number().int().nonnegative().max(100000000).optional().default(0),
+  latency: z.number().int().nonnegative().max(60000).optional().default(0),
+  lat: z.number().finite().optional(),
+  lng: z.number().finite().optional()
+}).strict();
+const warehouseUpdateSchema = z.object({
+  name: z.string().trim().min(2).max(120).optional(),
+  city: z.string().trim().min(2).max(80).optional(),
+  address: z.string().trim().max(300).optional(),
+  region: z.string().trim().max(80).optional(),
+  status: z.enum(['online', 'degraded', 'offline']).optional(),
+  capacity: z.number().int().nonnegative().max(100000000).optional(),
+  latency: z.number().int().nonnegative().max(60000).optional(),
+  lat: z.number().finite().optional(),
+  lng: z.number().finite().optional()
+}).strict().refine((value) => Object.keys(value).length > 0, 'At least one warehouse field is required');
+const refundRequestSchema = z.object({
+  reason: z.string().trim().min(2).max(300)
+}).strict();
+const codCollectionSchema = z.object({
+  amountMinor: z.number().int().positive(),
+  receiptReference: z.string().trim().min(3).max(120)
+}).strict();
 const roleSchema = z.object({
   role: z.enum(['admin', 'operator', 'user'])
 }).strict();
@@ -447,15 +515,15 @@ app.get('/api/metrics', (_req, res) => res.json({
   sre: sre.currentMetrics(),
   slos: sre.sloReport()
 }));
-app.get('/api/products', (req, res) => {
+app.get('/api/products', asyncRoute(async (req, res) => {
   const search = String(req.query.search || '').trim().toLowerCase();
   const category = String(req.query.category || '').trim().toLowerCase();
-  const products = db.products.filter((product) =>
-    (!category || category === 'all' || product.category.toLowerCase() === category) &&
-    (!search || `${product.name} ${product.sku} ${product.description}`.toLowerCase().includes(search))
-  );
-  res.json(products);
-});
+  const products = await domainRepositories.products.list();
+  res.json(products.filter((product) =>
+    (!category || category === 'all' || String(product.category || '').toLowerCase() === category) &&
+    (!search || `${product.name || ''} ${product.sku || ''} ${product.description || ''}`.toLowerCase().includes(search))
+  ));
+}));
 app.post('/api/newsletter', validate(newsletterSchema), asyncRoute(async (req, res) => {
   const existing = db.newsletter.find((entry) => entry.email === req.body.email);
   if (existing) return res.json({ success: true, subscribed: true, alreadySubscribed: true });
@@ -541,11 +609,16 @@ const checkoutHandler = asyncRoute(async (req, res) => {
   const idempotencyKey = req.get('Idempotency-Key') || req.body.idempotencyKey;
   if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required' });
 
-  const items = req.body.items.map((item) => {
-    if (item.sku) return { sku: item.sku, qty: item.qty };
-    const product = findById(db.products, item.productId, 'Product');
-    return { sku: product.sku, qty: item.quantity };
-  });
+  const items = [];
+  for (const item of req.body.items) {
+    if (item.sku) {
+      items.push({ sku: item.sku, qty: item.qty });
+      continue;
+    }
+    const product = await domainRepositories.products.findById(item.productId);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    items.push({ sku: product.sku, qty: item.quantity });
+  }
   const buyerId = req.user?.id || 'GUEST-' + createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 24);
   const city = req.body.city || req.body.shippingRegion;
   const address = req.body.address || req.body.shippingRegion;
@@ -603,7 +676,57 @@ app.get('/api/admin/backup', requireRoles('admin'), (req, res) => {
 app.get('/api/auth/me', (req, res) => res.json({ user: safeUser(req.user) }));
 app.post('/api/auth/logout', (_req, res) => res.json({ success: true }));
 
-app.get('/api/warehouses', (_req, res) => res.json(db.warehouses));
+app.get('/api/warehouses', asyncRoute(async (_req, res) => {
+  res.json(await domainRepositories.warehouses.list());
+}));
+app.get('/api/admin/products', requireRoles('admin'), asyncRoute(async (req, res) => {
+  res.json(await domainRepositories.products.list({ includeArchived: req.query.includeArchived === 'true' }));
+}));
+app.post('/api/admin/products', requireRoles('admin'), validate(productCreateSchema), asyncRoute(async (req, res) => {
+  try {
+    const product = await domainRepositories.products.create(req.body, { id: req.user.id, role: req.user.role });
+    db = await repository.readState();
+    res.status(201).json({ product });
+  } catch (error) {
+    if (error.code === 11000 || error.code === 'DUPLICATE_KEY') return res.status(409).json({ error: 'PRODUCT_CONFLICT', message: error.message });
+    if (error instanceof TypeError) return res.status(400).json({ error: 'INVALID_PRODUCT', message: error.message });
+    throw error;
+  }
+}));
+app.patch('/api/admin/products/:id', requireRoles('admin'), validate(productUpdateSchema), asyncRoute(async (req, res) => {
+  const product = await domainRepositories.products.update(req.params.id, req.body, { id: req.user.id, role: req.user.role });
+  if (!product) return res.status(404).json({ error: 'Product not found' });
+  db = await repository.readState();
+  res.json({ product });
+}));
+app.delete('/api/admin/products/:id', requireRoles('admin'), asyncRoute(async (req, res) => {
+  try {
+    const product = await domainRepositories.products.archive(req.params.id, { id: req.user.id, role: req.user.role });
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    db = await repository.readState();
+    res.json({ product, archived: true });
+  } catch (error) {
+    if (error.code === 'PRODUCT_HAS_RESERVED_STOCK') return res.status(409).json({ error: error.code, message: error.message });
+    throw error;
+  }
+}));
+app.post('/api/admin/warehouses', requireRoles('admin'), validate(warehouseCreateSchema), asyncRoute(async (req, res) => {
+  try {
+    const warehouse = await domainRepositories.warehouses.create(req.body, { id: req.user.id, role: req.user.role });
+    db = await repository.readState();
+    res.status(201).json({ warehouse });
+  } catch (error) {
+    if (error.code === 11000 || error.code === 'DUPLICATE_KEY') return res.status(409).json({ error: 'WAREHOUSE_CONFLICT', message: error.message });
+    if (error instanceof TypeError) return res.status(400).json({ error: 'INVALID_WAREHOUSE', message: error.message });
+    throw error;
+  }
+}));
+app.patch('/api/admin/warehouses/:id', requireRoles('admin'), validate(warehouseUpdateSchema), asyncRoute(async (req, res) => {
+  const warehouse = await domainRepositories.warehouses.update(req.params.id, req.body, { id: req.user.id, role: req.user.role });
+  if (!warehouse) return res.status(404).json({ error: 'Warehouse not found' });
+  db = await repository.readState();
+  res.json({ warehouse });
+}));
 app.get('/api/rewards', (req, res) => {
   const claims = (db.rewardClaims || []).filter((claim) => claim.userId === req.user.id);
   res.json({ offers: rewardOffers, claims });
@@ -622,13 +745,14 @@ app.post('/api/rewards/:offerId/claim', asyncRoute(async (req, res) => {
   await persist();
   res.status(201).json({ claim });
 }));
-app.get('/api/orders', (req, res) => {
-  if (req.user.role === 'admin' || req.user.role === 'operator') return res.json(db.orders);
-  const ownOrders = db.orders.filter((order) =>
-    order.buyerId === req.user.id || String(order.customerEmail || '').toLowerCase() === req.user.email
-  );
-  res.json(ownOrders);
-});
+app.get('/api/orders', asyncRoute(async (req, res) => {
+  const orders = await repository.find('orders', {});
+  if (req.user.role === 'admin' || req.user.role === 'operator') return res.json(orders);
+  res.json(orders.filter((order) =>
+    order.buyerId === req.user.id || order.userId === req.user.id ||
+    String(order.buyerEmail || order.customerEmail || '').toLowerCase() === req.user.email
+  ));
+}));
 app.get('/api/logs', (_req, res) => res.json(db.logs));
 app.get('/api/threats', (_req, res) => {
   const products = db.products.filter((product) => product.stock <= product.reorder_threshold).map((product) => ({
@@ -690,63 +814,46 @@ app.delete('/api/admin/users/:id', requireRoles('admin'), asyncRoute(async (req,
 }));
 
 app.patch('/api/inventory/:id', requireRoles('admin', 'operator'), validate(inventoryUpdateSchema), asyncRoute(async (req, res) => {
-  const product = findById(db.products, req.params.id, 'Product');
-  if (req.body.stock !== undefined && req.body.stock !== product.stock) {
-    const idempotencyKey = req.get('Idempotency-Key');
-    if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for inventory writes' });
-    try {
-      await domainRepositories.stockMovements.adjust({
-        sku: product.sku,
-        hubCode: product.warehouse_hub || 'unassigned',
-        delta: req.body.stock - product.stock,
-        reason: req.body.reason,
-        actorId: req.user.id,
-        actorRole: req.user.role,
-        idempotencyKey
-      });
-    } catch (error) {
-      if (error.code === 'NEGATIVE_STOCK') return res.status(409).json({ error: 'NEGATIVE_STOCK', message: error.message });
-      if (error.code === 'KEY_REUSED') return res.status(422).json({ error: 'KEY_REUSED', message: error.message });
-      throw error;
-    }
+  const product = await domainRepositories.products.findById(req.params.id);
+  if (!product) return res.status(404).json({ error: 'Product not found' });
+  if (req.body.stock !== undefined && req.body.stock !== product.stock && !req.get('Idempotency-Key')) {
+    return res.status(400).json({ error: 'Idempotency-Key header is required for inventory writes' });
   }
-  const productChanges = {};
-  if (req.body.price !== undefined) productChanges.price = req.body.price;
-  if (req.body.priceExGstPkr !== undefined) productChanges.priceExGstPkr = req.body.priceExGstPkr;
-  if (Object.keys(productChanges).length) {
-    await domainRepositories.products.update(product.id, productChanges, { id: req.user.id, role: req.user.role });
+  try {
+    const updatedProduct = await domainRepositories.products.updateInventory(req.params.id, {
+      ...req.body,
+      idempotencyKey: req.get('Idempotency-Key')
+    }, { id: req.user.id, role: req.user.role });
+    if (!updatedProduct) return res.status(404).json({ error: 'Product not found' });
+    db = await repository.readState();
+    addLog(`Inventory updated for ${updatedProduct.sku}.`, 'INFO', 'INVENTORY', { productId: updatedProduct.id });
+    await persist();
+    res.json({ product: updatedProduct });
+  } catch (error) {
+    if (error.code === 'NEGATIVE_STOCK') return res.status(409).json({ error: 'NEGATIVE_STOCK', message: error.message });
+    if (error.code === 'KEY_REUSED') return res.status(422).json({ error: 'KEY_REUSED', message: error.message });
+    if (error.code === 'WRITE_CONFLICT') return res.status(409).json({ error: error.code, message: 'Concurrent inventory update; retry after refreshing the product.' });
+    throw error;
   }
-  db = await repository.readState();
-  const updatedProduct = findById(db.products, req.params.id, 'Product');
-  addLog(`Inventory updated for ${updatedProduct.sku}.`, 'INFO', 'INVENTORY', { productId: updatedProduct.id });
-  await persist();
-  res.json({ product: updatedProduct });
 }));
-app.get('/api/inventory/:id/ledger', requireRoles('admin', 'operator'), (req, res) => {
-  const product = findById(db.products, req.params.id, 'Product');
+app.get('/api/inventory/:id/ledger', requireRoles('admin', 'operator'), asyncRoute(async (req, res) => {
+  const product = await domainRepositories.products.findById(req.params.id);
+  if (!product) return res.status(404).json({ error: 'Product not found' });
   const hubCode = product.warehouse_hub || 'unassigned';
-  const movements = (db.movements || []).filter((entry) => entry.sku === product.sku && entry.hubCode === hubCode);
-  const onHand = movements.reduce((balance, entry) => {
-    if (entry.type === 'RECEIVE' || entry.type === 'TRANSFER_IN' || entry.type === 'RETURN_IN') return balance + entry.qty;
-    if (entry.type === 'SHIP' || entry.type === 'TRANSFER_OUT') return balance - entry.qty;
-    if (entry.type === 'ADJUST') return balance + entry.qty;
-    return balance;
-  }, 0);
-  const initialized = movements.length > 0;
+  const stockRows = await repository.find('stock', { sku: product.sku, hubCode }, { limit: 1 });
+  const reconciliation = await domainRepositories.stockMovements.reconcile(
+    product.sku, hubCode, product.stock, stockRows[0]?.reserved ?? 0
+  );
+  const initialized = reconciliation.movementCount > 0;
   res.json({
-    productId: product.id,
-    sku: product.sku,
-    hubCode,
-    ledgerOnHand: initialized ? onHand : null,
-    productStock: product.stock,
-    matches: initialized ? onHand === product.stock : null,
-    movementCount: movements.length,
-    ledgerStatus: initialized ? (onHand === product.stock ? 'reconciled' : 'mismatch') : 'baseline-required',
+    productId: product.id, ...reconciliation,
+    ledgerStatus: !initialized ? 'baseline-required' : reconciliation.matches ? 'reconciled' : 'mismatch',
     note: initialized ? undefined : 'Legacy stock has no opening-balance movement; record a verified opening balance before treating the ledger as reconciled.'
   });
-});
+}));
 app.post('/api/inventory/restock/:id', requireRoles('admin', 'operator'), validate(restockSchema), asyncRoute(async (req, res) => {
-  const product = findById(db.products, req.params.id, 'Product');
+  const product = await domainRepositories.products.findById(req.params.id);
+  if (!product) return res.status(404).json({ error: 'Product not found' });
   const quantity = req.body.quantity || Math.max(product.reorder_threshold * 2 - product.stock, 10);
   const idempotencyKey = req.get('Idempotency-Key');
   if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for inventory writes' });
@@ -800,13 +907,85 @@ app.post('/api/inventory/transfer', requireRoles('admin', 'operator'), validate(
   }
 }));
 
-app.get('/api/returns', (req, res) => {
-  const rows = db.returns || [];
+app.get('/api/returns', asyncRoute(async (req, res) => {
+  const rows = await repository.find('returns', {});
   if (req.user.role === 'admin' || req.user.role === 'operator') return res.json(rows);
   return res.json(rows.filter((entry) => entry.buyerId === req.user.id));
-});
+}));
+app.get('/api/refunds', asyncRoute(async (req, res) => {
+  const rows = await repository.find('refunds', {});
+  if (req.user.role === 'admin' || req.user.role === 'operator') return res.json(rows);
+  return res.json(rows.filter((entry) => entry.buyerId === req.user.id));
+}));
+app.post('/api/orders/:id/payment/collection', requireRoles('admin', 'operator'), validate(codCollectionSchema), asyncRoute(async (req, res) => {
+  const idempotencyKey = req.get('Idempotency-Key');
+  if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required' });
+  try {
+    const order = await domainRepositories.orders.recordCodCollection(req.params.id, {
+      ...req.body, idempotencyKey
+    }, { id: req.user.id, role: req.user.role });
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    db = await repository.readState();
+    return res.json({
+      order,
+      paymentCollection: order.paymentCollection,
+      verification: 'operator-attestation',
+      message: 'COD cash collection was recorded by an authorized operator. This is a manual attestation, not an external payment-provider verification.'
+    });
+  } catch (error) {
+    if (error.code === 'INVALID_TRANSITION' || error.code === 'PAYMENT_ALREADY_COLLECTED' || error.code === 'PAYMENT_AMOUNT_MISMATCH') {
+      return res.status(409).json({ error: error.code, message: error.message });
+    }
+    if (error.code === 'KEY_REUSED') return res.status(422).json({ error: error.code, message: error.message });
+    throw error;
+  }
+}));
+app.post('/api/orders/:id/refunds', validate(refundRequestSchema), asyncRoute(async (req, res) => {
+  const order = await repository.findById('orders', req.params.id);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (req.user.role !== 'admin' && req.user.role !== 'operator' &&
+      order.buyerId !== req.user.id && order.userId !== req.user.id) {
+    return res.status(403).json({ error: 'You may only request a refund for your own order' });
+  }
+  const idempotencyKey = req.get('Idempotency-Key');
+  if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required' });
+  try {
+    const refund = await domainRepositories.orders.requestRefund(req.params.id, {
+      ...req.body, idempotencyKey
+    }, { id: req.user.id, role: req.user.role });
+    if (!refund) return res.status(404).json({ error: 'Order not found' });
+    db = await repository.readState();
+    return res.status(201).json({
+      refund, simulated: true,
+      message: 'Refund request recorded; no payment provider is connected and no funds have moved.'
+    });
+  } catch (error) {
+    if (error.code === 'INVALID_TRANSITION' || error.code === 'REFUND_NOT_ELIGIBLE' || error.code === 'REFUND_ALREADY_EXISTS') {
+      return res.status(409).json({ error: error.code, message: error.message });
+    }
+    if (error.code === 'KEY_REUSED') return res.status(422).json({ error: error.code, message: error.message });
+    throw error;
+  }
+}));
+app.post('/api/refunds/:id/decision', requireRoles('admin', 'operator'), validate(returnDecisionSchema), asyncRoute(async (req, res) => {
+  try {
+    const refund = await domainRepositories.orders.decideRefund(req.params.id, req.body.decision, {
+      id: req.user.id, role: req.user.role
+    });
+    if (!refund) return res.status(404).json({ error: 'Refund not found' });
+    db = await repository.readState();
+    return res.json({
+      refund, simulated: true,
+      message: 'Internal refund status updated only; no payment provider was called.'
+    });
+  } catch (error) {
+    if (error.code === 'INVALID_TRANSITION') return res.status(409).json({ error: error.code, message: error.message });
+    throw error;
+  }
+}));
 app.post('/api/orders/:id/cancel', asyncRoute(async (req, res) => {
-  const order = findById(db.orders, req.params.id, 'Order');
+  const order = await repository.findById('orders', req.params.id);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
   if (req.user.role !== 'admin' && req.user.role !== 'operator' &&
       order.buyerId !== req.user.id && order.userId !== req.user.id) {
     return res.status(403).json({ error: 'You may only cancel your own order' });
@@ -825,7 +1004,8 @@ app.post('/api/orders/:id/cancel', asyncRoute(async (req, res) => {
   }
 }));
 app.post('/api/orders/:id/return', validate(returnRequestSchema), asyncRoute(async (req, res) => {
-  const order = findById(db.orders, req.params.id, 'Order');
+  const order = await repository.findById('orders', req.params.id);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
   if (req.user.role !== 'admin' && req.user.role !== 'operator' &&
       order.buyerId !== req.user.id && order.userId !== req.user.id) {
     return res.status(403).json({ error: 'You may only return your own order' });
@@ -890,16 +1070,20 @@ app.patch('/api/orders/:id/status', requireRoles('admin', 'operator'), validate(
 }));
 
 app.post('/api/orders/:id/route', requireRoles('admin', 'operator'), asyncRoute(async (req, res) => {
-  const order = findById(db.orders, req.params.id, 'Order');
-  const hub = db.warehouses.filter((entry) => entry.status === 'online').sort((a, b) => a.latency - b.latency)[0];
-  if (!hub) return res.status(503).json({ error: 'No fulfillment warehouse is currently online' });
-  order.warehouse_hub = hub.id;
-  if (['pending', 'processing'].includes(order.status)) order.status = 'routed';
-  order.updatedAt = new Date().toISOString();
-  const event = publish('ORDER_ROUTED', `Order ${order.id} routed to ${hub.id}.`, 'INFO', { order });
-  sre.audit?.('order.route', req.user, { orderId: order.id, hubCode: hub.id });
-  await persist();
-  res.json({ order, event });
+  try {
+    const order = await domainRepositories.orders.assignFulfillment(req.params.id, {
+      id: req.user.id, role: req.user.role
+    });
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    db = await repository.readState();
+    const event = publish('ORDER_ROUTED', `Order ${order.id} assigned to ${order.warehouse_hub}.`, 'INFO', { order });
+    await persist();
+    res.json({ order, event });
+  } catch (error) {
+    if (error.code === 'INVALID_TRANSITION') return res.status(409).json({ error: error.code, message: error.message });
+    if (error.code === 'NO_FULFILLMENT_WAREHOUSE') return res.status(503).json({ error: error.code, message: error.message });
+    throw error;
+  }
 }));
 
 app.post('/api/simulation/trigger', requireRoles('admin', 'operator'), validate(simulationSchema), asyncRoute(async (req, res) => {

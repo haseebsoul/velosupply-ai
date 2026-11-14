@@ -11,6 +11,7 @@ function createEmptyProductionState(now = new Date().toISOString()) {
     products: [],
     orders: [],
     orderItems: [],
+    refunds: [],
     movements: [],
     tariffRules: [],
     logs: [],
