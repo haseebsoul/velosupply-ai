@@ -431,8 +431,13 @@ function createDomainRepositories(adapter) {
           ...(input.buyerEmail ? { buyerEmail: input.buyerEmail } : {}),
           ...(input.customerName ? { customerName: input.customerName } : {}),
           city,
+          shippingRegion: city,
           address,
+          customerName: input.customerName || 'Buyer',
+          ...(input.buyerEmail ? { customerEmail: input.buyerEmail } : {}),
+          warehouse_hub: hubs[0] || null,
           items: pricedItems.map(({ sku, name, qty, unitExGstPkr }) => ({ sku, name, qty, unitExGstPkr })),
+          total: totalMinor / 100,
           currency: 'PKR',
           price: {
             currency: 'PKR', subtotalExMinor, gstMinor, deliveryFeeMinor, totalMinor,
