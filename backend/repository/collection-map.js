@@ -14,6 +14,7 @@ const STATE_PATHS = {
   tariffRules: ['tariffRules'],
   invoices: ['invoices'],
   returns: ['returns'],
+  refunds: ['refunds'],
   purchaseOrders: ['purchaseOrders'],
   messages: ['messages'],
   logs: ['logs'],
@@ -91,6 +92,18 @@ const COLLECTION_VALIDATORS = {
     bsonType: 'object', required: ['action', 'actorId', 'at'],
     properties: { action: { bsonType: 'string' }, actorId: { bsonType: 'string' }, at: { bsonType: 'string' } }
   } },
+  refunds: { $jsonSchema: {
+    bsonType: 'object',
+    required: ['orderId', 'buyerId', 'amountMinor', 'currency', 'status', 'reason', 'simulated', 'providerStatus', 'requestedAt'],
+    properties: {
+      orderId: { bsonType: 'string' }, buyerId: { bsonType: 'string' },
+      amountMinor: { bsonType: ['int', 'long'] }, currency: { enum: ['PKR'] },
+      status: { enum: ['requested', 'approved_simulated', 'rejected'] },
+      reason: { bsonType: 'string' }, simulated: { bsonType: 'bool' },
+      providerStatus: { bsonType: 'string' }, providerReference: { bsonType: ['string', 'null'] },
+      requestedAt: { bsonType: 'string' }, updatedAt: { bsonType: 'string' }
+    }
+  } },
   tariffRules: { $jsonSchema: {
     bsonType: 'object', required: ['code', 'version', 'source'],
     properties: {
@@ -141,6 +154,10 @@ const INDEXES = {
   ],
   returns: [
     { key: { orderId: 1, status: 1 }, name: 'returns_order_status' }
+  ],
+  refunds: [
+    { key: { orderId: 1, status: 1 }, name: 'refunds_order_status' },
+    { key: { idempotencyKey: 1 }, unique: true, sparse: true, name: 'refunds_idempotency_unique' }
   ],
   purchaseOrders: [
     { key: { status: 1 }, name: 'purchase_orders_status' }

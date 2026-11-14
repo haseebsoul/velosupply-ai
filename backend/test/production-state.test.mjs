@@ -13,6 +13,7 @@ describe('production storage bootstrap', () => {
     expect(state.products).toEqual([]);
     expect(state.orders).toEqual([]);
     expect(state.orderItems).toEqual([]);
+    expect(state.refunds).toEqual([]);
     expect(state.movements).toEqual([]);
     expect(state.tariffRules).toEqual([]);
     expect(state.metrics).toEqual({

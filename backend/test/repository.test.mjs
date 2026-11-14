@@ -342,4 +342,31 @@ describe('collection repository adapters', () => {
     await expect(adapter.initialize({ fallbackState: { dataMode: 'production' } }))
       .rejects.toThrow('refusing to initialize an ambiguous database');
   });
+  it('refreshes the Mongo revision fence after a stale-write conflict so a subsequent request can retry', async () => {
+    const database = new FakeDatabase();
+    const initial = {
+      dataMode: 'production', users: [], products: [], warehouses: [], orders: [],
+      orderItems: [], movements: [], tariffRules: [], logs: [], newsletter: [],
+      rewardClaims: [], metrics: {}, telemetry: { tick: 0 }, sre: { audit: [] }
+    };
+    const adapterA = createMongoAdapter({ client: new FakeClient(), database });
+    await adapterA.initialize({ fallbackState: initial });
+    const adapterB = createMongoAdapter({ client: new FakeClient(), database });
+    await adapterB.initialize({ fallbackState: initial });
+    await adapterB.readState();
+
+    await adapterA.insert('users', {
+      id: 'USER-A', email: 'a@example.com', role: 'buyer', filerStatus: 'unverified', isActive: true
+    });
+    const staleWrite = adapterB.insert('users', {
+      id: 'USER-B', email: 'b@example.com', role: 'buyer', filerStatus: 'unverified', isActive: true
+    });
+    await expect(staleWrite).rejects.toMatchObject({ code: 'WRITE_CONFLICT', status: 409 });
+
+    await adapterB.insert('users', {
+      id: 'USER-B', email: 'b@example.com', role: 'buyer', filerStatus: 'unverified', isActive: true
+    });
+    expect(await adapterB.count('users')).toBe(2);
+  });
+
 });
