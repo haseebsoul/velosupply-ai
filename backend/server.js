@@ -887,6 +887,7 @@ app.post('/api/orders/:id/route', requireRoles('admin', 'operator'), asyncRoute(
   if (['pending', 'processing'].includes(order.status)) order.status = 'routed';
   order.updatedAt = new Date().toISOString();
   const event = publish('ORDER_ROUTED', `Order ${order.id} routed to ${hub.id}.`, 'INFO', { order });
+  sre.audit?.('order.route', req.user, { orderId: order.id, hubCode: hub.id });
   await persist();
   res.json({ order, event });
 }));
@@ -935,6 +936,7 @@ app.post('/api/simulation/trigger', requireRoles('admin', 'operator'), validate(
   }
   db.metrics.efficiencyScore = Math.min(1000, (db.metrics.efficiencyScore || 0) + 8);
   const event = publish('SIMULATION', message, level, { scenario, params });
+  sre.audit?.('simulation.run', req.user, { scenario, params });
   refreshMetrics();
   await persist();
   res.json({ success: true, scenario, message, metrics: db.metrics, warehouses: db.warehouses, event });
