@@ -613,6 +613,12 @@ app.post('/api/register', sre.rateLimit({ limit: 10, windowMs: 60_000, name: 're
 
 const checkoutHandler = asyncRoute(async (req, res) => {
   if (!domainRepositories) throw new Error('Domain repository has not been initialized');
+  if (db.dataMode === 'production' && !req.user) {
+    return res.status(401).json({ error: 'Buyer authentication is required for production checkout' });
+  }
+  if (db.dataMode === 'production' && req.user.role !== 'buyer') {
+    return res.status(403).json({ error: 'Only buyer accounts can place production orders' });
+  }
   const idempotencyKey = req.get('Idempotency-Key') || req.body.idempotencyKey;
   if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required' });
 
