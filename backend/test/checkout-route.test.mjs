@@ -327,6 +327,24 @@ describe('Pakistan checkout HTTP route', () => {
     expect(invoiceDetail.status).toBe(200);
     expect(invoiceDetail.body.invoice.orderId).toBe(checkout.body.order.id);
     expect(await adapter.count('invoices', { buyerId: registered.body.user.id })).toBe(1);
+
+    const logsAccess = await supertest(serverModule.app)
+      .get('/api/logs')
+      .set('Authorization', 'Bearer ' + token);
+    const threatsAccess = await supertest(serverModule.app)
+      .get('/api/threats')
+      .set('Authorization', 'Bearer ' + token);
+    expect(logsAccess.status).toBe(403);
+    expect(threatsAccess.status).toBe(403);
+
+    const cancelled = await supertest(serverModule.app)
+      .post('/api/me/orders/' + checkout.body.order.id + '/cancel')
+      .set('Authorization', 'Bearer ' + token)
+      .set('Idempotency-Key', 'buyer-cancel-001')
+      .send({});
+    expect(cancelled.status).toBe(200);
+    expect(cancelled.body.order.status).toBe('CANCELLED');
+    expect(await adapter.count('movements', { type: 'RELEASE', refId: checkout.body.order.id })).toBe(1);
   });
 
   it('rejects out-of-stock checkout without reserving or creating an order', async () => {
