@@ -30,7 +30,7 @@ const STATE_PATHS = {
 };
 
 const COLLECTION_NAMES = [
-  ...Object.keys(STATE_PATHS),
+  ...new Set(Object.keys(STATE_PATHS).map((name) => name === 'stockMovements' ? 'movements' : name)),
   'application_meta',
   'migrationBackups'
 ];
@@ -77,7 +77,7 @@ const COLLECTION_VALIDATORS = {
       unitPriceMinor: { bsonType: ['int', 'long', 'null'] }
     }
   } },
-  stockMovements: { $jsonSchema: {
+  movements: { $jsonSchema: {
     bsonType: 'object', required: ['sku', 'hubCode', 'type', 'qty', 'reason', 'refType', 'refId', 'actorId', 'at'],
     properties: {
       sku: { bsonType: 'string' }, hubCode: { bsonType: 'string' },
@@ -119,9 +119,9 @@ const INDEXES = {
   stock: [
     { key: { sku: 1, hubCode: 1 }, unique: true, name: 'stock_sku_hub_unique' }
   ],
-  stockMovements: [
-    { key: { sku: 1, hubCode: 1, at: -1 }, name: 'stock_movements_sku_hub_at' },
-    { key: { refType: 1, refId: 1 }, name: 'stock_movements_reference' }
+  movements: [
+    { key: { sku: 1, hubCode: 1, at: -1 }, name: 'movements_sku_hub_at' },
+    { key: { refType: 1, refId: 1 }, name: 'movements_reference' }
   ],
   orderItems: [
     { key: { orderId: 1 }, name: 'order_items_order' },
@@ -324,13 +324,13 @@ function stripMongoId(document) {
   return result;
 }
 
-const COLLECTION_ALIASES = Object.freeze({ movements: 'stockMovements' });
+const COLLECTION_ALIASES = Object.freeze({ stockMovements: 'movements' });
 
 function canonicalCollectionName(name) {
   return COLLECTION_ALIASES[name] || name;
 }
 
-const APPEND_ONLY_COLLECTIONS = new Set(['stockMovements', 'auditLogs']);
+const APPEND_ONLY_COLLECTIONS = new Set(['movements', 'auditLogs']);
 
 function assertAppendOnlyTransition(name, before = [], after = []) {
   if (!APPEND_ONLY_COLLECTIONS.has(canonicalCollectionName(name))) return;
