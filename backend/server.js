@@ -14,6 +14,7 @@ const { createEmptyProductionState } = require('./production-state');
 const helmet = require('helmet');
 const { createSRE } = require('./sre');
 const { createRepository } = require('./repository');
+const { createDomainRepositories } = require('./repository/domain-repositories');
 
 
 const envFilePath = path.join(__dirname, '.env');
@@ -65,6 +66,7 @@ let db;
 let mongoClient = null;
 let stateCollection = null;
 let repository = null;
+let domainRepositories = null;
 let writeQueue = Promise.resolve();
 let sre = null;
 
@@ -119,6 +121,7 @@ async function loadDatabaseState() {
       loadInitial: () => seedDatabase()
     });
     await repository.initialize();
+    domainRepositories = createDomainRepositories(repository);
     return repository.readState();
   }
 
@@ -143,6 +146,7 @@ async function loadDatabaseState() {
     legacyCollectionName: collectionName
   });
   await repository.initialize({ fallbackState });
+  domainRepositories = createDomainRepositories(repository);
   return repository.readState();
 }
 function metricsScore() { return Number(db.metrics?.efficiencyScore || 0); }
@@ -251,6 +255,22 @@ function authenticate(req, res, next) {
   }
 }
 
+function optionalAuthenticate(req, res, next) {
+  const match = (req.get('authorization') || '').match(/^Bearer\\s+(.+)$/i);
+  if (!match) return next();
+  try {
+    const payload = jwt.verify(match[1], JWT_SECRET);
+    const user = db.users.find((entry) => entry.id === payload.sub);
+    if (!user || user.isActive === false || user.deletedAt) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+    req.user = user;
+    return next();
+  } catch (_error) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
 function requireRoles(...roles) {
   return (req, res, next) => {
     if (!roles.includes(req.user.role)) return res.status(403).json({ error: 'Insufficient permissions' });
@@ -329,14 +349,26 @@ const registerSchema = z.object({
   registrationInviteCode: z.string().max(200).optional()
 }).strict();
 const checkoutSchema = z.object({
-  customerName: z.string().trim().min(2).max(100),
-  customerEmail: z.string().trim().email().max(254),
-  shippingRegion: z.string().trim().min(2).max(100),
-  items: z.array(z.object({
-    productId: z.string().min(1),
-    quantity: z.number().int().positive().max(10000)
-  }).strict()).min(1).max(50)
-}).strict();
+  customerName: z.string().trim().min(2).max(100).optional(),
+  customerEmail: z.string().trim().email().max(254).optional(),
+  shippingRegion: z.string().trim().min(2).max(100).optional(),
+  city: z.string().trim().min(2).max(80).optional(),
+  address: z.string().trim().min(5).max(300).optional(),
+  paymentMethod: z.enum(['COD', 'JAZZCASH', 'EASYPAISA', 'RAAST', 'CARD', 'BANK_TRANSFER']).default('COD'),
+  items: z.array(z.union([
+    z.object({ sku: z.string().trim().min(1).max(80), qty: z.number().int().positive().max(10000) }).strict(),
+    z.object({ productId: z.string().min(1), quantity: z.number().int().positive().max(10000) }).strict()
+  ])).min(1).max(50)
+}).strict().refine((value) => Boolean(value.city || value.shippingRegion), {
+  message: 'A Pakistan delivery city is required',
+  path: ['city']
+}).refine((value) => Boolean(value.address || value.shippingRegion), {
+  message: 'A delivery address is required',
+  path: ['address']
+}).refine((value) => Boolean(value.customerEmail), {
+  message: 'A customer email is required for the guest checkout receipt',
+  path: ['customerEmail']
+});
 const inventoryUpdateSchema = z.object({
   stock: z.number().int().nonnegative().optional(),
   price: z.number().finite().nonnegative().optional()
@@ -477,59 +509,49 @@ app.post('/api/auth/register', sre.rateLimit({ limit: 10, windowMs: 60_000, name
 app.post('/api/register', sre.rateLimit({ limit: 10, windowMs: 60_000, name: 'register-legacy' }), validate(registerSchema), asyncRoute(register));
 
 const checkoutHandler = asyncRoute(async (req, res) => {
-  const quantities = new Map();
-  for (const item of req.body.items) {
-    quantities.set(item.productId, (quantities.get(item.productId) || 0) + item.quantity);
-  }
-  const resolved = [];
-  for (const [productId, quantity] of quantities) {
-    const product = findById(db.products, productId, 'Product');
-    if (product.status === 'inactive') return res.status(409).json({ error: `${product.name} is not available` });
-    if (product.stock < quantity) {
-      return res.status(409).json({
-        error: `Insufficient stock for ${product.name}`,
-        productId: product.id,
-        available: product.stock,
-        requested: quantity
-      });
-    }
-    resolved.push({ product, quantity });
-  }
-  const hub = [...db.warehouses]
-    .filter((entry) => entry.status === 'online')
-    .sort((a, b) => a.latency - b.latency)[0];
-  if (!hub) return res.status(503).json({ error: 'No fulfillment warehouse is currently online' });
-  const items = resolved.map(({ product, quantity }) => ({
-    productId: product.id,
-    quantity,
-    name: product.name,
-    unitPrice: product.price
-  }));
-  for (const { product, quantity } of resolved) {
-    ensureStockOpeningBalance(product, 'guest-checkout');
-    updateProductStock(product, product.stock - quantity);
-  }
-  const order = {
-    id: `ORD-${randomUUID()}`,
-    customerName: req.body.customerName,
-    customerEmail: req.body.customerEmail,
-    shippingRegion: req.body.shippingRegion,
+  if (!domainRepositories) throw new Error('Domain repository has not been initialized');
+  const idempotencyKey = req.get('Idempotency-Key') || req.body.idempotencyKey;
+  if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required' });
+
+  const items = req.body.items.map((item) => {
+    if (item.sku) return { sku: item.sku, qty: item.qty };
+    const product = findById(db.products, item.productId, 'Product');
+    return { sku: product.sku, qty: item.quantity };
+  });
+  const buyerId = req.user?.id || 'GUEST-' + randomUUID();
+  const city = req.body.city || req.body.shippingRegion;
+  const address = req.body.address || req.body.shippingRegion;
+  const result = await domainRepositories.orders.checkout({
+    buyerId,
+    buyerEmail: req.body.customerEmail || req.user?.email,
+    customerName: req.body.customerName || req.user?.name,
+    city,
+    address,
+    paymentMethod: req.body.paymentMethod || 'COD',
     items,
-    total: Number(items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0).toFixed(2)),
-    warehouse_hub: hub.id,
-    status: 'processing',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
-  db.orders.unshift(order);
-  for (const { product, quantity } of resolved) {
-    appendStockMovement(product, -quantity, 'sale', { type: 'order', id: order.id }, 'guest-checkout');
-  }
-  const event = publish('ORDER_CREATED', `Order ${order.id} accepted and routed to ${hub.id}.`, 'INFO', { order });
-  refreshMetrics();
-  await persist();
-  res.status(201).json({ order, event });
+    idempotencyKey,
+    actorId: req.user?.id || buyerId,
+    actorRole: req.user?.role || 'buyer'
+  });
+
+  db = await repository.readState();
+  const event = telemetryEvent({
+    type: 'ORDER_CREATED',
+    level: 'INFO',
+    message: `Order ${result.order.code} accepted and routed to ${result.order.hubs.join(', ')}.`,
+    order: {
+      id: result.order.id,
+      status: result.order.status,
+      total: result.order.price.totalPkr,
+      warehouse_hub: result.order.hubs[0]
+    }
+  });
+  broadcast(event);
+  res.status(201).json({ order: result.order, items: result.items, invoice: result.invoice, event });
 });
+app.post('/api/orders/checkout', optionalAuthenticate, validate(checkoutSchema), checkoutHandler);
+app.post('/api/checkout', optionalAuthenticate, validate(checkoutSchema), checkoutHandler);
+
 app.post('/api/orders/checkout', validate(checkoutSchema), checkoutHandler);
 app.post('/api/checkout', validate(checkoutSchema), checkoutHandler);
 
