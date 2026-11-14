@@ -1165,7 +1165,7 @@ function createDomainRepositories(adapter) {
 
     async transition(id, nextStatus, actor, idempotencyKey) {
       const actorId = requiredString(actor.id, 'actor.id');
-      if (!['approved', 'shipped', 'received'].includes(nextStatus)) {
+      if (!['approved', 'shipped', 'received', 'rejected'].includes(nextStatus)) {
         throw new TypeError('Unsupported purchase order transition');
       }
       return adapter.withTransaction(async ({ repository }) => runIdempotent(repository, {
@@ -1174,9 +1174,9 @@ function createDomainRepositories(adapter) {
         const po = await repository.findById('purchaseOrders', id);
         if (!po) return null;
         const allowed = {
-          draft: ['approved'],
-          approved: ['shipped'],
-          shipped: ['received']
+          draft: ['approved', 'rejected'],
+          approved: ['shipped', 'rejected'],
+          shipped: ['received', 'rejected']
         };
         if (!(allowed[String(po.status).toLowerCase()] || []).includes(nextStatus)) {
           const error = new Error('Invalid purchase order transition: ' + po.status + ' -> ' + nextStatus);
