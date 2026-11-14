@@ -262,7 +262,7 @@ describe('collection repository adapters', () => {
     expect((await reloaded.readState()).dataMode).toBe('production');
   });
 
-  it('stores the legacy movements alias in the canonical stockMovements MongoDB collection', async () => {
+  it('stores the stockMovements state alias in the canonical movements MongoDB collection', async () => {
     const database = new FakeDatabase();
     const adapter = createMongoAdapter({ client: new FakeClient(), database });
     await adapter.initialize({ fallbackState: {
@@ -277,10 +277,10 @@ describe('collection repository adapters', () => {
     });
     expect(await adapter.count('stockMovements')).toBe(1);
     expect(await adapter.count('movements')).toBe(1);
-    expect(database.collection('stockMovements').documents.has('MOV-1')).toBe(true);
+    expect(database.collection('movements').documents.has('MOV-1')).toBe(true);
     expect(database.collection('users').options.validationAction).toBe('error');
     expect(database.collection('stockMovements').options.validator.$jsonSchema.required).toContain('refId');
-    expect(database.collection('movements').documents.size).toBe(0);
+    expect(database.collection('stockMovements').documents.size).toBe(0);
     await expect(adapter.remove('movements', 'MOV-1')).rejects.toThrow('append-only');
   });
 
