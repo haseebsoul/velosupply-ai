@@ -44,7 +44,10 @@ class FakeCollection {
     })).length;
   }
   find(filter = {}) {
-    let rows = [...this.documents.values()].filter((document) => Object.entries(filter).every(([key, value]) => document[key] === value));
+    let rows = [...this.documents.values()].filter((document) => Object.entries(filter).every(([key, value]) => {
+      if (value && typeof value === 'object' && '$in' in value) return value.$in.includes(document[key]);
+      return document[key] === value;
+    }));
     const cursor = {
       sort(sort) {
         const [[field, direction]] = Object.entries(sort);
