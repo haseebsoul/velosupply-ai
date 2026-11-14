@@ -29,3 +29,8 @@ npx vitest run test/log-sanitizer.test.mjs test/sre.test.mjs
 ## Review hardening on the current-main rebase
 
 The structured-key matcher normalizes camelCase and separators before matching IP-address keys, so ordinary fields such as `description` are preserved while `clientIp`, `requestIP` and `ipAddress` are redacted. The traversal removes objects from its active recursion set after visiting them, so repeated shared references remain intact while true cycles are still marked. These cases are covered by focused regression tests.
+
+
+## Startup default logging
+
+The backend startup warning reports only that a development default was generated. It does not serialize the generated JWT secret or the CORS default. A subprocess regression test captures startup output, checks that the generated JWT value is absent, and verifies that the warning has no default-value object.
