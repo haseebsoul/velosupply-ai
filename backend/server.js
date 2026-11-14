@@ -926,11 +926,19 @@ app.get('/api/inventory/:id/ledger', requireRoles('admin', 'operator'), asyncRou
 app.post('/api/inventory/restock/:id', requireRoles('admin', 'operator'), validate(restockSchema), asyncRoute(async (req, res) => {
   const product = repository ? await repository.findById('products', req.params.id) : findById(db.products, req.params.id, 'Product');
   if (!product || product.archivedAt) return res.status(404).json({ error: 'Product not found' });
-  const threats = await (async () => {
-    const response = await Promise.resolve(repository ? repository.find('movements', { sku: product.sku }) : (db.movements || []).filter((movement) => movement.sku === product.sku));
-    const shipped = response.filter((movement) => movement.type === 'SHIP');
-    const recent = shipped.filter((movement) => Date.now() - Date.parse(movement.at) <= 14 * 86400000);
-    const avgDaily = recent.reduce((sum, movement) => sum + movement.qty, 0) / (recent.length && (Date.now() - Math.min(...recent.map((movement) => Date.parse(movement.at)))) > 7 * 86400000 ? 14 : 7);
+  const recommendedQty = await (async () => {
+    const movementRows = repository
+      ? await repository.find('movements', { sku: product.sku })
+      : (db.movements || []).filter((movement) => movement.sku === product.sku);
+    const now = Date.now();
+    const historyTimes = movementRows.map((movement) => Date.parse(movement.at)).filter(Number.isFinite);
+    const historyDays = historyTimes.length ? (now - Math.min(...historyTimes)) / 86400000 : 0;
+    const lookbackDays = historyDays > 14 ? 14 : 7;
+    const since = now - lookbackDays * 86400000;
+    const shippedQty = movementRows
+      .filter((movement) => movement.type === 'SHIP' && Number.isFinite(Date.parse(movement.at)) && Date.parse(movement.at) >= since)
+      .reduce((sum, movement) => sum + Number(movement.qty || 0), 0);
+    const avgDaily = shippedQty / lookbackDays;
     const stockRows = await repository.find('stock', { sku: product.sku, hubCode: product.warehouse_hub || 'unassigned' }, { limit: 1 });
     const available = stockRows.length ? stockRows[0].onHand - stockRows[0].reserved : (product.available ?? product.stock);
     const poRows = await repository.find('purchaseOrders', {});
@@ -939,7 +947,7 @@ app.post('/api/inventory/restock/:id', requireRoles('admin', 'operator'), valida
       .reduce((sum, line) => sum + Number(line.qty || 0), 0);
     return Math.max(0, Math.ceil(avgDaily * (Number(product.leadDays || 1) + 14)) - available - onOrder);
   })();
-  const quantity = req.body.quantity || threats;
+  const quantity = req.body.quantity ?? recommendedQty;
   if (!Number.isSafeInteger(quantity) || quantity <= 0) {
     return res.status(400).json({ error: 'NO_RESTOCK_REQUIRED', message: 'No positive purchase order quantity is currently recommended.' });
   }
@@ -958,6 +966,7 @@ app.post('/api/inventory/restock/:id', requireRoles('admin', 'operator'), valida
     res.status(201).json({
       purchaseOrder,
       quantity,
+      recommendedQty,
       message: 'Draft purchase order created. Inventory changes only after approval, shipment and receipt.'
     });
   } catch (error) {
