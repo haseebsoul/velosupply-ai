@@ -11,13 +11,13 @@ const bcrypt = require('bcryptjs');
 const serverModule = require('../server.js');
 let temporaryDirectory;
 
-async function setup() {
+async function setup(dataMode = 'test') {
   temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'velosupply-checkout-route-'));
   const adapter = createFileAdapter({
     filePath: path.join(temporaryDirectory, 'db.json'),
     loadInitial: async () => ({
       schemaVersion: 3,
-      dataMode: 'test',
+      dataMode,
       users: [{
         id: 'USER-ADMIN', name: 'Demo Admin', email: 'admin@example.com',
         role: 'admin', passwordHash: await bcrypt.hash('AdminPassword123', 10),
@@ -72,6 +72,24 @@ afterEach(async () => {
 });
 
 describe('Pakistan checkout HTTP route', () => {
+  it('requires a buyer session for production checkout while demo guest checkout remains compatible', async () => {
+    const { adapter } = await setup('production');
+    const response = await supertest(serverModule.app)
+      .post('/api/checkout')
+      .set('Idempotency-Key', 'production-guest-checkout-001')
+      .send({
+        customerName: 'Guest Buyer',
+        customerEmail: 'guest@example.com',
+        city: 'Karachi',
+        address: 'Block 7, Karachi',
+        paymentMethod: 'COD',
+        items: [{ sku: 'SKU-1', qty: 1 }]
+      });
+    expect(response.status).toBe(401);
+    expect(response.body.error).toBe('Buyer authentication is required for production checkout');
+    expect(await adapter.count('orders')).toBe(0);
+  });
+
   it('creates a PKR order, invoice, movements and separate order items through POST /api/checkout', async () => {
     const { adapter } = await setup();
     const payload = {
