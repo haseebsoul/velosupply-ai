@@ -236,11 +236,12 @@ function normalizeStateShape(input) {
 function recordsForState(state, name) {
   name = canonicalCollectionName(name);
   if (name === 'stock') {
+    if (Array.isArray(state.stock) && state.stock.length) return state.stock;
     return (state.products || []).map((product) => ({
       id: String(product.sku || product.id) + ':' + String(product.warehouse_hub || 'unassigned'),
       sku: product.sku,
       hubCode: product.warehouse_hub || 'unassigned',
-      onHand: Number.isFinite(product.stock) ? product.stock : 0,
+      onHand: Number.isSafeInteger(product.stock) ? product.stock : 0,
       reserved: 0,
       projection: true
     }));
