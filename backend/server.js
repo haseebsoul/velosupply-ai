@@ -962,6 +962,65 @@ app.post('/api/inventory/transfer', requireRoles('admin', 'operator'), validate(
   }
 }));
 
+app.get('/api/me/orders', asyncRoute(async (req, res) => {
+  const rows = repository ? await repository.find('orders', {}) : db.orders;
+  res.json(rows.filter((order) => order.buyerId === req.user.id || order.userId === req.user.id));
+}));
+app.get('/api/me/orders/:id', asyncRoute(async (req, res) => {
+  const order = repository ? await repository.findById('orders', req.params.id) : (db.orders || []).find((entry) => entry.id === req.params.id);
+  if (!order || (order.buyerId !== req.user.id && order.userId !== req.user.id)) {
+    return res.status(404).json({ error: 'Order not found' });
+  }
+  res.json({ order });
+}));
+app.get('/api/me/invoices', asyncRoute(async (req, res) => {
+  const rows = repository ? await repository.find('invoices', {}) : (db.invoices || []);
+  res.json(rows.filter((invoice) => invoice.buyerId === req.user.id));
+}));
+app.get('/api/me/invoices/:id', asyncRoute(async (req, res) => {
+  const invoice = repository ? await repository.findById('invoices', req.params.id) : (db.invoices || []).find((entry) => entry.id === req.params.id);
+  if (!invoice || invoice.buyerId !== req.user.id) return res.status(404).json({ error: 'Invoice not found' });
+  res.json({ invoice });
+}));
+app.post('/api/me/orders/:id/cancel', asyncRoute(async (req, res) => {
+  const order = repository ? await repository.findById('orders', req.params.id) : (db.orders || []).find((entry) => entry.id === req.params.id);
+  if (!order || (order.buyerId !== req.user.id && order.userId !== req.user.id)) {
+    return res.status(404).json({ error: 'Order not found' });
+  }
+  const idempotencyKey = req.get('Idempotency-Key');
+  if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for order cancellation' });
+  try {
+    const updated = await domainRepositories.orders.advanceStatus(order.id, 'CANCELLED', {
+      id: req.user.id, role: req.user.role, idempotencyKey
+    });
+    db = await repository.readState();
+    publish('ORDER_STATUS', `Order ${updated.code || updated.id} cancelled and reserved stock released.`, 'INFO', { order: updated });
+    await persist();
+    res.json({ order: updated });
+  } catch (error) {
+    if (error.code === 'INVALID_TRANSITION') return res.status(409).json({ error: error.code, message: error.message });
+    if (error.code === 'KEY_REUSED') return res.status(422).json({ error: error.code, message: error.message });
+    throw error;
+  }
+}));
+app.post('/api/me/orders/:id/return', validate(returnRequestSchema), asyncRoute(async (req, res) => {
+  const order = repository ? await repository.findById('orders', req.params.id) : (db.orders || []).find((entry) => entry.id === req.params.id);
+  if (!order || (order.buyerId !== req.user.id && order.userId !== req.user.id)) {
+    return res.status(404).json({ error: 'Order not found' });
+  }
+  try {
+    const result = await domainRepositories.orders.requestReturn(order.id, req.body, {
+      id: req.user.id, role: req.user.role
+    });
+    db = await repository.readState();
+    await persist();
+    res.status(201).json(result);
+  } catch (error) {
+    if (error.code === 'INVALID_TRANSITION') return res.status(409).json({ error: error.code, message: error.message });
+    throw error;
+  }
+}));
+
 app.get('/api/returns', asyncRoute(async (req, res) => {
   const rows = repository ? await repository.find('returns', {}) : (db.returns || []);
   if (req.user.role === 'admin' || req.user.role === 'operator') return res.json(rows);
