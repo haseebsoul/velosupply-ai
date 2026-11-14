@@ -100,23 +100,23 @@ function createDomainRepositories(adapter) {
       if (!Number.isSafeInteger(gstPct) || gstPct < 0 || gstPct > 100) throw new TypeError('GST tariff ratePct must be an integer from 0 to 100');
       if (!Number.isSafeInteger(deliveryFeePkr) || deliveryFeePkr < 0) throw new TypeError('Delivery tariff amountPkr must be a non-negative integer');
       if (!Number.isSafeInteger(freeDeliveryThresholdPkr) || freeDeliveryThresholdPkr < 0) throw new TypeError('Free-delivery threshold must be a non-negative integer');
-      if (!Object.prototype.hasOwnProperty.call(deliveryFees, city)) throw new TypeError('Unsupported delivery city: ' + city);
 
       const items = itemInputs.map((item) => {
         const qty = integer(item.qty ?? item.quantity, 'qty', 1);
         const unitExGstPkr = integer(item.unitExGstPkr, 'unitExGstPkr', 0);
         const sku = requiredString(item.sku, 'sku');
         const name = requiredString(item.name, 'name');
-        const lineEx = Math.round(unitExGstPkr * qty);
-        const lineGst = Math.round(lineEx * gstPct / 100);
+        const lineExPkr = Math.round(unitExGstPkr * qty);
+        const lineGstPkr = Math.round(lineExPkr * gstPct / 100);
         return {
           id: item.id || 'ITEM-' + randomUUID(),
           sku,
           name,
           qty,
           unitExGstPkr,
-          lineEx,
-          lineGst
+          unitPriceMinor: unitExGstPkr * 100,
+          lineExMinor: lineExPkr * 100,
+          lineGstMinor: lineGstPkr * 100
         };
       });
 
