@@ -54,7 +54,7 @@ function createDomainRepositories(adapter) {
       const email = requiredString(input.email, 'email').toLowerCase();
       const role = input.role === 'user' ? 'buyer' : requiredString(input.role, 'role');
       if (!BUYER_ROLES.has(role)) throw new TypeError('role must be buyer, operator, or admin');
-      const filerStatus = role === 'buyer' ? (input.filerStatus || 'unverified') : undefined;
+      const filerStatus = role === 'buyer' ? input.filerStatus : undefined;
       if (role === 'buyer' && !['filer', 'non-filer', 'unverified'].includes(filerStatus)) {
         throw new TypeError('filerStatus must be filer, non-filer, or unverified for buyers');
       }
