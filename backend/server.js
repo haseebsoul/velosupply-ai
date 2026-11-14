@@ -345,7 +345,7 @@ const registerSchema = z.object({
   name: z.string().trim().min(2).max(100),
   email: z.string().trim().email().transform((value) => value.toLowerCase()),
   password: z.string().min(8).max(128).regex(/[A-Z]/, 'Password must contain an uppercase letter').regex(/[0-9]/, 'Password must contain a number'),
-  role: z.enum(['admin', 'operator', 'user']).default('user'),
+  role: z.enum(['admin', 'operator', 'user', 'buyer']).default('user'),
   registrationInviteCode: z.string().max(200).optional()
 }).strict();
 const checkoutSchema = z.object({
@@ -614,37 +614,41 @@ app.get('/api/admin/users', requireRoles('admin'), (_req, res) => {
   res.json(db.users.map(safeUser));
 });
 app.patch('/api/admin/users/:id', requireRoles('admin'), validate(roleSchema), asyncRoute(async (req, res) => {
-  const user = findById(db.users, req.params.id, 'User');
-  if (req.params.id === req.user.id && req.body.role !== 'admin') {
+  if (req.params.id === req.user.id && !['admin'].includes(req.body.role)) {
     return res.status(400).json({ error: 'You cannot demote your own administrator account' });
   }
-  if (req.body.role === 'admin' && user.role !== 'admin' && db.users.some((entry) => entry.role === 'admin')) {
-    return res.status(409).json({ error: 'ADMIN_EXISTS' });
+  try {
+    const user = await domainRepositories.users.changeRole(
+      req.params.id,
+      req.body.role,
+      { id: req.user.id, role: req.user.role }
+    );
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    db = await repository.readState();
+    addLog(`Role updated for ${user.name}: ${user.role}.`, 'INFO', 'USER', { userId: user.id });
+    res.json({ user: safeUser(user) });
+  } catch (error) {
+    if (error.code === 'ADMIN_EXISTS' || error.code === 'LAST_ADMIN') {
+      return res.status(409).json({ error: error.code === 'ADMIN_EXISTS' ? 'ADMIN_EXISTS' : error.message });
+    }
+    throw error;
   }
-  if (user.role === 'admin' && req.body.role !== 'admin' && db.users.filter((entry) => entry.role === 'admin').length <= 1) {
-    return res.status(409).json({ error: 'The last administrator cannot be demoted' });
-  }
-  user.role = req.body.role;
-  user.updatedAt = new Date().toISOString();
-  addLog(`Role updated for ${user.name}: ${user.role}.`, 'INFO', 'USER', { userId: user.id });
-  sre.audit?.('user.role_update', req.user, { targetUserId: user.id, role: user.role });
-  await persist();
-  res.json({ user: safeUser(user) });
 }));
 app.delete('/api/admin/users/:id', requireRoles('admin'), asyncRoute(async (req, res) => {
   if (req.params.id === req.user.id) return res.status(400).json({ error: 'You cannot delete your own account' });
-  const user = findById(db.users, req.params.id, 'User');
-  if (user.isActive === false || user.deletedAt) return res.status(409).json({ error: 'User account is already inactive' });
-  if (user.role === 'admin' && db.users.filter((entry) => entry.role === 'admin' && entry.isActive !== false && !entry.deletedAt).length <= 1) {
-    return res.status(409).json({ error: 'The last administrator cannot be deleted' });
+  try {
+    const user = await domainRepositories.users.softDelete(
+      req.params.id,
+      { id: req.user.id, role: req.user.role }
+    );
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    db = await repository.readState();
+    addLog(`User account soft-deleted for ${user.email}.`, 'WARN', 'USER', { userId: user.id });
+    res.json({ success: true, user: safeUser(user) });
+  } catch (error) {
+    if (error.code === 'LAST_ADMIN' || error.code === 'USER_INACTIVE') return res.status(409).json({ error: error.message });
+    throw error;
   }
-  user.isActive = false;
-  user.deletedAt = new Date().toISOString();
-  user.updatedAt = user.deletedAt;
-  addLog(`User account soft-deleted for ${user.email}.`, 'WARN', 'USER', { userId: user.id });
-  sre.audit?.('user.soft_delete', req.user, { targetUserId: user.id });
-  await persist();
-  res.json({ success: true, user: safeUser(user) });
 }));
 
 app.patch('/api/inventory/:id', requireRoles('admin', 'operator'), validate(inventoryUpdateSchema), asyncRoute(async (req, res) => {
