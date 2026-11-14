@@ -295,4 +295,4 @@ function createDomainRepositories(adapter) {
   return { users, warehouses, products, orders, stockMovements, auditLogs, tariffRules };
 }
 
-module.exports = { createDomainRepositories, BUYER_ROLES, MOVEMENT_TYPES, movementBalance };
+module.exports = { createDomainRepositories, BUYER_ROLES, MOVEMENT_TYPES };
