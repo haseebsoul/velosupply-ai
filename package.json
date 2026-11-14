@@ -9,6 +9,7 @@
     "seed": "npm run seed --prefix backend",
     "test": "npm test --prefix backend",
     "build": "npm run build --prefix frontend",
-    "check": "npm test --prefix backend && node scripts/check-hex.mjs && npm run build --prefix frontend"
+    "check": "npm test --prefix backend && node scripts/check-hex.mjs && npm run build --prefix frontend",
+    "migrate:state": "npm run migrate:state --prefix backend"
   }
 }

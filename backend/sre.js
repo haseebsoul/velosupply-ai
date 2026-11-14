@@ -83,8 +83,7 @@ function createSRE(deps) {
   function audit(action, actor, meta = {}) {
     try {
       const db = getDb();
-      db.sre.audit.unshift({ id: randomUUID(), actorId: actor?.id || null, actorRole: actor?.role || 'system', action, meta, at: new Date().toISOString() });
-      db.sre.audit = db.sre.audit.slice(0, 1000);
+      db.sre.audit.push({ id: randomUUID(), actorId: actor?.id || 'system', actorRole: actor?.role || 'system', action, meta, at: new Date().toISOString() });
       Promise.resolve(deps.persist?.()).catch((error) => log('ERROR', 'SRE audit persistence failed', { error: error.message }));
     } catch (error) { log('ERROR', 'SRE audit write failed', { error: error.message }); }
   }
@@ -514,7 +513,7 @@ function createSRE(deps) {
   });
   router.get('/audit', (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Administrator access required' });
-    res.json(getDb().sre.audit.slice(0, 1000));
+    res.json([...getDb().sre.audit].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 1000));
   });
   router.get('/incidents', (_req, res) => res.json(getDb().sre.incidents));
   const incidentSchema = z.object({

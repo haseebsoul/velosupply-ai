@@ -470,18 +470,21 @@ The following implementation has been committed after the Phase 1 read-only audi
 - Added helmet headers, 300/minute API and 10/minute login rate limits, 5-failures/15-minute email lockout, registration password complexity, generated local JWT/CORS defaults, production startup checks for JWT_SECRET and CORS_ORIGIN, single-admin checks in registration and role changes, buyer order scoping, and reduced WebSocket order data.
 - Added backend SRE tests and CI test execution. Added root setup/dev/seed/test/build/check scripts. Seeded new local databases use `Velo@12345`; the seeded operator email in code is `operator@velosupply.ai`.
 
-### SRE implementation boundaries still open
+### Repository integration and remaining boundaries
 
-- The primary store remains the existing `application_state` document / `backend/db.json`; the Section 13.4 multi-collection repository layer and migration have not been implemented.
-- No immutable `movements` stock ledger exists. The Stock ledger health probe deliberately reports degraded and SLO-3 currently detects negative stock only; it cannot prove ledger reconciliation.
-- No external payment provider is configured. Payment gateway health deliberately reports degraded because checkout remains the current simulated adapter.
-- The API's 30-day SLO observations are in-process and reset on process restart. Five-minute aggregates and health-check history are persisted; a restart-safe historical SLO query engine is still required for durable 30-day budgets.
-- The one-second telemetry ring is process-local; five-minute aggregates are persisted in the application state. It has not been load-tested for the complete 30-day SLO horizon.
-- Atlas connectivity, production backup configuration, restoration drills, TLS/proxy behavior, chaos behavior against a deployed environment, and end-to-end role acceptance have not been exercised in this implementation session.
-- CI has verified backend syntax, the automated backend SRE tests, and frontend production build on the commits noted in GitHub Actions. Passing CI does not establish production readiness or completion of the entire Pakistan Edition.
+- MongoDB uses named collections and an `application_meta.revision` optimistic concurrency guard. The adapter applies per-record changes in transactions; stale snapshot writes fail with `WRITE_CONFLICT`/409 instead of replacing another process's changes. The legacy state compatibility writer remains for ancillary routes, but it is guarded by the same revision check.
+- The file adapter uses an atomic local JSON file and a serialized in-process write queue. It is not cross-process safe; multiple backend instances must use MongoDB.
+- The canonical `movements` collection (legacy state alias `stockMovements`) and `auditLogs` are append-only. Checkout reserves stock and inserts order/orderItems/invoice/audit records in a transaction. Restock, manual adjustment, paired transfer, cancellation, dispatch and return receipt now update stock and append appropriate movements/audit records.
+- The inventory ledger is a projection of current stock and movement history. A first movement on legacy stock creates an opening-balance snapshot from the current count; it cannot reconstruct events before that timestamp.
+- HTTP checkout uses the Pakistan PKR workflow with source-tagged tariffs. Local `demo-estimate` GST/delivery rules are not official rates. Non-COD methods are stored as selected payment methods only; no actual payment request or custody of funds occurs.
+- User registration/login, role changes and account soft deletion use collection-backed user operations. Login attempts use the TTL-backed collection. Buyer filer state is explicitly `unverified` unless supplied by a trusted owner workflow.
+- Product/catalog/order/warehouse/log/stock-cover reads use current collection reads. Threat calculations use SHIP movement units and the 7/14-day window, days of cover, reorder point and recommendation quantity. The Reports replenishment count uses available (unreserved) units against the reorder threshold.
+- The Pakistan demo seed mirrors SRS 8.1–8.4 and is synthetic only: 6 hubs, 12 specified SKUs, 26 demo role accounts (exactly 1 admin, 4 operators, 21 buyers), 5 fictional suppliers, 60 PKR demo orders over 45 days, 8 purchase orders, 5 incidents, 8 alerts, 150 audit entries and 6 messages. The 60 orders each have a reservation movement and the stock ledger is tested against the final stock/reserved projection. Production bootstrap remains empty.
+- Ancillary routes remain compatibility-state based: newsletter subscriptions, reward claims, scenario simulations and portions of SRE/telemetry. The seeded Messages records are not yet exposed through message CRUD/read-state endpoints; the Messages page remains static demo content. Supplier master CRUD, full product/warehouse CRUD and Settings workflows are incomplete. The MongoDB revision guard prevents silent lost updates, but the remaining state routes still require collection-specific repository operations and route-level tests. The local file adapter is intentionally single-process.
+- Atlas application-driver connectivity, migration against the deployed host, backup restoration, external provider credentials and end-to-end production role acceptance have not been verified. Atlas Network Access needs the real backend egress IP/CIDR; a universal `0.0.0.0/0` rule is not used.
+- Payment, FX, email, FBR tariff ingestion, courier tracking/POD, CNIC verification and cyberattack detection remain owner/provider-dependent or unimplemented. Passing CI does not establish production readiness or completion of the full Pakistan Edition.
 
-The branch does not claim the SRE section or the full SRS is complete while these boundaries remain.
-## 19. Latest SRE verification
+## SRE verification at the v15 milestone (historical; newer v16 CI results are recorded in Section 21)
 
 The implementation was verified by GitHub Actions run [43523910861](https://github.com/haseebsoul/velosupply-ai/actions/runs/43523910861), on commit `dba575a57902c86678fccf827feffb122fc96c2e`.
 
@@ -510,6 +513,8 @@ No new cluster was created because the existing free cluster already satisfies t
 
 ### Data provenance findings
 
+> Historical snapshot note: the following data-provenance bullets describe the repository state inspected on 13 November 2026, before the Pakistan v16 seed replacement and the newer HTTP/domain integrations. They are retained as historical Atlas/bootstrap evidence, not as the current local demo seed or current API behavior. The current implementation status is recorded in Section 21.
+
 - Local JSON fallback: seeded demo dataset when `MONGODB_URI` is absent in development.
 - Seed records: 5 demo hubs (Newark, Austin, Rotterdam, Dubai, Singapore), 24 synthetic products, 12 synthetic orders, three development users and generated logs.
 - Seeded demo login: `admin@velosupply.ai`, `operator@velosupply.ai`, `buyer@velosupply.ai`; seeded password is `Velo@12345`. Production's empty Atlas bootstrap contains no demo users.
@@ -529,3 +534,60 @@ No new cluster was created because the existing free cluster already satisfies t
 - Production scenario simulation is blocked unless explicitly enabled.
 
 This direct Atlas inspection confirms the cluster and empty bootstrap record exist; it does not verify the user's local `.env`, GitHub deployment secrets, application IP allowlisting, or a live Express-to-Atlas runtime connection.
+
+
+## Initial repository-layer follow-up (v16; historical snapshot superseded by Section 18)
+
+- Added a collection map for the Section 12.1 domain collections and the extra application collections already present in runtime state.
+- Added a MongoDB adapter with per-collection CRUD, index creation, Atlas sessions/transactions, collection hydration, and differential collection persistence. The old application_state record remains read-only during migration.
+- Added a file adapter with the same collection CRUD contract, serialized writes, temp-file/rename replacement, and snapshot rollback for failed transactions.
+- Added safe migration behavior: a legacy application_state/_id=primary document is copied into migrationBackups before migration; migration is attempted only when the new collections are empty. Ambiguous partially populated databases fail closed.
+- The product-level quantity is projected into the stock collection for compatibility. This is not an immutable stock movement ledger and is not yet a source-of-truth stock allocation model.
+- Express route handlers still mutate an in-memory compatibility state object and call repository.writeState; collection-specific controller/service reads and writes and safe multi-instance concurrency remain a follow-up. Do not represent this phase as the entire Section 13.4 requirement completed.
+- The Atlas migration has not been run through the application connection. The verified Atlas Network Access list had no entries; the deployment host's actual egress IP/CIDR is still required.
+- Added npm run migrate:state and repository tests for file CRUD/rollback, collection metadata separation, stock projection, legacy backup/migration, and fail-closed initialization.
+
+
+## Initial v16 domain-repository follow-up (historical snapshot superseded by Section 18)
+
+- Added domain services for buyer soft-deletion, product archival, atomic order plus order-item creation, append-only stock movements in the SRS `movements` collection, stock reconciliation, append-only audit events and versioned tariff rules.
+- Domain order writes snapshot the SRS item fields, round each line to whole PKR, calculate GST per line at the configured/default 18 percent, apply the city delivery-fee table (free only above Rs 150,000 subtotal), and store the nested price breakdown. Buyer creation requires filer/non-filer status.
+- Movement records use the SRS fields: `sku`, `hubCode`, `type`, `qty`, `reason`, `refType`, `refId`, `actorId`, and `at`. The service implements RECEIVE, RESERVE, RELEASE, SHIP, ADJUST, TRANSFER_OUT, TRANSFER_IN and RETURN_IN effects, prevents negative available stock, and performs paired hub transfers in one adapter transaction. Append-only enforcement prevents update/delete/replacement; audit events are also append-only.
+- At this initial domain-service checkpoint, the services were not yet wired into HTTP handlers. This statement is historical and is superseded by the later route-integration status in Section 18: checkout, inventory adjustment, hub transfer, PO receipt and order lifecycle now use the append-only ledger.
+- The SRS calls for Zod validation at API/domain boundaries; these new service validations are explicit runtime checks, not yet a complete Zod schema layer for every collection.
+- No live Atlas runtime migration or persistence smoke test has been performed; the known Atlas IP allowlist gap remains.
+
+
+## 21. PR #4 current implementation and verification snapshot
+
+**Review date:** 14 November 2026  
+**PR:** [#4 — VeloSupply v16 collection-aware persistence](https://github.com/haseebsoul/velosupply-ai/pull/4)  
+**Branch:** \`pakistan/v16-multi-collection\`  
+**Verified commit:** \`fe6a6688945a62de2400b14c51d98e4c0465ea3b\`
+
+### Frontend build regression review
+
+- The earlier CI failure was reproduced from GitHub Actions run [#43542214964](https://github.com/haseebsoul/velosupply-ai/actions/runs/43542214964): \`CommandPages.tsx\` imported \`useMemo\` without using it and referenced \`productsAtRisk\` after its definition had been removed.
+- At the reviewed branch head, \`useMemo\` is imported, \`productsAtRisk\` is defined, and the Reports Executive Summary consumes the resulting count. The memo now evaluates available (unreserved) units against the product reorder threshold; it falls back to \`stock - reserved\` only when the API response omits \`available\`. Non-finite values are excluded rather than counted as a risk. This avoids calling reserved stock sellable stock.
+- The \`/dashboard/threats\` view is separate: it consumes \`GET /api/threats\` and renders days of cover, available quantity, on-order quantity, reorder point, suggested quantity and assigned supplier metadata.
+
+### Pakistan seed and connected behavior
+
+- The current local seed contains six Pakistan-labelled demo hubs, 12 specified demo SKUs, 26 demo accounts (1 admin, 4 operators, 21 buyers), five fictional suppliers, 60 synthetic PKR orders/order items/invoices, eight purchase orders, a stock movement ledger, five incidents, eight alerts, 150 synthetic audit events and six synthetic support messages. Seed records carry demo provenance; buyer filer state is \`unverified\`. This is not verified Pakistani business data.
+- Production fallback remains an empty production state. Collection normalization initializes omitted state paths as empty arrays. The seed refuses to replace non-demo state and preserves unknown customized demo states.
+- HTTP restock no longer directly increments stock. \`POST /api/inventory/restock/:id\` creates a draft purchase order. Staff transitions it through approved → shipped → received; only the received transition increments on-hand stock and appends the purchase-order-linked \`RECEIVE\` movement. Operators cannot approve purchase orders above Rs 2,000,000; an administrator is required.
+- \`GET /api/purchase-orders\` and \`PATCH /api/purchase-orders/:id/status\` are connected to the purchase-order repository service and are surfaced in the Manage Inventory dashboard. Supplier master CRUD remains absent.
+- The six seeded message records are not yet served by message CRUD/read-state endpoints. The Messages page remains static demo content; the seed count must not be interpreted as a live inbox.
+- Newsletter/rewards/simulation and portions of SRE/telemetry remain compatibility-state paths. Full product/warehouse CRUD and Settings workflows are also incomplete.
+
+### CI verification at this head
+
+GitHub Actions run [#43542854503](https://github.com/haseebsoul/velosupply-ai/actions/runs/43542854503) passed on \`fe6a6688945a62de2400b14c51d98e4c0465ea3b\`:
+
+- Backend dependency installation and reproducible \`npm ci\` passed.
+- Backend JavaScript syntax checks passed.
+- \`npm test\`: **61 tests passed across 7 test files**.
+- Frontend palette-token validation and root development-script syntax checks passed.
+- Frontend \`npm ci\` and \`npm run build\` (TypeScript + Vite production build) passed.
+
+This is hosted GitHub Actions verification. A local \`git clone\` was not possible from the tool environment because DNS resolution for \`github.com\` failed; no claim of a separate local build is made. No Atlas data, credentials, network access, or deployment was changed during this review. PR #4 remains Draft pending human review and the outstanding integration/owner-side verification work.

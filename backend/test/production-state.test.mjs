@@ -12,6 +12,9 @@ describe('production storage bootstrap', () => {
     expect(state.warehouses).toEqual([]);
     expect(state.products).toEqual([]);
     expect(state.orders).toEqual([]);
+    expect(state.orderItems).toEqual([]);
+    expect(state.movements).toEqual([]);
+    expect(state.tariffRules).toEqual([]);
     expect(state.metrics).toEqual({
       gmv24h: 0,
       activeOrders: 0,

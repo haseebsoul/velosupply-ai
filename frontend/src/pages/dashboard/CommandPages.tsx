@@ -5,7 +5,7 @@ import { useLocation } from 'react-router-dom'
 import { api, errorMessage } from '../../lib/apiClient'
 import { useWebSocket } from '../../lib/useWebSocket'
 import { useAppStore } from '../../store/useAppStore'
-import type { Metrics, Order, Product, User, UserRole, Warehouse } from '../../types'
+import type { InventoryThreat, Metrics, Order, Product, PurchaseOrder, User, UserRole, Warehouse } from '../../types'
 import { StatCard } from '../../components/dashboard/StatCard'
 import { ThreatRow } from '../../components/dashboard/ThreatRow'
 import { TerminalPanel } from '../../components/dashboard/TerminalPanel'
@@ -20,9 +20,11 @@ export function CommandPages() {
   const { events, latest, connected } = useWebSocket()
   const [metrics, setMetrics] = useState(initialMetrics)
   const [products, setProducts] = useState<Product[]>([])
+  const [threats, setThreats] = useState<InventoryThreat[]>([])
   const [orders, setOrders] = useState<Order[]>([])
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [users, setUsers] = useState<User[]>([])
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([])
   const [rewardOffers, setRewardOffers] = useState<Array<{ id: string; title: string; description: string; points: number; minimumScore: number }>>([])
   const [rewardClaims, setRewardClaims] = useState<Array<{ id: string; offerId: string; title: string; points: number; claimedAt: string }>>([])
   const [selectedHub, setSelectedHub] = useState<Warehouse | null>(null)
@@ -43,6 +45,38 @@ export function CommandPages() {
     if (latest?.warehouses) setWarehouses(latest.warehouses)
     if (latest?.type === 'ORDER_CREATED' || latest?.type === 'THREAT_RESOLVED') void refresh()
   }, [latest, refresh])
+  const refreshPurchaseOrders = useCallback(async () => {
+    if (!['admin', 'operator'].includes(user?.role ?? '')) {
+      setPurchaseOrders([])
+      return
+    }
+    try {
+      const { data } = await api.get<PurchaseOrder[]>('/purchase-orders')
+      setPurchaseOrders(data)
+    } catch (reason) {
+      setError(errorMessage(reason))
+    }
+  }, [user?.role])
+  useEffect(() => {
+    if (pathname === '/dashboard/manage') void refreshPurchaseOrders()
+  }, [pathname, refreshPurchaseOrders])
+
+  const refreshThreats = useCallback(async () => {
+    if (!['admin', 'operator'].includes(user?.role ?? '')) {
+      setThreats([])
+      return
+    }
+    try {
+      const { data } = await api.get<InventoryThreat[]>('/threats')
+      setThreats(data)
+    } catch (reason) {
+      setError(errorMessage(reason))
+    }
+  }, [user?.role])
+  useEffect(() => {
+    if (pathname === '/dashboard/threats') void refreshThreats()
+  }, [pathname, refreshThreats])
+
   useEffect(() => {
     if (pathname === '/dashboard/rewards') {
       api.get<{ offers: typeof rewardOffers; claims: typeof rewardClaims }>('/rewards')
@@ -54,7 +88,15 @@ export function CommandPages() {
   useEffect(() => {
     if (pathname === '/dashboard/admin' && user?.role === 'admin') api.get<User[]>('/admin/users').then(({ data }) => setUsers(data)).catch((reason: unknown) => setError(errorMessage(reason)))
   }, [pathname, user?.role])
-  const productsAtRisk = useMemo(() => products.filter((product) => product.stock <= product.reorder_threshold), [products])
+  // Reorder attention is based on sellable units, not on-hand units that may already be reserved.
+  const productsAtRisk = useMemo(() => products.filter((product) => {
+    const available = Number.isFinite(product.available)
+      ? product.available as number
+      : product.stock - (product.reserved ?? 0)
+    return Number.isFinite(available) &&
+      Number.isFinite(product.reorder_threshold) &&
+      available <= product.reorder_threshold
+  }), [products])
   const history = events.slice(-20).map((event, index) => ({ name: index.toString(), orders: event.metrics?.activeOrders ?? Math.max(0, metrics.activeOrders + (index % 5) - 2), throughput: event.metrics?.packetsPerSec ?? metrics.packetsPerSec }))
   const request = async (operation: () => Promise<unknown>, success: string, then?: () => void) => {
     try { await operation(); setNotice(success); setError(''); then?.(); await refresh() }
@@ -74,8 +116,8 @@ export function CommandPages() {
     {notice && <div role="status" className="success-text" style={{ marginBottom: 15 }}>{notice}</div>}
 
     {pathname === '/dashboard' && <>
-      <div className="drawer-head"><div><h1 className="ops-heading">Good morning, {user?.name ?? 'Operator'}.</h1><p className="ops-copy">Your global fulfillment network is in view.</p></div><span className="mono-label"><i className="live-dot" /> {connected ? 'TELEMETRY SYNC ACTIVE' : 'RECONNECTING'}</span></div>
-      <div className="dash-grid"><StatCard title="24H GROSS MERCHANDISE VALUE" value={metrics.gmv24h} prefix="$" note="Real-time order value" /><StatCard title="ACTIVE ORDERS IN TRANSIT" value={metrics.activeOrders} note="Across all fulfillment nodes" /><StatCard title="GLOBAL FULFILLMENT HEALTH" value={metrics.fulfillmentHealth} suffix="%" note="Network-wide SLA performance" /></div>
+      <div className="drawer-head"><div><h1 className="ops-heading">Good morning, {user?.name ?? 'Operator'}.</h1><p className="ops-copy">Your Pakistan fulfillment network is in view.</p></div><span className="mono-label"><i className="live-dot" /> {connected ? 'TELEMETRY SYNC ACTIVE' : 'RECONNECTING'}</span></div>
+      <div className="dash-grid"><StatCard title="24H GROSS MERCHANDISE VALUE" value={metrics.gmv24h} prefix="Rs " note="PKR demo/order value" /><StatCard title="ACTIVE ORDERS IN TRANSIT" value={metrics.activeOrders} note="Across all fulfillment nodes" /><StatCard title="PAKISTAN FULFILLMENT HEALTH" value={metrics.fulfillmentHealth} suffix="%" note="Network-wide SLA performance" /></div>
       <div className="dash-two"><section className="card-ops dash-card capacity-card">
           <div className="capacity-card-heading"><div><span className="mono-label">WAREHOUSE CAPACITY</span><h3>Network utilization</h3></div><strong className="capacity-total">{Math.round(warehouses.reduce((sum, hub) => sum + hub.capacity, 0) / Math.max(warehouses.length, 1))}%</strong></div>
           <div className="capacity-meter-list">{warehouses.map((hub) => <div className="capacity-meter-row" key={hub.id}>
@@ -97,10 +139,16 @@ export function CommandPages() {
     </>}
 
     {pathname === '/dashboard/threats' && <>
-      <h1 className="ops-heading">Inventory threats</h1><p className="ops-copy">Proactive actions protect service levels and prevent lost sales.</p>
-      {productsAtRisk.length === 0 && warehouses.every((hub) => hub.status === 'online') && <div className="card-ops dash-card success-text">All inventory and fulfillment nodes are healthy.</div>}
-      {productsAtRisk.map((product) => <ThreatRow key={product.id} product={product} onResolve={() => request(() => api.post(`/inventory/restock/${product.id}`), `${product.sku} replenishment purchase order executed.`)} />)}
-      {warehouses.filter((hub) => hub.status !== 'online').map((hub) => <ThreatRow key={hub.id} hub={hub} />)}
+      <h1 className="ops-heading">Inventory threats</h1><p className="ops-copy">Days of cover, reorder recommendations and supplier reliability from the stock movement ledger.</p>
+      {!['admin', 'operator'].includes(user?.role ?? '') ? <div className="card-ops dash-card danger-text">Administrator or operator access is required to view inventory threats.</div>
+        : threats.length === 0 ? <div className="card-ops dash-card success-text">No inventory or warehouse threats currently meet the SRS thresholds.</div>
+        : threats.map((threat) => <ThreatRow key={threat.id} threat={threat} onResolve={() => threat.product && request(
+          () => api.post(`/inventory/restock/${threat.product!.id}`, { quantity: threat.recommendQty }, {
+            headers: { 'Idempotency-Key': crypto.randomUUID() }
+          }),
+          `Draft purchase order requested for ${threat.product!.sku}.`,
+          () => { void refreshThreats() }
+        )} />)}
       <div className="dash-grid"><StatCard title="AI EFFICIENCY SCORE" value={metrics.efficiencyScore} suffix=" pts" /><StatCard title="DETECTION TIME" value={metrics.detectionTimeMs} suffix="ms" /><StatCard title="THREATS BLOCKED" value={metrics.threatsBlocked} /></div>
     </>}
 
@@ -129,7 +177,31 @@ export function CommandPages() {
     {pathname === '/dashboard/manage' && <>
       <h1 className="ops-heading">Inventory management</h1><p className="ops-copy">Tune simulation guardrails and manage live SKU availability.</p>
       <div className="dash-grid">{[['Safety stock buffer %', 'safetyBuffer', 5, 80], ['Order surge multiplier', 'surgeMultiplier', 1, 10], ['Max carrier latency SLA', 'maxLatency', 10, 200]].map(([label, key, min, max]) => <div className="card-ops dash-card" key={key}><span className="mono-label">{label}</span><div className="ops-form-row" style={{ marginTop: 12 }}><input className="field" type="range" min={Number(min)} max={Number(max)} value={simulation[key as keyof typeof simulation]} onChange={(event) => setSimulation((current) => ({ ...current, [key]: Number(event.target.value) }))} /><span className="mono">{simulation[key as keyof typeof simulation]}</span></div></div>)}</div>
-      <div className="card-ops dash-card table-wrap"><table className="dash-table"><thead><tr><th>SKU / Item</th><th>Stock</th><th>Price</th><th>Warehouse</th><th>Actions</th></tr></thead><tbody>{products.map((product) => <tr key={product.id}><td>{product.sku}<div className="ops-muted">{product.name}</div></td><td><input aria-label={`Stock for ${product.sku}`} className="field" type="number" min="0" defaultValue={product.stock} style={{ width: 90, padding: 8 }} id={`stock-${product.id}`} /></td><td><input aria-label={`Price for ${product.sku}`} className="field" type="number" min="0" step="0.01" defaultValue={product.price} style={{ width: 100, padding: 8 }} id={`price-${product.id}`} /></td><td>{product.warehouse_hub}</td><td><button className="small-button" onClick={() => { const stock = Number((document.getElementById(`stock-${product.id}`) as HTMLInputElement).value); const price = Number((document.getElementById(`price-${product.id}`) as HTMLInputElement).value); void request(() => api.patch(`/inventory/${product.id}`, { stock, price }), `${product.sku} inventory updated.`) }}>Save</button></td></tr>)}</tbody></table></div>
+      <div className="card-ops dash-card table-wrap"><table className="dash-table"><thead><tr><th>SKU / Item</th><th>Stock</th><th>Price</th><th>Warehouse</th><th>Adjustment reason</th><th>Actions</th></tr></thead><tbody>{products.map((product) => <tr key={product.id}><td>{product.sku}<div className="ops-muted">{product.name}</div></td><td><input aria-label={`Stock for ${product.sku}`} className="field" type="number" min="0" defaultValue={product.stock} style={{ width: 90, padding: 8 }} id={`stock-${product.id}`} /></td><td><input aria-label={`Price for ${product.sku}`} className="field" type="number" min="0" step="1" defaultValue={product.priceExGstPkr ?? product.price} style={{ width: 100, padding: 8 }} id={`price-${product.id}`} /></td><td>{product.warehouse_hub}</td><td><input aria-label={`Adjustment reason for ${product.sku}`} className="field" type="text" defaultValue="cycle_count" id={`reason-${product.id}`} style={{ width: 130, padding: 8 }} /></td><td><button className="small-button" onClick={() => { const stock = Number((document.getElementById(`stock-${product.id}`) as HTMLInputElement).value); const price = Number((document.getElementById(`price-${product.id}`) as HTMLInputElement).value); const reason = (document.getElementById(`reason-${product.id}`) as HTMLInputElement).value; const idempotencyKey = crypto.randomUUID(); void request(() => api.patch(`/inventory/${product.id}`, { stock, price, reason }, { headers: { 'Idempotency-Key': idempotencyKey } }), `${product.sku} inventory updated.`) }}>Save</button></td></tr>)}</tbody></table></div>
+      <section style={{ marginTop: 28 }}>
+        <div className="drawer-head"><div><h2 className="ops-heading" style={{ fontSize: 19 }}>Purchase orders</h2><p className="ops-copy">Draft, approve, ship and receive replenishment orders. Inventory changes only on receipt.</p></div><span className="status-pill">{purchaseOrders.length} records</span></div>
+        <div className="card-ops dash-card table-wrap" style={{ marginTop: 12 }}>
+          <table className="dash-table"><thead><tr><th>PO / Supplier</th><th>Lines</th><th>Hub</th><th>Total</th><th>Status</th><th>Next action</th></tr></thead>
+            <tbody>{purchaseOrders.map((po) => {
+              const nextStatus = po.status === 'draft' ? 'approved' : po.status === 'approved' ? 'shipped' : po.status === 'shipped' ? 'received' : null
+              const adminApprovalNeeded = po.status === 'draft' && po.totalPkr > 2000000 && user?.role !== 'admin'
+              return <tr key={po.id}>
+                <td><strong>{po.code}</strong><div className="ops-muted">{po.supplierName || po.supplierId}</div></td>
+                <td>{po.lines.map((line) => `${line.sku} × ${line.qty}`).join(', ')}</td>
+                <td>{po.hubCode}</td>
+                <td className="mono">{new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 }).format(po.totalPkr)}</td>
+                <td><span className="status-pill">{po.status}</span></td>
+                <td>{nextStatus ? <button className="small-button" disabled={adminApprovalNeeded} title={adminApprovalNeeded ? 'Administrator approval is required above Rs 2,000,000' : undefined} onClick={() => void request(
+                  () => api.patch(`/purchase-orders/${po.id}/status`, { status: nextStatus }, { headers: { 'Idempotency-Key': crypto.randomUUID() } }),
+                  nextStatus === 'received' ? `${po.code} received; stock ledger updated.` : `${po.code} marked ${nextStatus}.`,
+                  () => { void refreshPurchaseOrders() }
+                )}>{adminApprovalNeeded ? 'Admin approval required' : nextStatus === 'received' ? 'Receive goods' : nextStatus === 'shipped' ? 'Mark shipped' : 'Approve'}</button> : <span className="ops-muted">Complete</span>}</td>
+              </tr>
+            })}</tbody>
+          </table>
+          {purchaseOrders.length === 0 && <p className="ops-muted">No purchase orders yet. Create a draft from an inventory threat recommendation.</p>}
+        </div>
+      </section>
       <div style={{ marginTop: 15 }}><button className="small-button" onClick={() => request(() => api.post('/simulation/trigger', { scenario: 'auto_rebalance', params: simulation }), 'AI network rebalance started.')}>Run AI auto-rebalance</button></div>
     </>}
 
@@ -172,7 +244,7 @@ export function CommandPages() {
     {pathname === '/dashboard/reports' && <>
       <div className="drawer-head"><div><h1 className="ops-heading">Operations reports</h1><p className="ops-copy">Executive view of network SLAs and inventory allocation.</p></div><button className="small-button" onClick={exportCsv}><Download size={14} /> Export CSV audit report</button></div>
       <div className="dash-grid"><StatCard title="FULFILLMENT HEALTH" value={metrics.fulfillmentHealth} suffix="%" /><StatCard title="AVERAGE ROUTING LATENCY" value={metrics.avgLatencyMs} suffix="ms" /><StatCard title="ACTIVE ORDERS" value={metrics.activeOrders} /></div>
-      <div className="dash-two"><div className="card-ops dash-card"><span className="mono-label">CATEGORY INVENTORY CAPACITY</span>{['Edge Gateways', 'Smart Sensors', 'Server Racks', 'Power Modules'].map((category, index) => { const count = products.filter((product) => product.category === category).reduce((sum, product) => sum + product.stock, 0); const percent = Math.min(100, count / 10); return <div key={category} style={{ marginTop: 18 }}><div className="drawer-head"><span>{category}</span><span className="mono">{count} units</span></div><div style={{ height: 6, marginTop: 8, background: 'var(--border-ops)', borderRadius: 9 }}><div style={{ width: `${percent}%`, height: '100%', borderRadius: 9, background: palette[index] }} /></div></div> })}</div><div className="card-ops dash-card"><span className="mono-label">EXECUTIVE SUMMARY</span><h3>Distributed by design.</h3><p className="ops-copy">VeloSupply currently tracks {products.length} active SKUs across {warehouses.length} global hubs. {productsAtRisk.length} items require replenishment attention, while network fulfillment health is {metrics.fulfillmentHealth}%.</p><div className="ops-copy"><Truck size={15} /> Orders include both historical and live commerce data.</div></div></div>
+      <div className="dash-two"><div className="card-ops dash-card"><span className="mono-label">CATEGORY INVENTORY CAPACITY</span>{['Power', 'Networking', 'Security', 'Infrastructure', 'Retail', 'Computing'].map((category, index) => { const count = products.filter((product) => product.category === category).reduce((sum, product) => sum + product.stock, 0); const percent = Math.min(100, count / 10); return <div key={category} style={{ marginTop: 18 }}><div className="drawer-head"><span>{category}</span><span className="mono">{count} units</span></div><div style={{ height: 6, marginTop: 8, background: 'var(--border-ops)', borderRadius: 9 }}><div style={{ width: `${percent}%`, height: '100%', borderRadius: 9, background: palette[index] }} /></div></div> })}</div><div className="card-ops dash-card"><span className="mono-label">EXECUTIVE SUMMARY</span><h3>Distributed by design.</h3><p className="ops-copy">VeloSupply currently tracks {products.length} demo SKUs across {warehouses.length} Pakistan demonstration hubs. {productsAtRisk.length} items require replenishment attention, while network fulfillment health is {metrics.fulfillmentHealth}%.</p><div className="ops-copy"><Truck size={15} /> Orders include both historical and live commerce data.</div></div></div>
     </>}
 
     {pathname === '/dashboard/account' && <AccountPanel />}
@@ -185,12 +257,12 @@ export function CommandPages() {
 }
 
 function OrdersTable({ orders, routeOrder }: { orders: Order[]; routeOrder: (id: string) => void }) {
-  return <div className="table-wrap"><table className="dash-table"><thead><tr><th>Order</th><th>Customer</th><th>Fulfillment</th><th>Status</th><th>Total</th><th>Action</th></tr></thead><tbody>{orders.map((order) => <tr key={order.id}><td className="mono">{order.id}</td><td>{order.customerName}<div className="ops-muted">{order.shippingRegion}</div></td><td>{order.warehouse_hub ?? 'Routing'}</td><td><span className="status-pill">{order.status}</span></td><td className="mono">${(order.total ?? 0).toLocaleString()}</td><td><button className="small-button" onClick={() => routeOrder(order.id)}>Auto-route</button></td></tr>)}</tbody></table>{orders.length === 0 && <p className="ops-copy">No orders are available.</p>}</div>
+  return <div className="table-wrap"><table className="dash-table"><thead><tr><th>Order</th><th>Customer</th><th>Fulfillment</th><th>Status</th><th>Total</th><th>Action</th></tr></thead><tbody>{orders.map((order) => <tr key={order.id}><td className="mono">{order.id}</td><td>{order.customerName}<div className="ops-muted">{order.shippingRegion}</div></td><td>{order.warehouse_hub ?? 'Routing'}</td><td><span className="status-pill">{order.status}</span></td><td className="mono">{new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 }).format(order.total ?? order.price?.totalPkr ?? 0)}</td><td><button className="small-button" onClick={() => routeOrder(order.id)}>Auto-route</button></td></tr>)}</tbody></table>{orders.length === 0 && <p className="ops-copy">No orders are available.</p>}</div>
 }
 
 function UserRow({ account, isSelf, onRole, onDelete }: { account: User; isSelf: boolean; onRole: (role: UserRole) => void; onDelete: () => void }) {
   const [confirm, setConfirm] = useState(false)
-  return <tr><td>{account.name}</td><td>{account.email}</td><td><select className="field" value={account.role} onChange={(event) => onRole(event.target.value as UserRole)} style={{ width: 125, padding: 8 }}><option value="admin">admin</option><option value="operator">operator</option><option value="user">user</option></select></td><td>{isSelf ? <span className="ops-muted">Current user</span> : confirm ? <span className="inline-actions"><button className="small-button danger-text" onClick={onDelete}>Confirm delete</button><button className="small-button" onClick={() => setConfirm(false)}>Cancel</button></span> : <button className="small-button" onClick={() => setConfirm(true)}>Delete</button>}</td></tr>
+  return <tr><td>{account.name}</td><td>{account.email}</td><td><select className="field" value={account.role} onChange={(event) => onRole(event.target.value as UserRole)} style={{ width: 125, padding: 8 }}><option value="admin">admin</option><option value="operator">operator</option><option value="buyer">buyer</option></select></td><td>{isSelf ? <span className="ops-muted">Current user</span> : confirm ? <span className="inline-actions"><button className="small-button danger-text" onClick={onDelete}>Confirm delete</button><button className="small-button" onClick={() => setConfirm(false)}>Cancel</button></span> : <button className="small-button" onClick={() => setConfirm(true)}>Delete</button>}</td></tr>
 }
 
 function AccountPanel() {

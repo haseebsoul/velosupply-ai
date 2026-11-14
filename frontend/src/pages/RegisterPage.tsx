@@ -12,7 +12,7 @@ import type { User, UserRole } from '../types'
 const schema = z.object({
   name: z.string().trim().min(2, 'Enter at least 2 characters').max(100, 'Name is too long'),
   email: z.string().trim().email('Enter a valid email').max(254, 'Email is too long'),
-  role: z.enum(['admin', 'operator', 'user']),
+  role: z.enum(['admin', 'operator', 'buyer', 'user']),
   password: z.string().min(8, 'Use at least 8 characters').max(128, 'Password is too long').regex(/[A-Z]/, 'Add at least one uppercase letter').regex(/[0-9]/, 'Add at least one number'),
   confirmPassword: z.string(),
   registrationInviteCode: z.string().optional()
@@ -20,7 +20,7 @@ const schema = z.object({
   if (values.password !== values.confirmPassword) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['confirmPassword'], message: 'Passwords do not match' })
   }
-  if (values.role !== 'user' && !values.registrationInviteCode?.trim()) {
+  if (!['user', 'buyer'].includes(values.role) && !values.registrationInviteCode?.trim()) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['registrationInviteCode'], message: 'An invitation key is required for this role' })
   }
 })
@@ -35,7 +35,7 @@ const stakeholders: Array<{
 }> = [
   { value: 'admin', label: 'Administrator', description: 'Manage accounts, access and workspace settings', icon: ShieldCheck },
   { value: 'operator', label: 'Operations team', description: 'Manage inventory, routing and fulfillment', icon: Truck },
-  { value: 'user', label: 'Buyer', description: 'Browse products and track orders', icon: ShoppingBag }
+  { value: 'buyer', label: 'Buyer', description: 'Browse products and track orders', icon: ShoppingBag }
 ]
 
 export function RegisterPage() {
@@ -45,7 +45,7 @@ export function RegisterPage() {
   const [error, setError] = useState('')
   const { register, handleSubmit, setValue, watch, formState: { errors, isSubmitting } } = useForm<Fields>({
     resolver: zodResolver(schema),
-    defaultValues: { role: 'user', name: '', email: '', password: '', confirmPassword: '', registrationInviteCode: '' }
+    defaultValues: { role: 'buyer', name: '', email: '', password: '', confirmPassword: '', registrationInviteCode: '' }
   })
   const selectedRole = watch('role')
 
@@ -87,7 +87,7 @@ export function RegisterPage() {
             ><span className="stakeholder-icon"><Icon size={18} /></span><span className="stakeholder-label">{label}</span><span className="stakeholder-description">{description}</span></button>)}
           </div>
         </fieldset>
-        {selectedRole !== 'user' && <div className="admin-invite-note"><ShieldCheck size={16} /><span>{selectedRole === 'admin' ? 'Administrator' : 'Operations team'} access is invitation-only. Enter the private invitation key supplied by your workspace owner.</span></div>}
+        {selectedRole !== 'buyer' && <div className="admin-invite-note"><ShieldCheck size={16} /><span>{selectedRole === 'admin' ? 'Administrator' : 'Operations team'} access is invitation-only. Enter the private invitation key supplied by your workspace owner.</span></div>}
 
         <div className="registration-fields">
           <label className="registration-label">Full name<input className="field" autoComplete="name" placeholder="Your name" {...register('name')} />{errors.name && <small className="form-error">{errors.name.message}</small>}</label>
