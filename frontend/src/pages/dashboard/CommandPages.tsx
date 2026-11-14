@@ -5,7 +5,7 @@ import { useLocation } from 'react-router-dom'
 import { api, errorMessage } from '../../lib/apiClient'
 import { useWebSocket } from '../../lib/useWebSocket'
 import { useAppStore } from '../../store/useAppStore'
-import type { InventoryThreat, Metrics, Order, Product, User, UserRole, Warehouse } from '../../types'
+import type { InventoryThreat, Metrics, Order, Product, PurchaseOrder, User, UserRole, Warehouse } from '../../types'
 import { StatCard } from '../../components/dashboard/StatCard'
 import { ThreatRow } from '../../components/dashboard/ThreatRow'
 import { TerminalPanel } from '../../components/dashboard/TerminalPanel'
@@ -24,6 +24,7 @@ export function CommandPages() {
   const [orders, setOrders] = useState<Order[]>([])
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [users, setUsers] = useState<User[]>([])
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([])
   const [rewardOffers, setRewardOffers] = useState<Array<{ id: string; title: string; description: string; points: number; minimumScore: number }>>([])
   const [rewardClaims, setRewardClaims] = useState<Array<{ id: string; offerId: string; title: string; points: number; claimedAt: string }>>([])
   const [selectedHub, setSelectedHub] = useState<Warehouse | null>(null)
@@ -44,6 +45,22 @@ export function CommandPages() {
     if (latest?.warehouses) setWarehouses(latest.warehouses)
     if (latest?.type === 'ORDER_CREATED' || latest?.type === 'THREAT_RESOLVED') void refresh()
   }, [latest, refresh])
+  const refreshPurchaseOrders = useCallback(async () => {
+    if (!['admin', 'operator'].includes(user?.role ?? '')) {
+      setPurchaseOrders([])
+      return
+    }
+    try {
+      const { data } = await api.get<PurchaseOrder[]>('/purchase-orders')
+      setPurchaseOrders(data)
+    } catch (reason) {
+      setError(errorMessage(reason))
+    }
+  }, [user?.role])
+  useEffect(() => {
+    if (pathname === '/dashboard/manage') void refreshPurchaseOrders()
+  }, [pathname, refreshPurchaseOrders])
+
   const refreshThreats = useCallback(async () => {
     if (!['admin', 'operator'].includes(user?.role ?? '')) {
       setThreats([])
@@ -153,6 +170,30 @@ export function CommandPages() {
       <h1 className="ops-heading">Inventory management</h1><p className="ops-copy">Tune simulation guardrails and manage live SKU availability.</p>
       <div className="dash-grid">{[['Safety stock buffer %', 'safetyBuffer', 5, 80], ['Order surge multiplier', 'surgeMultiplier', 1, 10], ['Max carrier latency SLA', 'maxLatency', 10, 200]].map(([label, key, min, max]) => <div className="card-ops dash-card" key={key}><span className="mono-label">{label}</span><div className="ops-form-row" style={{ marginTop: 12 }}><input className="field" type="range" min={Number(min)} max={Number(max)} value={simulation[key as keyof typeof simulation]} onChange={(event) => setSimulation((current) => ({ ...current, [key]: Number(event.target.value) }))} /><span className="mono">{simulation[key as keyof typeof simulation]}</span></div></div>)}</div>
       <div className="card-ops dash-card table-wrap"><table className="dash-table"><thead><tr><th>SKU / Item</th><th>Stock</th><th>Price</th><th>Warehouse</th><th>Adjustment reason</th><th>Actions</th></tr></thead><tbody>{products.map((product) => <tr key={product.id}><td>{product.sku}<div className="ops-muted">{product.name}</div></td><td><input aria-label={`Stock for ${product.sku}`} className="field" type="number" min="0" defaultValue={product.stock} style={{ width: 90, padding: 8 }} id={`stock-${product.id}`} /></td><td><input aria-label={`Price for ${product.sku}`} className="field" type="number" min="0" step="1" defaultValue={product.priceExGstPkr ?? product.price} style={{ width: 100, padding: 8 }} id={`price-${product.id}`} /></td><td>{product.warehouse_hub}</td><td><input aria-label={`Adjustment reason for ${product.sku}`} className="field" type="text" defaultValue="cycle_count" id={`reason-${product.id}`} style={{ width: 130, padding: 8 }} /></td><td><button className="small-button" onClick={() => { const stock = Number((document.getElementById(`stock-${product.id}`) as HTMLInputElement).value); const price = Number((document.getElementById(`price-${product.id}`) as HTMLInputElement).value); const reason = (document.getElementById(`reason-${product.id}`) as HTMLInputElement).value; const idempotencyKey = crypto.randomUUID(); void request(() => api.patch(`/inventory/${product.id}`, { stock, price, reason }, { headers: { 'Idempotency-Key': idempotencyKey } }), `${product.sku} inventory updated.`) }}>Save</button></td></tr>)}</tbody></table></div>
+      <section style={{ marginTop: 28 }}>
+        <div className="drawer-head"><div><h2 className="ops-heading" style={{ fontSize: 19 }}>Purchase orders</h2><p className="ops-copy">Draft, approve, ship and receive replenishment orders. Inventory changes only on receipt.</p></div><span className="status-pill">{purchaseOrders.length} records</span></div>
+        <div className="card-ops dash-card table-wrap" style={{ marginTop: 12 }}>
+          <table className="dash-table"><thead><tr><th>PO / Supplier</th><th>Lines</th><th>Hub</th><th>Total</th><th>Status</th><th>Next action</th></tr></thead>
+            <tbody>{purchaseOrders.map((po) => {
+              const nextStatus = po.status === 'draft' ? 'approved' : po.status === 'approved' ? 'shipped' : po.status === 'shipped' ? 'received' : null
+              const adminApprovalNeeded = po.status === 'draft' && po.totalPkr > 2000000 && user?.role !== 'admin'
+              return <tr key={po.id}>
+                <td><strong>{po.code}</strong><div className="ops-muted">{po.supplierName || po.supplierId}</div></td>
+                <td>{po.lines.map((line) => `${line.sku} × ${line.qty}`).join(', ')}</td>
+                <td>{po.hubCode}</td>
+                <td className="mono">{new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 }).format(po.totalPkr)}</td>
+                <td><span className="status-pill">{po.status}</span></td>
+                <td>{nextStatus ? <button className="small-button" disabled={adminApprovalNeeded} title={adminApprovalNeeded ? 'Administrator approval is required above Rs 2,000,000' : undefined} onClick={() => void request(
+                  () => api.patch(`/purchase-orders/${po.id}/status`, { status: nextStatus }, { headers: { 'Idempotency-Key': crypto.randomUUID() } }),
+                  nextStatus === 'received' ? `${po.code} received; stock ledger updated.` : `${po.code} marked ${nextStatus}.`,
+                  () => { void refreshPurchaseOrders() }
+                )}>{adminApprovalNeeded ? 'Admin approval required' : nextStatus === 'received' ? 'Receive goods' : nextStatus === 'shipped' ? 'Mark shipped' : 'Approve'}</button> : <span className="ops-muted">Complete</span>}</td>
+              </tr>
+            })}</tbody>
+          </table>
+          {purchaseOrders.length === 0 && <p className="ops-muted">No purchase orders yet. Create a draft from an inventory threat recommendation.</p>}
+        </div>
+      </section>
       <div style={{ marginTop: 15 }}><button className="small-button" onClick={() => request(() => api.post('/simulation/trigger', { scenario: 'auto_rebalance', params: simulation }), 'AI network rebalance started.')}>Run AI auto-rebalance</button></div>
     </>}
 
