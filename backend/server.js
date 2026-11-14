@@ -926,7 +926,23 @@ app.get('/api/inventory/:id/ledger', requireRoles('admin', 'operator'), asyncRou
 app.post('/api/inventory/restock/:id', requireRoles('admin', 'operator'), validate(restockSchema), asyncRoute(async (req, res) => {
   const product = repository ? await repository.findById('products', req.params.id) : findById(db.products, req.params.id, 'Product');
   if (!product || product.archivedAt) return res.status(404).json({ error: 'Product not found' });
-  const quantity = req.body.quantity || Math.max(product.reorder_threshold * 2 - product.stock, 10);
+  const threats = await (async () => {
+    const response = await Promise.resolve(repository ? repository.find('movements', { sku: product.sku }) : (db.movements || []).filter((movement) => movement.sku === product.sku));
+    const shipped = response.filter((movement) => movement.type === 'SHIP');
+    const recent = shipped.filter((movement) => Date.now() - Date.parse(movement.at) <= 14 * 86400000);
+    const avgDaily = recent.reduce((sum, movement) => sum + movement.qty, 0) / (recent.length && (Date.now() - Math.min(...recent.map((movement) => Date.parse(movement.at)))) > 7 * 86400000 ? 14 : 7);
+    const stockRows = await repository.find('stock', { sku: product.sku, hubCode: product.warehouse_hub || 'unassigned' }, { limit: 1 });
+    const available = stockRows.length ? stockRows[0].onHand - stockRows[0].reserved : (product.available ?? product.stock);
+    const poRows = await repository.find('purchaseOrders', {});
+    const onOrder = poRows.filter((po) => ['approved', 'shipped'].includes(String(po.status).toLowerCase()))
+      .flatMap((po) => po.lines || []).filter((line) => line.sku === product.sku)
+      .reduce((sum, line) => sum + Number(line.qty || 0), 0);
+    return Math.max(0, Math.ceil(avgDaily * (Number(product.leadDays || 1) + 14)) - available - onOrder);
+  })();
+  const quantity = req.body.quantity || threats;
+  if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+    return res.status(400).json({ error: 'NO_RESTOCK_REQUIRED', message: 'No positive purchase order quantity is currently recommended.' });
+  }
   const idempotencyKey = req.get('Idempotency-Key');
   if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for purchase order creation' });
   try {
@@ -942,7 +958,7 @@ app.post('/api/inventory/restock/:id', requireRoles('admin', 'operator'), valida
     res.status(201).json({
       purchaseOrder,
       quantity,
-      message: 'Draft purchase order created. Stock is unchanged until the order is shipped and received.'
+      message: 'Draft purchase order created. Inventory changes only after approval, shipment and receipt.'
     });
   } catch (error) {
     if (error.code === 'KEY_REUSED') return res.status(422).json({ error: 'KEY_REUSED', message: error.message });
@@ -952,6 +968,7 @@ app.post('/api/inventory/restock/:id', requireRoles('admin', 'operator'), valida
     throw error;
   }
 }));
+
 app.get('/api/purchase-orders', requireRoles('admin', 'operator'), asyncRoute(async (_req, res) => {
   res.json(repository ? await repository.find('purchaseOrders', {}) : (db.purchaseOrders || []));
 }));
