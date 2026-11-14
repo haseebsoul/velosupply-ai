@@ -256,7 +256,7 @@ function authenticate(req, res, next) {
 }
 
 function optionalAuthenticate(req, res, next) {
-  const match = (req.get('authorization') || '').match(/^Bearer\\s+(.+)$/i);
+  const match = (req.get('authorization') || '').match(/^Bearer\s+(.+)$/i);
   if (!match) return next();
   try {
     const payload = jwt.verify(match[1], JWT_SECRET);
