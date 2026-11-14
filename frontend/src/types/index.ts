@@ -20,6 +20,9 @@ export interface Product {
   featured?: boolean
   demoRecord?: boolean
   stock: number
+  onHand?: number
+  reserved?: number
+  available?: number
   reorder_threshold: number
   warehouse_hub: string
   velocity_per_hr: number
