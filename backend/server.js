@@ -464,12 +464,21 @@ app.get('/api/metrics', (_req, res) => res.json({
 app.get('/api/products', asyncRoute(async (req, res) => {
   const search = String(req.query.search || '').trim().toLowerCase();
   const category = String(req.query.category || '').trim().toLowerCase();
-  const allProducts = repository ? await repository.find('products', {}) : db.products;
+  const [allProducts, stockRows] = await Promise.all([
+    repository ? repository.find('products', {}) : db.products,
+    repository ? repository.find('stock', {}) : (db.stock || [])
+  ]);
+  const stockBySku = new Map(stockRows.map((row) => [row.sku, row]));
   const products = allProducts.filter((product) =>
     !product.archivedAt && product.status !== 'inactive' &&
     (!category || category === 'all' || product.category.toLowerCase() === category) &&
     (!search || `${product.name} ${product.sku} ${product.description}`.toLowerCase().includes(search))
-  );
+  ).map((product) => {
+    const stock = stockBySku.get(product.sku);
+    const onHand = stock ? stock.onHand : product.stock;
+    const reserved = stock ? stock.reserved : (product.reserved || 0);
+    return { ...product, onHand, reserved, available: Math.max(0, onHand - reserved) };
+  });
   res.json(products);
 }));
 app.post('/api/newsletter', validate(newsletterSchema), asyncRoute(async (req, res) => {
