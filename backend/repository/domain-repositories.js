@@ -702,10 +702,10 @@ function createDomainRepositories(adapter) {
         const timeline = [...(order.timeline || []), {
           status: nextStatus, at, actorId, note: 'Order status advanced'
         }];
-        const paymentState = nextStatus === 'DELIVERED' && order.paymentMethod === 'COD'
-          ? 'paid' : order.paymentState;
+        // Delivery is not proof of COD cash collection. Leave COD payment pending until an
+        // authorized operator records the amount received and its receipt reference.
         const updated = await repository.update('orders', orderId, {
-          status: nextStatus, timeline, paymentState, updatedAt: at
+          status: nextStatus, timeline, updatedAt: at
         });
         await repository.insert('auditLogs', {
           id: 'AUD-' + randomUUID(), actorId, actorRole: actor.role || 'operator',
@@ -866,6 +866,55 @@ function createDomainRepositories(adapter) {
       });
     },
 
+    async recordCodCollection(orderId, input, actor) {
+      const actorId = requiredString(actor.id, 'actor.id');
+      const amountMinor = integer(input.amountMinor, 'amountMinor', 1);
+      const receiptReference = requiredString(input.receiptReference, 'receiptReference');
+      const idempotencyKey = requiredString(input.idempotencyKey, 'Idempotency-Key');
+      return adapter.withTransaction(async ({ repository }) => runIdempotent(
+        repository, { orderId, amountMinor, receiptReference, idempotencyKey, actorId }, async () => {
+          const order = await repository.findById('orders', orderId);
+          if (!order) return null;
+          if (order.paymentMethod !== 'COD' || order.status !== 'DELIVERED') {
+            const error = new Error('COD collection can only be recorded for a delivered COD order');
+            error.code = 'INVALID_TRANSITION';
+            throw error;
+          }
+          if (order.paymentState !== 'pending_cod') {
+            const error = new Error('COD collection has already been recorded or the payment state is not eligible');
+            error.code = 'PAYMENT_ALREADY_COLLECTED';
+            throw error;
+          }
+          const expectedAmountMinor = order.totalMinor ?? order.price?.totalMinor;
+          if (!Number.isSafeInteger(expectedAmountMinor) || amountMinor !== expectedAmountMinor) {
+            const error = new Error('Collected amount must exactly match the order total in PKR minor units');
+            error.code = 'PAYMENT_AMOUNT_MISMATCH';
+            throw error;
+          }
+          const at = new Date().toISOString();
+          const paymentCollection = {
+            state: 'collected', method: 'COD', amountMinor, currency: 'PKR',
+            receiptReference, recordedBy: actorId, recordedByRole: actor.role || 'operator',
+            recordedAt: at, verification: 'operator-attestation'
+          };
+          const updated = await repository.update('orders', orderId, {
+            paymentState: 'paid_manual_cod', paymentCollection,
+            timeline: [...(order.timeline || []), {
+              status: 'COD_CASH_COLLECTED', at, actorId,
+              note: 'Operator recorded collected COD cash against receipt ' + receiptReference
+            }],
+            updatedAt: at
+          });
+          await repository.insert('auditLogs', {
+            id: 'AUD-' + randomUUID(), actorId, actorRole: actor.role || 'operator',
+            action: 'payment.cod_collection_recorded', targetType: 'order', targetId: orderId,
+            meta: { amountMinor, currency: 'PKR', receiptReference, verification: 'operator-attestation' }, at
+          });
+          return updated;
+        }
+      ));
+    },
+
     async requestRefund(orderId, input, actor) {
       const actorId = requiredString(actor.id, 'actor.id');
       const reason = requiredString(input.reason, 'reason');
@@ -879,7 +928,7 @@ function createDomainRepositories(adapter) {
             error.code = 'INVALID_TRANSITION';
             throw error;
           }
-          if (order.paymentState !== 'paid') {
+          if (!['paid', 'paid_manual_cod'].includes(order.paymentState)) {
             const error = new Error('A refund cannot be recorded until payment collection is verified');
             error.code = 'REFUND_NOT_ELIGIBLE';
             throw error;
