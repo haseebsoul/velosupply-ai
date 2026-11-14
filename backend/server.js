@@ -371,10 +371,24 @@ const checkoutSchema = z.object({
 });
 const inventoryUpdateSchema = z.object({
   stock: z.number().int().nonnegative().optional(),
-  price: z.number().finite().nonnegative().optional()
-}).strict().refine((value) => Object.keys(value).length > 0, 'At least one field is required');
+  price: z.number().finite().nonnegative().optional(),
+  priceExGstPkr: z.number().int().nonnegative().optional(),
+  reason: z.string().trim().min(2).max(120).optional()
+}).strict()
+  .refine((value) => Object.keys(value).some((key) => key !== 'reason'), 'At least one field is required')
+  .refine((value) => value.stock === undefined || Boolean(value.reason), {
+    message: 'A reason code is required for stock adjustments',
+    path: ['reason']
+  });
 const restockSchema = z.object({
   quantity: z.number().int().positive().max(10000).optional()
+}).strict();
+const transferSchema = z.object({
+  sku: z.string().trim().min(1).max(80),
+  fromHubCode: z.string().trim().min(1).max(32),
+  toHubCode: z.string().trim().min(1).max(32),
+  quantity: z.number().int().positive().max(10000),
+  reason: z.string().trim().min(2).max(120)
 }).strict();
 const roleSchema = z.object({
   role: z.enum(['admin', 'operator', 'user'])
@@ -653,18 +667,36 @@ app.delete('/api/admin/users/:id', requireRoles('admin'), asyncRoute(async (req,
 
 app.patch('/api/inventory/:id', requireRoles('admin', 'operator'), validate(inventoryUpdateSchema), asyncRoute(async (req, res) => {
   const product = findById(db.products, req.params.id, 'Product');
-  const previousStock = product.stock;
-  if (req.body.stock !== undefined && req.body.stock !== previousStock) ensureStockOpeningBalance(product, req.user.id);
-  if (req.body.stock !== undefined) updateProductStock(product, req.body.stock);
-  if (req.body.stock !== undefined && req.body.stock !== previousStock) {
-    appendStockMovement(product, req.body.stock - previousStock, 'adjustment', { type: 'admin_action', id: randomUUID() }, req.user.id);
+  if (req.body.stock !== undefined && req.body.stock !== product.stock) {
+    const idempotencyKey = req.get('Idempotency-Key');
+    if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for inventory writes' });
+    try {
+      await domainRepositories.stockMovements.adjust({
+        sku: product.sku,
+        hubCode: product.warehouse_hub || 'unassigned',
+        delta: req.body.stock - product.stock,
+        reason: req.body.reason,
+        actorId: req.user.id,
+        actorRole: req.user.role,
+        idempotencyKey
+      });
+    } catch (error) {
+      if (error.code === 'NEGATIVE_STOCK') return res.status(409).json({ error: 'NEGATIVE_STOCK', message: error.message });
+      if (error.code === 'KEY_REUSED') return res.status(422).json({ error: 'KEY_REUSED', message: error.message });
+      throw error;
+    }
   }
-  if (req.body.price !== undefined) product.price = req.body.price;
-  product.updatedAt = new Date().toISOString();
-  addLog(`Inventory updated for ${product.sku}.`, 'INFO', 'INVENTORY', { productId: product.id });
-  sre.audit?.('inventory.update', req.user, { productId: product.id, stock: req.body.stock, priceChanged: req.body.price !== undefined });
+  const productChanges = {};
+  if (req.body.price !== undefined) productChanges.price = req.body.price;
+  if (req.body.priceExGstPkr !== undefined) productChanges.priceExGstPkr = req.body.priceExGstPkr;
+  if (Object.keys(productChanges).length) {
+    await domainRepositories.products.update(product.id, productChanges, { id: req.user.id, role: req.user.role });
+  }
+  db = await repository.readState();
+  const updatedProduct = findById(db.products, req.params.id, 'Product');
+  addLog(`Inventory updated for ${updatedProduct.sku}.`, 'INFO', 'INVENTORY', { productId: updatedProduct.id });
   await persist();
-  res.json({ product });
+  res.json({ product: updatedProduct });
 }));
 app.get('/api/inventory/:id/ledger', requireRoles('admin', 'operator'), (req, res) => {
   const product = findById(db.products, req.params.id, 'Product');
@@ -692,14 +724,56 @@ app.get('/api/inventory/:id/ledger', requireRoles('admin', 'operator'), (req, re
 app.post('/api/inventory/restock/:id', requireRoles('admin', 'operator'), validate(restockSchema), asyncRoute(async (req, res) => {
   const product = findById(db.products, req.params.id, 'Product');
   const quantity = req.body.quantity || Math.max(product.reorder_threshold * 2 - product.stock, 10);
-  ensureStockOpeningBalance(product, req.user.id);
-  updateProductStock(product, product.stock + quantity);
-  appendStockMovement(product, quantity, 'restock', { type: 'admin_action', id: randomUUID() }, req.user.id);
-  const event = publish('THREAT_RESOLVED', `Restock purchase order executed for ${product.sku}: +${quantity} units.`, 'INFO', { productId: product.id });
-  sre.audit?.('inventory.restock', req.user, { productId: product.id, quantity });
+  const idempotencyKey = req.get('Idempotency-Key');
+  if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for inventory writes' });
+  try {
+    await domainRepositories.stockMovements.restock({
+      sku: product.sku,
+      hubCode: product.warehouse_hub || 'unassigned',
+      qty: quantity,
+      reason: 'restock',
+      actorId: req.user.id,
+      actorRole: req.user.role,
+      idempotencyKey
+    });
+  } catch (error) {
+    if (error.code === 'KEY_REUSED') return res.status(422).json({ error: 'KEY_REUSED', message: error.message });
+    if (error.code === 'STOCK_NOT_FOUND') return res.status(409).json({ error: 'STOCK_NOT_FOUND', message: error.message });
+    throw error;
+  }
+  db = await repository.readState();
+  const updatedProduct = findById(db.products, req.params.id, 'Product');
+  const event = publish('THREAT_RESOLVED', `Stock received for ${updatedProduct.sku}: +${quantity} units.`, 'INFO', { productId: updatedProduct.id });
   refreshMetrics();
   await persist();
-  res.json({ product, quantity, event });
+  res.json({ product: updatedProduct, quantity, event });
+}));
+
+app.post('/api/inventory/transfer', requireRoles('admin', 'operator'), validate(transferSchema), asyncRoute(async (req, res) => {
+  const idempotencyKey = req.get('Idempotency-Key');
+  if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for inventory writes' });
+  try {
+    const transfer = await domainRepositories.stockMovements.transfer({
+      sku: req.body.sku,
+      fromHubCode: req.body.fromHubCode,
+      toHubCode: req.body.toHubCode,
+      qty: req.body.quantity,
+      reason: req.body.reason,
+      actorId: req.user.id,
+      actorRole: req.user.role,
+      idempotencyKey
+    });
+    db = await repository.readState();
+    const event = publish('STOCK_CHANGED', `Transferred ${req.body.quantity} units of ${req.body.sku} from ${req.body.fromHubCode} to ${req.body.toHubCode}.`, 'INFO', { sku: req.body.sku, refId: transfer.refId });
+    await persist();
+    res.status(201).json({ transfer, event });
+  } catch (error) {
+    if (error.code === 'KEY_REUSED') return res.status(422).json({ error: 'KEY_REUSED', message: error.message });
+    if (error.code === 'NEGATIVE_STOCK' || error.code === 'STOCK_NOT_FOUND' || error.code === 'WAREHOUSE_NOT_FOUND') {
+      return res.status(409).json({ error: error.code, message: error.message });
+    }
+    throw error;
+  }
 }));
 
 app.post('/api/orders/:id/route', requireRoles('admin', 'operator'), asyncRoute(async (req, res) => {
