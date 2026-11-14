@@ -106,17 +106,21 @@ function createDomainRepositories(adapter) {
         const unitExGstPkr = integer(item.unitExGstPkr, 'unitExGstPkr', 0);
         const sku = requiredString(item.sku, 'sku');
         const name = requiredString(item.name, 'name');
-        const lineExPkr = Math.round(unitExGstPkr * qty);
-        const lineGstPkr = Math.round(lineExPkr * gstPct / 100);
+        const unitPriceMinor = unitExGstPkr * 100;
+        const lineExMinor = unitPriceMinor * qty;
+        const lineGstMinor = Math.round(lineExMinor * gstPct / 100);
+        if (![unitPriceMinor, lineExMinor, lineGstMinor].every(Number.isSafeInteger)) {
+          throw new TypeError('PKR line amount exceeds the safe integer range');
+        }
         return {
           id: item.id || 'ITEM-' + randomUUID(),
           sku,
           name,
           qty,
           unitExGstPkr,
-          unitPriceMinor: unitExGstPkr * 100,
-          lineExMinor: lineExPkr * 100,
-          lineGstMinor: lineGstPkr * 100
+          unitPriceMinor,
+          lineExMinor,
+          lineGstMinor
         };
       });
 
