@@ -383,6 +383,20 @@ const inventoryUpdateSchema = z.object({
 const restockSchema = z.object({
   quantity: z.number().int().positive().max(10000).optional()
 }).strict();
+const orderStatusSchema = z.object({
+  status: z.enum(['CONFIRMED', 'PICKING', 'PACKED', 'DISPATCHED', 'DELIVERED', 'CANCELLED'])
+}).strict();
+const returnRequestSchema = z.object({
+  reason: z.string().trim().min(2).max(300),
+  description: z.string().trim().max(2000).optional(),
+  hubCode: z.string().trim().min(1).max(32).optional()
+}).strict();
+const returnDecisionSchema = z.object({
+  decision: z.enum(['approved', 'rejected'])
+}).strict();
+const returnReceiveSchema = z.object({
+  hubCode: z.string().trim().min(1).max(32)
+}).strict();
 const transferSchema = z.object({
   sku: z.string().trim().min(1).max(80),
   fromHubCode: z.string().trim().min(1).max(32),
@@ -772,6 +786,95 @@ app.post('/api/inventory/transfer', requireRoles('admin', 'operator'), validate(
     if (error.code === 'NEGATIVE_STOCK' || error.code === 'STOCK_NOT_FOUND' || error.code === 'WAREHOUSE_NOT_FOUND') {
       return res.status(409).json({ error: error.code, message: error.message });
     }
+    throw error;
+  }
+}));
+
+app.get('/api/returns', (req, res) => {
+  const rows = db.returns || [];
+  if (req.user.role === 'admin' || req.user.role === 'operator') return res.json(rows);
+  return res.json(rows.filter((entry) => entry.buyerId === req.user.id));
+});
+app.post('/api/orders/:id/cancel', asyncRoute(async (req, res) => {
+  const order = findById(db.orders, req.params.id, 'Order');
+  if (req.user.role !== 'admin' && req.user.role !== 'operator' &&
+      order.buyerId !== req.user.id && order.userId !== req.user.id) {
+    return res.status(403).json({ error: 'You may only cancel your own order' });
+  }
+  try {
+    const updated = await domainRepositories.orders.advanceStatus(order.id, 'CANCELLED', {
+      id: req.user.id, role: req.user.role
+    });
+    db = await repository.readState();
+    publish('ORDER_STATUS', `Order ${updated.code || updated.id} cancelled and reserved stock released.`, 'INFO', { order: updated });
+    await persist();
+    return res.json({ order: updated });
+  } catch (error) {
+    if (error.code === 'INVALID_TRANSITION') return res.status(409).json({ error: error.code, message: error.message });
+    throw error;
+  }
+}));
+app.post('/api/orders/:id/return', validate(returnRequestSchema), asyncRoute(async (req, res) => {
+  const order = findById(db.orders, req.params.id, 'Order');
+  if (req.user.role !== 'admin' && req.user.role !== 'operator' &&
+      order.buyerId !== req.user.id && order.userId !== req.user.id) {
+    return res.status(403).json({ error: 'You may only return your own order' });
+  }
+  try {
+    const result = await domainRepositories.orders.requestReturn(order.id, req.body, {
+      id: req.user.id, role: req.user.role
+    });
+    db = await repository.readState();
+    publish('ORDER_STATUS', `Return requested for order ${order.code || order.id}.`, 'INFO');
+    await persist();
+    return res.status(201).json(result);
+  } catch (error) {
+    if (error.code === 'INVALID_TRANSITION') return res.status(409).json({ error: error.code, message: error.message });
+    throw error;
+  }
+}));
+app.post('/api/returns/:id/decision', requireRoles('admin', 'operator'), validate(returnDecisionSchema), asyncRoute(async (req, res) => {
+  try {
+    const record = await domainRepositories.orders.decideReturn(req.params.id, req.body.decision, {
+      id: req.user.id, role: req.user.role
+    });
+    if (!record) return res.status(404).json({ error: 'Return not found' });
+    db = await repository.readState();
+    await persist();
+    res.json({ return: record });
+  } catch (error) {
+    if (error.code === 'INVALID_TRANSITION') return res.status(409).json({ error: error.code, message: error.message });
+    throw error;
+  }
+}));
+app.post('/api/returns/:id/receive', requireRoles('admin', 'operator'), validate(returnReceiveSchema), asyncRoute(async (req, res) => {
+  try {
+    const result = await domainRepositories.orders.receiveReturn(req.params.id, req.body.hubCode, {
+      id: req.user.id, role: req.user.role
+    });
+    if (!result) return res.status(404).json({ error: 'Return not found' });
+    db = await repository.readState();
+    publish('STOCK_CHANGED', `Returned inventory received into ${req.body.hubCode}.`, 'INFO');
+    await persist();
+    res.json(result);
+  } catch (error) {
+    if (error.code === 'INVALID_TRANSITION') return res.status(409).json({ error: error.code, message: error.message });
+    throw error;
+  }
+}));
+app.patch('/api/orders/:id/status', requireRoles('admin', 'operator'), validate(orderStatusSchema), asyncRoute(async (req, res) => {
+  try {
+    const updated = await domainRepositories.orders.advanceStatus(req.params.id, req.body.status, {
+      id: req.user.id, role: req.user.role
+    });
+    if (!updated) return res.status(404).json({ error: 'Order not found' });
+    db = await repository.readState();
+    publish('ORDER_STATUS', `Order ${updated.code || updated.id} advanced to ${updated.status}.`, 'INFO', { order: updated });
+    await persist();
+    res.json({ order: updated });
+  } catch (error) {
+    if (error.code === 'INVALID_TRANSITION') return res.status(409).json({ error: error.code, message: error.message });
+    if (error.code === 'STOCK_MISMATCH') return res.status(409).json({ error: error.code, message: error.message });
     throw error;
   }
 }));
