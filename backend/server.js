@@ -762,7 +762,8 @@ app.delete('/api/admin/users/:id', requireRoles('admin'), asyncRoute(async (req,
 }));
 
 app.patch('/api/inventory/:id', requireRoles('admin', 'operator'), validate(inventoryUpdateSchema), asyncRoute(async (req, res) => {
-  const product = findById(db.products, req.params.id, 'Product');
+  const product = repository ? await repository.findById('products', req.params.id) : findById(db.products, req.params.id, 'Product');
+  if (!product || product.archivedAt) return res.status(404).json({ error: 'Product not found' });
   if (req.body.stock !== undefined && req.body.stock !== product.stock) {
     const idempotencyKey = req.get('Idempotency-Key');
     if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for inventory writes' });
@@ -794,10 +795,13 @@ app.patch('/api/inventory/:id', requireRoles('admin', 'operator'), validate(inve
   await persist();
   res.json({ product: updatedProduct });
 }));
-app.get('/api/inventory/:id/ledger', requireRoles('admin', 'operator'), (req, res) => {
-  const product = findById(db.products, req.params.id, 'Product');
+app.get('/api/inventory/:id/ledger', requireRoles('admin', 'operator'), asyncRoute(async (req, res) => {
+  const product = repository ? await repository.findById('products', req.params.id) : findById(db.products, req.params.id, 'Product');
+  if (!product) return res.status(404).json({ error: 'Product not found' });
   const hubCode = product.warehouse_hub || 'unassigned';
-  const movements = (db.movements || []).filter((entry) => entry.sku === product.sku && entry.hubCode === hubCode);
+  const movements = repository
+    ? await repository.find('movements', { sku: product.sku, hubCode })
+    : (db.movements || []).filter((entry) => entry.sku === product.sku && entry.hubCode === hubCode);
   const onHand = movements.reduce((balance, entry) => {
     if (entry.type === 'RECEIVE' || entry.type === 'TRANSFER_IN' || entry.type === 'RETURN_IN') return balance + entry.qty;
     if (entry.type === 'SHIP' || entry.type === 'TRANSFER_OUT') return balance - entry.qty;
@@ -805,20 +809,25 @@ app.get('/api/inventory/:id/ledger', requireRoles('admin', 'operator'), (req, re
     return balance;
   }, 0);
   const initialized = movements.length > 0;
+  const stockRows = repository ? await repository.find('stock', { sku: product.sku, hubCode }, { limit: 1 }) : [];
+  const stockRow = stockRows[0];
   res.json({
     productId: product.id,
     sku: product.sku,
     hubCode,
     ledgerOnHand: initialized ? onHand : null,
-    productStock: product.stock,
-    matches: initialized ? onHand === product.stock : null,
+    productStock: stockRow ? stockRow.onHand : product.stock,
+    reserved: stockRow ? stockRow.reserved : 0,
+    available: stockRow ? stockRow.onHand - stockRow.reserved : product.stock,
+    matches: initialized ? onHand === (stockRow ? stockRow.onHand : product.stock) : null,
     movementCount: movements.length,
     ledgerStatus: initialized ? (onHand === product.stock ? 'reconciled' : 'mismatch') : 'baseline-required',
     note: initialized ? undefined : 'Legacy stock has no opening-balance movement; record a verified opening balance before treating the ledger as reconciled.'
   });
-});
+}));
 app.post('/api/inventory/restock/:id', requireRoles('admin', 'operator'), validate(restockSchema), asyncRoute(async (req, res) => {
-  const product = findById(db.products, req.params.id, 'Product');
+  const product = repository ? await repository.findById('products', req.params.id) : findById(db.products, req.params.id, 'Product');
+  if (!product || product.archivedAt) return res.status(404).json({ error: 'Product not found' });
   const quantity = req.body.quantity || Math.max(product.reorder_threshold * 2 - product.stock, 10);
   const idempotencyKey = req.get('Idempotency-Key');
   if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for inventory writes' });
