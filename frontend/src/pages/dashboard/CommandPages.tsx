@@ -71,6 +71,7 @@ export function CommandPages() {
   useEffect(() => {
     if (pathname === '/dashboard/admin' && user?.role === 'admin') api.get<User[]>('/admin/users').then(({ data }) => setUsers(data)).catch((reason: unknown) => setError(errorMessage(reason)))
   }, [pathname, user?.role])
+  const productsAtRisk = useMemo(() => products.filter((product) => product.stock <= product.reorder_threshold), [products])
   const history = events.slice(-20).map((event, index) => ({ name: index.toString(), orders: event.metrics?.activeOrders ?? Math.max(0, metrics.activeOrders + (index % 5) - 2), throughput: event.metrics?.packetsPerSec ?? metrics.packetsPerSec }))
   const request = async (operation: () => Promise<unknown>, success: string, then?: () => void) => {
     try { await operation(); setNotice(success); setError(''); then?.(); await refresh() }
