@@ -31,11 +31,17 @@ class FakeCollection {
   }
   async createIndexes(indexes) { this.indexes.push(...indexes); return indexes.map((index) => index.name); }
   async findOne(filter) {
-    const row = [...this.documents.values()].find((document) => Object.entries(filter).every(([key, value]) => document[key] === value));
+    const row = [...this.documents.values()].find((document) => Object.entries(filter).every(([key, value]) => {
+      if (value && typeof value === 'object' && '$in' in value) return value.$in.includes(document[key]);
+      return document[key] === value;
+    }));
     return row ? structuredClone(row) : null;
   }
   async countDocuments(filter = {}) {
-    return [...this.documents.values()].filter((document) => Object.entries(filter).every(([key, value]) => document[key] === value)).length;
+    return [...this.documents.values()].filter((document) => Object.entries(filter).every(([key, value]) => {
+      if (value && typeof value === 'object' && '$in' in value) return value.$in.includes(document[key]);
+      return document[key] === value;
+    })).length;
   }
   find(filter = {}) {
     let rows = [...this.documents.values()].filter((document) => Object.entries(filter).every(([key, value]) => document[key] === value));
@@ -52,7 +58,10 @@ class FakeCollection {
     return cursor;
   }
   async deleteMany(filter = {}) {
-    const keys = [...this.documents.entries()].filter(([, document]) => Object.entries(filter).every(([key, value]) => document[key] === value)).map(([key]) => key);
+    const keys = [...this.documents.entries()].filter(([, document]) => Object.entries(filter).every(([key, value]) => {
+      if (value && typeof value === 'object' && '$in' in value) return value.$in.includes(document[key]);
+      return document[key] === value;
+    })).map(([key]) => key);
     for (const key of keys) this.documents.delete(key);
     return { deletedCount: keys.length };
   }
@@ -78,10 +87,11 @@ class FakeCollection {
   async updateOne(filter, update, options = {}) {
     const key = filter._id;
     const previous = this.documents.get(key);
-    if (!previous && !options.upsert) return { matchedCount: 0 };
+    if (!previous && !options.upsert) return { matchedCount: 0, modifiedCount: 0 };
     const next = { ...(previous || {}), ...(update.$setOnInsert && !previous ? update.$setOnInsert : {}), ...(update.$set || {}) };
+    for (const [field, amount] of Object.entries(update.$inc || {})) next[field] = Number(next[field] || 0) + amount;
     this.documents.set(key, next);
-    return { matchedCount: previous ? 1 : 0, upsertedCount: previous ? 0 : 1 };
+    return { matchedCount: previous ? 1 : 0, modifiedCount: previous && Object.keys(update.$set || {}).length ? 1 : 0, upsertedCount: previous ? 0 : 1 };
   }
   async deleteOne(filter) {
     const existed = this.documents.delete(filter._id);
@@ -295,6 +305,30 @@ describe('collection repository adapters', () => {
     const stored = database.collection('orders').documents.get('ORD-LONG');
     expect(stored.totalMinor._bsontype === 'Long' || (Number.isInteger(stored.totalMinor.low) && Number.isInteger(stored.totalMinor.high))).toBe(true);
     expect(await adapter.findById('orders', 'ORD-LONG')).toMatchObject({ totalMinor: 5000000000 });
+  });
+
+  it('rejects stale snapshot writes after another MongoDB adapter commits a repository mutation', async () => {
+    const database = new FakeDatabase();
+    const clientA = new FakeClient();
+    const clientB = new FakeClient();
+    const initial = {
+      dataMode: 'production', users: [], products: [], warehouses: [], orders: [],
+      orderItems: [], movements: [], tariffRules: [], logs: [], newsletter: [],
+      rewardClaims: [], metrics: {}, telemetry: { tick: 0 }, sre: { audit: [] }
+    };
+    const adapterA = createMongoAdapter({ client: clientA, database });
+    await adapterA.initialize({ fallbackState: initial });
+    const adapterB = createMongoAdapter({ client: clientB, database });
+    await adapterB.initialize({ fallbackState: initial });
+    const staleSnapshot = await adapterB.readState();
+
+    await adapterA.insert('users', {
+      id: 'USER-CONCURRENT', email: 'concurrent@example.com',
+      role: 'buyer', filerStatus: 'unverified', isActive: true
+    });
+
+    await expect(adapterB.writeState(staleSnapshot)).rejects.toMatchObject({ code: 'WRITE_CONFLICT', status: 409 });
+    expect(await adapterA.count('users', { email: 'concurrent@example.com' })).toBe(1);
   });
 
   it('refuses to overwrite unmarked populated collections', async () => {
