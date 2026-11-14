@@ -32,6 +32,7 @@ function createDomainRepositories(adapter) {
       });
     },
     async changeRole(id, role, actor) {
+      role = role === 'user' ? 'buyer' : role;
       if (!BUYER_ROLES.has(role)) throw new TypeError('Unsupported user role');
       return adapter.withTransaction(async ({ repository }) => {
         const user = await repository.findById('users', id);
