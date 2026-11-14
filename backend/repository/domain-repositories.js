@@ -57,7 +57,10 @@ function createDomainRepositories(adapter) {
         return updated;
       });
     },
-    async softDelete(id, actor, at = new Date().toISOString()) {
+    async softDelete(id, actorOrAt, suppliedAt) {
+      const actor = actorOrAt && typeof actorOrAt === 'object'
+        ? actorOrAt : { id: 'system', role: 'system' };
+      const at = typeof actorOrAt === 'string' ? actorOrAt : (suppliedAt || new Date().toISOString());
       return adapter.withTransaction(async ({ repository }) => {
         const user = await repository.findById('users', id);
         if (!user) return null;
@@ -76,7 +79,7 @@ function createDomainRepositories(adapter) {
         }
         const updated = await repository.update('users', id, { isActive: false, deletedAt: at, updatedAt: at });
         await repository.insert('auditLogs', {
-          id: 'AUD-' + randomUUID(), actorId: actor.id, actorRole: actor.role,
+          id: 'AUD-' + randomUUID(), actorId: actor.id || 'system', actorRole: actor.role || 'system',
           action: 'user.soft_delete', targetType: 'user', targetId: id, meta: {}, at
         });
         return updated;
