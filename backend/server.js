@@ -516,9 +516,6 @@ app.post('/api/auth/login', sre.rateLimit({ limit: 10, windowMs: 60_000, name: '
 }));
 
 async function register(req, res) {
-  if (req.body.role === 'admin' && db.users.some((entry) => entry.role === 'admin')) {
-    return res.status(409).json({ error: 'ADMIN_EXISTS' });
-  }
   if (req.body.role === 'admin' || req.body.role === 'operator') {
     const roleName = req.body.role;
     const keyName = roleName === 'admin' ? 'ADMIN_REGISTRATION_KEY' : 'OPERATOR_REGISTRATION_KEY';
@@ -530,34 +527,44 @@ async function register(req, res) {
       expectedBuffer.length === suppliedBuffer.length &&
       timingSafeEqual(expectedBuffer, suppliedBuffer);
     if (!validCode) {
-      return res.status(403).json({ error: `${roleName === 'admin' ? 'Administrator' : 'Operations'} registration requires a valid invitation key` });
+      return res.status(403).json({ error: roleName === 'admin'
+        ? 'Administrator registration requires a valid invitation key'
+        : 'Operations registration requires a valid invitation key' });
     }
   }
 
-  if (db.users.some((entry) => entry.email === req.body.email)) {
-    return res.status(409).json({ error: 'Email already registered' });
-  }
   const passwordHash = await bcrypt.hash(req.body.password, 12);
-  // Re-check after bcrypt yields: concurrent admin registrations must not create a second administrator.
-  if (req.body.role === 'admin' && db.users.some((entry) => entry.role === 'admin')) {
-    return res.status(409).json({ error: 'ADMIN_EXISTS' });
+  const userId = 'USER-' + randomUUID();
+  const requestedRole = req.body.role === 'user' ? 'buyer' : req.body.role;
+  let user;
+  try {
+    user = await domainRepositories.users.create({
+      id: userId,
+      name: req.body.name,
+      email: req.body.email,
+      role: requestedRole,
+      ...(requestedRole === 'buyer' ? { filerStatus: 'unverified' } : {}),
+      passwordHash,
+      isActive: true,
+      deletedAt: null,
+      actorId: userId,
+      actorRole: requestedRole
+    });
+  } catch (error) {
+    if (error.code === 'ADMIN_EXISTS') return res.status(409).json({ error: 'ADMIN_EXISTS' });
+    if (error.code === 'EMAIL_EXISTS' || error.code === 11000 || error.code === 'DUPLICATE_KEY') {
+      return res.status(409).json({ error: 'Email already registered' });
+    }
+    throw error;
   }
-  const user = {
-    id: `USER-${randomUUID()}`,
-    name: req.body.name,
-    email: req.body.email,
-    role: req.body.role || 'user',
-    passwordHash,
-    isActive: true,
-    deletedAt: null,
-    createdAt: new Date().toISOString()
-  };
-  db.users.push(user);
-  addLog(`Account registered for ${user.email}.`, 'INFO', 'USER', { userId: user.id });
+
+  db = await repository.readState();
+  addLog('Account registered for ' + user.email + '.', 'INFO', 'USER', { userId: user.id });
   await persist();
   const token = jwt.sign({ sub: user.id, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
   res.status(201).json({ token, user: safeUser(user) });
 }
+
 app.post('/api/auth/register', sre.rateLimit({ limit: 10, windowMs: 60_000, name: 'register' }), validate(registerSchema), asyncRoute(register));
 app.post('/api/register', sre.rateLimit({ limit: 10, windowMs: 60_000, name: 'register-legacy' }), validate(registerSchema), asyncRoute(register));
 
