@@ -23,7 +23,7 @@ export function StorePage() {
     (category === 'All' || product.category === category) &&
     (!inStock || product.stock > 0) &&
     `${product.name} ${product.sku} ${product.description}`.toLowerCase().includes(query.toLowerCase()),
-  ).sort((a, b) => sort === 'price-low' ? (a.priceExGstPkr ?? Number.MAX_SAFE_INTEGER) - (b.priceExGstPkr ?? Number.MAX_SAFE_INTEGER) : sort === 'price-high' ? (b.priceExGstPkr ?? 0) - (a.priceExGstPkr ?? 0) : sort === 'velocity' ? (b.leadDays ?? 999) - (a.leadDays ?? 999) : Number(Boolean(b.featured)) - Number(Boolean(a.featured)), [products, category, query, inStock, sort])
+  ).sort((a, b) => sort === 'price-low' ? (a.priceExGstPkr ?? Number.MAX_SAFE_INTEGER) - (b.priceExGstPkr ?? Number.MAX_SAFE_INTEGER) : sort === 'price-high' ? (b.priceExGstPkr ?? 0) - (a.priceExGstPkr ?? 0) : sort === 'velocity' ? (b.leadDays ?? 999) - (a.leadDays ?? 999) : Number(Boolean(b.featured)) - Number(Boolean(a.featured))), [products, category, query, inStock, sort])
   return <div className="editorial"><EditorialNavbar /><main className="wrap section" style={{ minHeight: '80vh' }}>
     <div className="eyebrow">Pakistan Edition · demo catalogue</div><h1 className="section-title">Hardware for your operations.</h1><p className="muted">PKR ex-GST prices and synthetic inventory across six demonstration hubs.</p>
     <div className="store-toolbar"><div style={{ flex: '1 1 240px', position: 'relative' }}><Search size={16} style={{ position: 'absolute', top: 14, left: 13 }} /><input aria-label="Search products" className="field" style={{ paddingLeft: 38 }} placeholder="Search SKU or product…" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
