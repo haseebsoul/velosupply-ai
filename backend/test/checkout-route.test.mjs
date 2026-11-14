@@ -124,7 +124,7 @@ describe('Pakistan checkout HTTP route', () => {
       .send({ email: 'operator@example.com', password: 'Operator123' });
     expect(login.status).toBe(200);
 
-    const payload = { stock: 6, reason: 'cycle_count' };
+    const payload = { stock: 6, price: 1500, reason: 'cycle_count' };
     const first = await supertest(serverModule.app)
       .patch('/api/inventory/PROD-1')
       .set('Authorization', 'Bearer ' + login.body.token)
@@ -132,6 +132,7 @@ describe('Pakistan checkout HTTP route', () => {
       .send(payload);
     expect(first.status).toBe(200);
     expect(first.body.product.stock).toBe(6);
+    expect(first.body.product.priceExGstPkr).toBe(1500);
 
     const movements = await adapter.find('movements', { sku: 'SKU-1', hubCode: 'HUB-KHI' });
     expect(movements.map((movement) => movement.type)).toEqual(['RECEIVE', 'ADJUST']);
