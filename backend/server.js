@@ -419,7 +419,7 @@ const transferSchema = z.object({
   reason: z.string().trim().min(2).max(120)
 }).strict();
 const roleSchema = z.object({
-  role: z.enum(['admin', 'operator', 'user'])
+  role: z.enum(['admin', 'operator', 'buyer', 'user'])
 }).strict();
 const simulationSchema = z.object({
   scenario: z.enum(['port_congestion', 'demand_spike', 'auto_rebalance']),
