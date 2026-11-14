@@ -236,7 +236,7 @@ function normalizeStateShape(input) {
 function recordsForState(state, name) {
   name = canonicalCollectionName(name);
   if (name === 'stock') {
-    if (Array.isArray(state.stock) && state.stock.length) return state.stock;
+    if (Array.isArray(state.stock) && state.stock.some((row) => row.projection !== true)) return state.stock;
     return (state.products || []).map((product) => ({
       id: String(product.sku || product.id) + ':' + String(product.warehouse_hub || 'unassigned'),
       sku: product.sku,
