@@ -35,6 +35,71 @@ const COLLECTION_NAMES = [
   'migrationBackups'
 ];
 
+const COLLECTION_VALIDATORS = {
+  users: { $jsonSchema: {
+    bsonType: 'object', required: ['email', 'role', 'isActive'],
+    properties: {
+      email: { bsonType: 'string' },
+      role: { enum: ['buyer', 'operator', 'admin'] },
+      filerStatus: { enum: ['filer', 'non-filer', 'unverified'] },
+      isActive: { bsonType: 'bool' },
+      deletedAt: { bsonType: ['string', 'null'] }
+    },
+    oneOf: [
+      { properties: { role: { enum: ['buyer'] } }, required: ['filerStatus'] },
+      { properties: { role: { enum: ['operator', 'admin'] } } }
+    ]
+  } },
+  products: { $jsonSchema: {
+    bsonType: 'object', required: ['sku', 'originWarehouseId'],
+    properties: {
+      sku: { bsonType: 'string' }, batchHash: { bsonType: 'string' },
+      originWarehouseId: { bsonType: 'string' }, archivedAt: { bsonType: ['string', 'null'] }
+    }
+  } },
+  warehouses: { $jsonSchema: {
+    bsonType: 'object', required: ['name', 'seedOrigin'],
+    properties: { code: { bsonType: 'string' }, name: { bsonType: 'string' }, seedOrigin: { bsonType: 'bool' } }
+  } },
+  orders: { $jsonSchema: {
+    bsonType: 'object',
+    properties: {
+      userId: { bsonType: ['string', 'null'] },
+      totalMinor: { bsonType: ['int', 'long', 'null'] },
+      currency: { bsonType: 'string' }
+    }
+  } },
+  orderItems: { $jsonSchema: {
+    bsonType: 'object', required: ['orderId'],
+    properties: {
+      orderId: { bsonType: 'string' }, productId: { bsonType: ['string', 'null'] },
+      quantity: { bsonType: ['int', 'long'] }, qty: { bsonType: ['int', 'long'] },
+      unitPriceMinor: { bsonType: ['int', 'long', 'null'] }
+    }
+  } },
+  stockMovements: { $jsonSchema: {
+    bsonType: 'object', required: ['sku', 'hubCode', 'type', 'qty', 'reason', 'refType', 'refId', 'actorId', 'at'],
+    properties: {
+      sku: { bsonType: 'string' }, hubCode: { bsonType: 'string' },
+      type: { enum: ['RECEIVE', 'RESERVE', 'RELEASE', 'SHIP', 'ADJUST', 'TRANSFER_OUT', 'TRANSFER_IN', 'RETURN_IN'] },
+      qty: { bsonType: ['int', 'long'] }, reason: { bsonType: 'string' },
+      refType: { bsonType: 'string' }, refId: { bsonType: 'string' },
+      actorId: { bsonType: 'string' }, at: { bsonType: 'string' }
+    }
+  } },
+  auditLogs: { $jsonSchema: {
+    bsonType: 'object', required: ['action', 'actorId', 'at'],
+    properties: { action: { bsonType: 'string' }, actorId: { bsonType: 'string' }, at: { bsonType: 'string' } }
+  } },
+  tariffRules: { $jsonSchema: {
+    bsonType: 'object', required: ['code', 'version', 'source'],
+    properties: {
+      code: { bsonType: 'string' }, version: { bsonType: ['int', 'long'] },
+      source: { enum: ['demo-estimate', 'official', 'licensed-provider'] }
+    }
+  } }
+};
+
 const INDEXES = {
   users: [
     { key: { email: 1 }, unique: true, name: 'users_email_unique' }
@@ -302,6 +367,7 @@ module.exports = {
   STATE_PATHS,
   COLLECTION_NAMES,
   INDEXES,
+  COLLECTION_VALIDATORS,
   APPEND_ONLY_COLLECTIONS,
   COLLECTION_ALIASES,
   canonicalCollectionName,
