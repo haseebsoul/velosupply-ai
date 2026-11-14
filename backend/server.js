@@ -421,6 +421,9 @@ const returnDecisionSchema = z.object({
 const returnReceiveSchema = z.object({
   hubCode: z.string().trim().min(1).max(32)
 }).strict();
+const purchaseOrderStatusSchema = z.object({
+  status: z.enum(['approved', 'shipped', 'received'])
+}).strict();
 const transferSchema = z.object({
   sku: z.string().trim().min(1).max(80),
   fromHubCode: z.string().trim().min(1).max(32),
@@ -925,28 +928,58 @@ app.post('/api/inventory/restock/:id', requireRoles('admin', 'operator'), valida
   if (!product || product.archivedAt) return res.status(404).json({ error: 'Product not found' });
   const quantity = req.body.quantity || Math.max(product.reorder_threshold * 2 - product.stock, 10);
   const idempotencyKey = req.get('Idempotency-Key');
-  if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for inventory writes' });
+  if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for purchase order creation' });
   try {
-    await domainRepositories.stockMovements.restock({
+    const purchaseOrder = await domainRepositories.purchaseOrders.createDraft({
       sku: product.sku,
       hubCode: product.warehouse_hub || 'unassigned',
       qty: quantity,
-      reason: 'restock',
       actorId: req.user.id,
       actorRole: req.user.role,
       idempotencyKey
     });
+    db = await repository.readState();
+    res.status(201).json({
+      purchaseOrder,
+      quantity,
+      message: 'Draft purchase order created. Stock is unchanged until the order is shipped and received.'
+    });
   } catch (error) {
     if (error.code === 'KEY_REUSED') return res.status(422).json({ error: 'KEY_REUSED', message: error.message });
-    if (error.code === 'STOCK_NOT_FOUND') return res.status(409).json({ error: 'STOCK_NOT_FOUND', message: error.message });
+    if (error.code === 'PRODUCT_UNAVAILABLE' || error.code === 'SUPPLIER_NOT_FOUND' || error.code === 'WAREHOUSE_NOT_FOUND') {
+      return res.status(409).json({ error: error.code, message: error.message });
+    }
     throw error;
   }
-  db = await repository.readState();
-  const updatedProduct = findById(db.products, req.params.id, 'Product');
-  const event = publish('THREAT_RESOLVED', `Stock received for ${updatedProduct.sku}: +${quantity} units.`, 'INFO', { productId: updatedProduct.id });
-  refreshMetrics();
-  await persist();
-  res.json({ product: updatedProduct, quantity, event });
+}));
+app.get('/api/purchase-orders', requireRoles('admin', 'operator'), asyncRoute(async (_req, res) => {
+  res.json(repository ? await repository.find('purchaseOrders', {}) : (db.purchaseOrders || []));
+}));
+app.patch('/api/purchase-orders/:id/status', requireRoles('admin', 'operator'), validate(purchaseOrderStatusSchema), asyncRoute(async (req, res) => {
+  const idempotencyKey = req.get('Idempotency-Key');
+  if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for purchase order state changes' });
+  try {
+    const purchaseOrder = await domainRepositories.purchaseOrders.transition(
+      req.params.id,
+      req.body.status,
+      { id: req.user.id, role: req.user.role },
+      idempotencyKey
+    );
+    if (!purchaseOrder) return res.status(404).json({ error: 'Purchase order not found' });
+    db = await repository.readState();
+    if (req.body.status === 'received') {
+      publish('STOCK_CHANGED', `Purchase order ${purchaseOrder.code} received into ${purchaseOrder.hubCode}.`, 'INFO', {
+        purchaseOrderId: purchaseOrder.id,
+        hubCode: purchaseOrder.hubCode
+      });
+    }
+    res.json({ purchaseOrder });
+  } catch (error) {
+    if (error.code === 'INVALID_TRANSITION') return res.status(409).json({ error: error.code, message: error.message });
+    if (error.code === 'ADMIN_APPROVAL_REQUIRED') return res.status(403).json({ error: error.code, message: error.message });
+    if (error.code === 'KEY_REUSED') return res.status(422).json({ error: error.code, message: error.message });
+    throw error;
+  }
 }));
 
 app.post('/api/inventory/transfer', requireRoles('admin', 'operator'), validate(transferSchema), asyncRoute(async (req, res) => {
