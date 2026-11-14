@@ -52,15 +52,46 @@ function createDomainRepositories(adapter) {
     findByEmail(email) { return adapter.find('users', { email: requiredString(email, 'email').toLowerCase() }, { limit: 1 }).then((rows) => rows[0] || null); },
     async create(input) {
       const email = requiredString(input.email, 'email').toLowerCase();
-      const role = requiredString(input.role, 'role');
+      const role = input.role === 'user' ? 'buyer' : requiredString(input.role, 'role');
       if (!BUYER_ROLES.has(role)) throw new TypeError('role must be buyer, operator, or admin');
-      if (role === 'buyer' && !['filer', 'non-filer', 'unverified'].includes(input.filerStatus)) {
+      const filerStatus = role === 'buyer' ? (input.filerStatus || 'unverified') : undefined;
+      if (role === 'buyer' && !['filer', 'non-filer', 'unverified'].includes(filerStatus)) {
         throw new TypeError('filerStatus must be filer, non-filer, or unverified for buyers');
       }
-      return adapter.insert('users', {
-        ...input, id: input.id || 'USER-' + randomUUID(), email, role,
-        isActive: input.isActive !== false, deletedAt: null,
-        createdAt: input.createdAt || new Date().toISOString()
+      return adapter.withTransaction(async ({ repository }) => {
+        const existingEmail = await repository.find('users', { email }, { limit: 1 });
+        if (existingEmail.length) {
+          const error = new Error('Email already registered');
+          error.code = 'EMAIL_EXISTS';
+          throw error;
+        }
+        if (role === 'admin') {
+          const activeAdmins = await repository.find('users', { role: 'admin', isActive: true });
+          if (activeAdmins.length) {
+            const error = new Error('ADMIN_EXISTS');
+            error.code = 'ADMIN_EXISTS';
+            throw error;
+          }
+        }
+        const userId = input.id || 'USER-' + randomUUID();
+        const at = input.createdAt || new Date().toISOString();
+        const user = await repository.insert('users', {
+          ...input, id: userId, email, role,
+          ...(role === 'buyer' ? { filerStatus } : {}),
+          isActive: input.isActive !== false, deletedAt: null,
+          createdAt: at, updatedAt: at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(),
+          actorId: input.actorId || userId,
+          actorRole: input.actorRole || role,
+          action: 'user.register',
+          targetType: 'user',
+          targetId: userId,
+          meta: { role },
+          at
+        });
+        return user;
       });
     },
     async changeRole(id, role, actor) {
