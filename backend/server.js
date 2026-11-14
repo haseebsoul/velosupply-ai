@@ -851,26 +851,34 @@ app.get('/api/inventory/:id/ledger', requireRoles('admin', 'operator'), asyncRou
   const movements = repository
     ? await repository.find('movements', { sku: product.sku, hubCode })
     : (db.movements || []).filter((entry) => entry.sku === product.sku && entry.hubCode === hubCode);
-  const onHand = movements.reduce((balance, entry) => {
-    if (entry.type === 'RECEIVE' || entry.type === 'TRANSFER_IN' || entry.type === 'RETURN_IN') return balance + entry.qty;
-    if (entry.type === 'SHIP' || entry.type === 'TRANSFER_OUT') return balance - entry.qty;
-    if (entry.type === 'ADJUST') return balance + entry.qty;
+  const ledger = movements.reduce((balance, entry) => {
+    if (entry.type === 'RECEIVE' || entry.type === 'TRANSFER_IN' || entry.type === 'RETURN_IN') balance.onHand += entry.qty;
+    if (entry.type === 'SHIP' || entry.type === 'TRANSFER_OUT') balance.onHand -= entry.qty;
+    if (entry.type === 'ADJUST') balance.onHand += entry.qty;
+    if (entry.type === 'RESERVE') balance.reserved += entry.qty;
+    if (entry.type === 'RELEASE' || entry.type === 'SHIP') balance.reserved -= entry.qty;
     return balance;
-  }, 0);
+  }, { onHand: 0, reserved: 0 });
   const initialized = movements.length > 0;
   const stockRows = repository ? await repository.find('stock', { sku: product.sku, hubCode }, { limit: 1 }) : [];
   const stockRow = stockRows[0];
+  const expectedOnHand = stockRow ? stockRow.onHand : product.stock;
+  const expectedReserved = stockRow ? stockRow.reserved : (product.reserved || 0);
+  const matches = initialized
+    ? ledger.onHand === expectedOnHand && ledger.reserved === expectedReserved
+    : null;
   res.json({
     productId: product.id,
     sku: product.sku,
     hubCode,
-    ledgerOnHand: initialized ? onHand : null,
-    productStock: stockRow ? stockRow.onHand : product.stock,
-    reserved: stockRow ? stockRow.reserved : 0,
-    available: stockRow ? stockRow.onHand - stockRow.reserved : product.stock,
-    matches: initialized ? onHand === (stockRow ? stockRow.onHand : product.stock) : null,
+    ledgerOnHand: initialized ? ledger.onHand : null,
+    ledgerReserved: initialized ? ledger.reserved : null,
+    productStock: expectedOnHand,
+    reserved: expectedReserved,
+    available: expectedOnHand - expectedReserved,
+    matches,
     movementCount: movements.length,
-    ledgerStatus: initialized ? (onHand === product.stock ? 'reconciled' : 'mismatch') : 'baseline-required',
+    ledgerStatus: initialized ? (matches ? 'reconciled' : 'mismatch') : 'baseline-required',
     note: initialized ? undefined : 'Legacy stock has no opening-balance movement; record a verified opening balance before treating the ledger as reconciled.'
   });
 }));
