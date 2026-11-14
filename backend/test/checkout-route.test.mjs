@@ -191,23 +191,26 @@ describe('Pakistan checkout HTTP route', () => {
       id: 'ORDER-HISTORY-1', buyerId: 'USER-OPS', userId: 'USER-OPS',
       currency: 'PKR', totalMinor: 12000
     });
-    const login = await supertest(serverModule.app)
+    const operatorLogin = await supertest(serverModule.app)
+      .post('/api/auth/login')
+      .send({ email: 'operator@example.com', password: 'Operator123' });
+    const adminLogin = await supertest(serverModule.app)
       .post('/api/auth/login')
       .send({ email: 'admin@example.com', password: 'AdminPassword123' });
-    expect(login.status).toBe(200);
+    expect(operatorLogin.status).toBe(200);
+    expect(adminLogin.status).toBe(200);
 
     const deleted = await supertest(serverModule.app)
       .delete('/api/admin/users/USER-OPS')
-      .set('Authorization', 'Bearer ' + login.body.token);
+      .set('Authorization', 'Bearer ' + adminLogin.body.token);
     expect(deleted.status).toBe(200);
     expect(await adapter.findById('users', 'USER-OPS')).toMatchObject({ isActive: false });
     expect(await adapter.count('orders', { userId: 'USER-OPS' })).toBe(1);
 
-    const oldOperatorLogin = await supertest(serverModule.app)
+    const revokedSession = await supertest(serverModule.app)
       .get('/api/auth/me')
-      .set('Authorization', 'Bearer ' + (await supertest(serverModule.app)
-        .post('/api/auth/login').send({ email: 'operator@example.com', password: 'Operator123' })).body.token);
-    expect(oldOperatorLogin.status).toBe(401);
+      .set('Authorization', 'Bearer ' + operatorLogin.body.token);
+    expect(revokedSession.status).toBe(401);
   });
 
   it('rejects out-of-stock checkout without reserving or creating an order', async () => {
