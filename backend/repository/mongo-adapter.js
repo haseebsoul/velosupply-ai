@@ -93,6 +93,7 @@ class MongoAdapter {
     this.transactionContext = new AsyncLocalStorage();
     this.lastCollectionJson = new Map();
     this.lastMetadataJson = null;
+    this.expectedRevision = null;
     this.migration = null;
     this.kind = 'mongodb';
     this.supportsTransactions = true;
@@ -127,16 +128,40 @@ class MongoAdapter {
   }
 
   async withTransaction(callback) {
+    const existingContext = this.transactionContext.getStore();
+    if (existingContext) {
+      return callback({ session: existingContext.session, repository: this });
+    }
     const session = this.client.startSession();
     try {
       let result;
       await session.withTransaction(async () => {
-        result = await this.transactionContext.run(session, () => callback({ session, repository: this }));
+        const context = { session, dirty: false };
+        result = await this.transactionContext.run(context, () => callback({ session, repository: this }));
+        if (context.dirty) {
+          const meta = this.collection(META_COLLECTION);
+          const update = await meta.updateOne(
+            { _id: 'primary' },
+            { $inc: { revision: 1 }, $set: { updatedAt: new Date() } },
+            { session }
+          );
+          if (!update.matchedCount) {
+            const error = new Error('MongoDB metadata is not initialized for repository writes.');
+            error.code = 'REPOSITORY_NOT_INITIALIZED';
+            throw error;
+          }
+        }
       });
       return result;
     } finally {
       await session.endSession();
     }
+  }
+
+  markTransactionDirty() {
+    const context = this.transactionContext.getStore();
+    if (!context) throw new Error('Repository mutation must run in a transaction');
+    context.dirty = true;
   }
 
   async initialize(options = {}) {
@@ -196,6 +221,7 @@ class MongoAdapter {
     const metaDocument = await this.collection(META_COLLECTION).findOne({ _id: 'primary' });
     if (!metaDocument) throw new Error('MongoDB repository is not initialized; application_meta/primary is missing.');
     const state = normalizeStateShape(cleanMetadataDocument(metaDocument));
+    this.expectedRevision = Number.isSafeInteger(metaDocument.revision) ? metaDocument.revision : 0;
 
     const records = await Promise.all(Object.keys(STATE_PATHS).map(async (name) => {
       const found = await this.find(name, {});
@@ -231,11 +257,24 @@ class MongoAdapter {
     const metadataChanged = this.lastMetadataJson !== metadataJson || Boolean(control.migration);
     if (!changedCollections.length && !metadataChanged) return;
 
+    const expectedRevision = this.expectedRevision;
+    const nextRevision = (Number.isSafeInteger(expectedRevision) ? expectedRevision : 0) + 1;
     await this.withTransaction(async ({ session }) => {
+      const metaCollection = this.collection(META_COLLECTION);
+      const existing = await metaCollection.findOne({ _id: 'primary' }, { session });
+      const actualRevision = existing && Number.isSafeInteger(existing.revision) ? existing.revision : 0;
+      if ((expectedRevision === null && existing) ||
+          (expectedRevision !== null && actualRevision !== expectedRevision)) {
+        const error = new Error('Concurrent MongoDB state change detected; refresh state before retrying this write.');
+        error.code = 'WRITE_CONFLICT';
+        error.status = 409;
+        throw error;
+      }
+
       for (const entry of changedCollections) {
         const collection = this.collection(entry.name);
+        const previous = JSON.parse(this.lastCollectionJson.get(entry.name) || '[]');
         if (APPEND_ONLY_COLLECTIONS.has(canonicalCollectionName(entry.name))) {
-          const previous = JSON.parse(this.lastCollectionJson.get(entry.name) || '[]');
           const appended = entry.records.slice(previous.length);
           if (appended.length) {
             await collection.insertMany(appended.map((record) => toMongoDocument(entry.name, record)), {
@@ -245,36 +284,56 @@ class MongoAdapter {
           }
           continue;
         }
-        await collection.deleteMany({}, { session });
-        if (entry.records.length) {
-          await collection.insertMany(entry.records.map((record) => toMongoDocument(entry.name, record)), {
-            ordered: true,
-            session
-          });
+
+        const previousById = new Map(previous.map((record) => [documentId(record), record]));
+        const nextIds = new Set();
+        for (const record of entry.records) {
+          const id = documentId(record);
+          nextIds.add(id);
+          if (JSON.stringify(previousById.get(id)) === JSON.stringify(record)) continue;
+          const document = toMongoDocument(entry.name, record);
+          await collection.replaceOne({ _id: document._id }, document, { upsert: true, session });
+        }
+        const removedIds = [...previousById.keys()].filter((id) => !nextIds.has(id));
+        if (removedIds.length) {
+          await collection.deleteMany({ _id: { $in: removedIds } }, { session });
         }
       }
-      const existing = await this.collection(META_COLLECTION).findOne({ _id: 'primary' }, { session });
+
       const migration = control.migration || existing?.migration || this.migration || null;
       const metaDocument = {
         _id: 'primary',
         ...metadata,
         storageSchemaVersion: STORAGE_SCHEMA_VERSION,
+        revision: nextRevision,
         ...(migration ? { migration } : {}),
         updatedAt: new Date()
       };
-      await this.collection(META_COLLECTION).replaceOne(
-        { _id: 'primary' },
-        metaDocument,
-        { upsert: true, session }
-      );
+      if (existing) {
+        const result = await metaCollection.replaceOne(
+          { _id: 'primary', revision: actualRevision },
+          metaDocument,
+          { session }
+        );
+        if (!result.matchedCount) {
+          const error = new Error('Concurrent MongoDB metadata update detected.');
+          error.code = 'WRITE_CONFLICT';
+          error.status = 409;
+          throw error;
+        }
+      } else {
+        await metaCollection.insertOne(metaDocument, { session });
+      }
     });
 
+    this.expectedRevision = nextRevision;
     for (const entry of changedCollections) this.lastCollectionJson.set(entry.name, entry.serialized);
     this.lastMetadataJson = metadataJson;
   }
 
   transactionOptions(options = {}) {
-    const session = options.session || this.transactionContext.getStore();
+    const context = this.transactionContext.getStore();
+    const session = options.session || context?.session;
     return session ? { ...options, session } : options;
   }
 
@@ -297,10 +356,14 @@ class MongoAdapter {
   }
 
   async insert(name, record, options = {}) {
+    if (!this.transactionContext.getStore() && !options.session) {
+      return this.withTransaction(({ repository }) => repository.insert(name, record, options));
+    }
     const input = clone(record);
     if (!input.id && !input._id && !input.code && !input.key && !(input.sku && input.hubCode)) input.id = randomUUID();
     const document = toMongoDocument(name, input);
     await this.collection(name).insertOne(document, this.transactionOptions(options));
+    this.markTransactionDirty();
     return fromMongoDocument(name, document);
   }
 
@@ -310,13 +373,17 @@ class MongoAdapter {
       error.code = 'IMMUTABLE_COLLECTION';
       throw error;
     }
+    if (!this.transactionContext.getStore() && !options.session) {
+      return this.withTransaction(({ repository }) => repository.update(name, id, changes, options));
+    }
     const cleanChanges = convertMinorUnitsToLong(clone(changes));
     delete cleanChanges._id;
-    await this.collection(name).updateOne(
+    const result = await this.collection(name).updateOne(
       { _id: String(id) },
       { $set: cleanChanges, $setOnInsert: { _id: String(id) } },
       { upsert: Boolean(options.upsert), ...this.transactionOptions(options) }
     );
+    if (result.modifiedCount || result.upsertedCount) this.markTransactionDirty();
     return this.findById(name, id, options);
   }
 
@@ -326,7 +393,11 @@ class MongoAdapter {
       error.code = 'IMMUTABLE_COLLECTION';
       throw error;
     }
+    if (!this.transactionContext.getStore() && !options.session) {
+      return this.withTransaction(({ repository }) => repository.remove(name, id, options));
+    }
     const result = await this.collection(name).deleteOne({ _id: String(id) }, this.transactionOptions(options));
+    if (result.deletedCount) this.markTransactionDirty();
     return result.deletedCount || 0;
   }
 
