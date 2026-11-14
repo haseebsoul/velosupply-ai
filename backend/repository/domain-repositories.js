@@ -349,11 +349,20 @@ function createDomainRepositories(adapter) {
               actorId: 'system', at: nowIso
             });
           }
+          const nextReserved = stock.reserved + qty;
           const updated = await repository.update('stock', stock.id, {
             ...stock,
-            reserved: stock.reserved + qty
+            reserved: nextReserved
           });
           if (!updated) throw new Error('Unable to reserve stock for ' + stock.sku);
+          const productsAtHub = await repository.find('products', { sku: stock.sku, warehouse_hub: stock.hubCode });
+          for (const product of productsAtHub) {
+            await repository.update('products', product.id, {
+              reserved: nextReserved,
+              available: stock.onHand - nextReserved,
+              updatedAt: nowIso
+            });
+          }
           await repository.insert('movements', {
             id: 'MOV-' + randomUUID(), sku: stock.sku, hubCode: stock.hubCode,
             type: 'RESERVE', qty, reason: 'checkout', refType: 'order', refId: orderId,
@@ -584,6 +593,14 @@ function createDomainRepositories(adapter) {
             if (nextStatus === 'CANCELLED') {
               if (stock.reserved < qty) throw new Error('Reserved stock is lower than order quantity for ' + sku);
               await repository.update('stock', stock.id, { ...stock, reserved: stock.reserved - qty });
+              const products = await repository.find('products', { sku, warehouse_hub: hubCode });
+              for (const product of products) {
+                await repository.update('products', product.id, {
+                  reserved: stock.reserved - qty,
+                  available: stock.onHand - (stock.reserved - qty),
+                  updatedAt: at
+                });
+              }
               await repository.insert('movements', {
                 id: 'MOV-' + randomUUID(), sku, hubCode, type: 'RELEASE', qty,
                 reason: 'order_cancelled', refType: 'order', refId: orderId, actorId, at
@@ -603,7 +620,7 @@ function createDomainRepositories(adapter) {
               });
               const products = await repository.find('products', { sku, warehouse_hub: hubCode });
               for (const product of products) {
-                await repository.update('products', product.id, { stock: stock.onHand - qty, updatedAt: at });
+                await repository.update('products', product.id, { stock: stock.onHand - qty, reserved: stock.reserved - qty, available: stock.onHand - qty - (stock.reserved - qty), updatedAt: at });
               }
             }
           }
@@ -720,7 +737,7 @@ function createDomainRepositories(adapter) {
           });
           const products = await repository.find('products', { sku, warehouse_hub: hubCode });
           for (const product of products) {
-            await repository.update('products', product.id, { stock: stock.onHand + qty, updatedAt: at });
+            await repository.update('products', product.id, { stock: stock.onHand + qty, reserved: stock.reserved, available: stock.onHand + qty - stock.reserved, updatedAt: at });
           }
         }
         const updatedReturn = await repository.update('returns', returnId, {
@@ -852,7 +869,7 @@ function createDomainRepositories(adapter) {
         await repository.update('stock', stock.id, { ...stock, onHand: stock.onHand + qty });
         const productsForSku = await repository.find('products', { sku, warehouse_hub: hubCode });
         for (const product of productsForSku) {
-          await repository.update('products', product.id, { stock: stock.onHand + qty, updatedAt: at });
+          await repository.update('products', product.id, { stock: stock.onHand + qty, reserved: stock.reserved, available: stock.onHand + qty - stock.reserved, updatedAt: at });
         }
         const movement = await repository.insert('movements', {
           id: 'MOV-' + randomUUID(), sku, hubCode, type: 'RECEIVE', qty,
@@ -984,13 +1001,13 @@ function createDomainRepositories(adapter) {
         const productsAtSource = await repository.find('products', { sku, warehouse_hub: fromHubCode });
         for (const product of productsAtSource) {
           await repository.update('products', product.id, {
-            stock: sourceStock.onHand - qty, updatedAt: at
+            stock: sourceStock.onHand - qty, available: sourceStock.onHand - qty - sourceStock.reserved, updatedAt: at
           });
         }
         const productsAtDestination = await repository.find('products', { sku, warehouse_hub: toHubCode });
         for (const product of productsAtDestination) {
           await repository.update('products', product.id, {
-            stock: destinationStock.onHand + qty, updatedAt: at
+            stock: destinationStock.onHand + qty, available: destinationStock.onHand + qty - destinationStock.reserved, updatedAt: at
           });
         }
         await repository.insert('auditLogs', {
