@@ -718,12 +718,13 @@ app.get('/api/logs', requireRoles('admin', 'operator'), asyncRoute(async (_req, 
   res.json(repository ? await repository.find('logs', {}) : db.logs);
 }));
 app.get('/api/threats', requireRoles('admin', 'operator'), asyncRoute(async (_req, res) => {
-  const [products, stockRows, movementRows, purchaseOrders, hubs] = await Promise.all([
+  const [products, stockRows, movementRows, purchaseOrders, hubs, suppliers] = await Promise.all([
     repository ? repository.find('products', {}) : db.products,
     repository ? repository.find('stock', {}) : (db.stock || []),
     repository ? repository.find('movements', {}) : (db.movements || []),
     repository ? repository.find('purchaseOrders', {}) : (db.purchaseOrders || []),
-    repository ? repository.find('warehouses', {}) : db.warehouses
+    repository ? repository.find('warehouses', {}) : db.warehouses,
+    repository ? repository.find('suppliers', {}) : (db.suppliers || [])
   ]);
   const now = Date.now();
   const historyTimes = movementRows.map((movement) => Date.parse(movement.at)).filter(Number.isFinite);
@@ -737,6 +738,7 @@ app.get('/api/threats', requireRoles('admin', 'operator'), asyncRoute(async (_re
     shippedBySku.set(movement.sku, (shippedBySku.get(movement.sku) || 0) + movement.qty);
   }
   const stockBySku = new Map(stockRows.map((row) => [row.sku, row]));
+  const supplierById = new Map(suppliers.map((supplier) => [supplier.id, supplier]));
   const onOrderBySku = new Map();
   for (const purchaseOrder of purchaseOrders) {
     if (!['approved', 'shipped'].includes(String(purchaseOrder.status).toLowerCase())) continue;
@@ -771,6 +773,12 @@ app.get('/api/threats', requireRoles('admin', 'operator'), asyncRoute(async (_re
       onOrder,
       reorderPoint,
       recommendQty,
+      supplier: supplierById.get(product.supplierId) ? {
+        id: supplierById.get(product.supplierId).id,
+        name: supplierById.get(product.supplierId).name,
+        reliabilityScore: supplierById.get(product.supplierId).reliabilityScore,
+        leadDays: supplierById.get(product.supplierId).leadDays
+      } : null,
       product: { ...product, stock: onHand, reserved, available }
     } : null;
   }).filter(Boolean);
