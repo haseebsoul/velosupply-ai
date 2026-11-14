@@ -101,9 +101,9 @@ Atlas Network Access currently has no IP/CIDR entries. Before a local or deploye
 
 ### Repository and migration status
 
-- The Atlas adapter writes domain records into named collections and stores only shared application metadata in `application_meta`. It creates the indexes from SRS Section 12.1 and exposes `findById`, `find`, `insert`, `update`, `remove`, `count`, and `withTransaction` operations.
+- The Atlas adapter creates named domain collections with MongoDB `$jsonSchema` validators and the indexes from SRS Section 12.1, stores only shared application metadata in `application_meta`, and exposes `findById`, `find`, `insert`, `update`, `remove`, `count`, and `withTransaction` operations.
 - The file adapter retains the existing `backend/db.json` format, with serialized writes, temporary-file replacement and snapshot rollback for `withTransaction`.
-- Domain services validate buyer filer status, integer-paisa PKR order totals with whole-rupee input validation and GST/delivery calculations, stock movement references and audit actions. User and product deletion are modeled as soft-delete/archive operations.
+- Domain services validate buyer filer status, integer-paisa PKR order totals stored as BSON int64 minor units with whole-rupee input validation and GST/delivery calculations, stock movement references and audit actions. User and product deletion are modeled as soft-delete/archive operations.
 - `stockMovements` (legacy state alias: `movements`) and `auditLogs` are append-only in both adapters: update/delete calls fail, and full-state persistence rejects edits or truncation of existing ledger entries.
 - Automatic migration runs only when `application_meta` and the new collections have no records and the legacy `_id: "primary"` document exists. The source document is copied to `migrationBackups` before the new collections are populated. The backup is not deleted.
 - `npm run migrate:state` runs the migration/verification flow manually. It never loads sample records into a production database.
