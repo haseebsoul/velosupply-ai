@@ -1145,7 +1145,7 @@ app.use((error, req, res, next) => {
         status: 409,
         userId: req.user?.id || null,
         reqId: req.requestId || null
-      }) + '\\n');
+      }) + '\n');
       res.status(409).json({
         error: 'WRITE_CONFLICT',
         message: 'Another application instance changed this record. The latest state has been refreshed; retry with the same Idempotency-Key.'
