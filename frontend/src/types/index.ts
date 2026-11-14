@@ -70,6 +70,18 @@ export interface Order {
   createdAt?: string
 }
 
+export interface PurchaseOrder {
+  id: string
+  code: string
+  supplierId: string
+  supplierName?: string
+  lines: Array<{ sku: string; qty: number; unitExGstPkr?: number }>
+  hubCode: string
+  status: 'draft' | 'approved' | 'shipped' | 'received' | 'rejected'
+  totalPkr: number
+  createdAt: string
+}
+
 export interface InventoryThreat {
   id: string
   type: 'inventory' | 'warehouse'
