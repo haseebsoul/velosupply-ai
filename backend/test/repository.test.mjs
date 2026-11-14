@@ -284,6 +284,20 @@ describe('collection repository adapters', () => {
     await expect(adapter.remove('movements', 'MOV-1')).rejects.toThrow('append-only');
   });
 
+  it('stores large integer minor-unit amounts as BSON int64 values', async () => {
+    const database = new FakeDatabase();
+    const adapter = createMongoAdapter({ client: new FakeClient(), database });
+    await adapter.initialize({ fallbackState: {
+      dataMode: 'production', users: [], products: [], warehouses: [], orders: [],
+      orderItems: [], movements: [], tariffRules: [], logs: [], newsletter: [],
+      rewardClaims: [], metrics: {}, telemetry: { tick: 0 }, sre: { audit: [] }
+    } });
+    await adapter.insert('orders', { id: 'ORD-LONG', totalMinor: 5000000000, currency: 'PKR' });
+    const stored = database.collection('orders').documents.get('ORD-LONG');
+    expect(stored.totalMinor._bsontype).toBe('Long');
+    expect(await adapter.findById('orders', 'ORD-LONG')).toMatchObject({ totalMinor: 5000000000 });
+  });
+
   it('refuses to overwrite unmarked populated collections', async () => {
     const database = new FakeDatabase();
     database.collection('products').documents.set('PROD-1', { _id: 'PROD-1', id: 'PROD-1', sku: 'SKU-1' });
