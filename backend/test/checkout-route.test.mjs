@@ -30,6 +30,9 @@ async function setup() {
       warehouses: [{
         id: 'WH-KHI', code: 'HUB-KHI', name: 'Port Qasim Hub',
         city: 'Karachi', seedOrigin: true
+      }, {
+        id: 'WH-LHE', code: 'HUB-LHE', name: 'Sundar Hub',
+        city: 'Lahore', seedOrigin: true
       }],
       products: [{
         id: 'PROD-1', sku: 'SKU-1', name: 'Hybrid Solar Inverter',
@@ -211,6 +214,67 @@ describe('Pakistan checkout HTTP route', () => {
       .get('/api/auth/me')
       .set('Authorization', 'Bearer ' + operatorLogin.body.token);
     expect(revokedSession.status).toBe(401);
+  });
+
+  it('routes hub transfer through paired ledger events and updates both stock rows', async () => {
+    const { adapter } = await setup();
+    const login = await supertest(serverModule.app)
+      .post('/api/auth/login')
+      .send({ email: 'operator@example.com', password: 'Operator123' });
+    expect(login.status).toBe(200);
+
+    const response = await supertest(serverModule.app)
+      .post('/api/inventory/transfer')
+      .set('Authorization', 'Bearer ' + login.body.token)
+      .set('Idempotency-Key', 'transfer-route-001')
+      .send({
+        sku: 'SKU-1',
+        fromHubCode: 'HUB-KHI',
+        toHubCode: 'HUB-LHE',
+        quantity: 3,
+        reason: 'hub_rebalance'
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.transfer.transferOut.type).toBe('TRANSFER_OUT');
+    expect(response.body.transfer.transferIn.type).toBe('TRANSFER_IN');
+    expect(await adapter.findById('stock', 'SKU-1:HUB-KHI')).toMatchObject({ onHand: 7, reserved: 0 });
+    expect(await adapter.findById('stock', 'SKU-1:HUB-LHE')).toMatchObject({ onHand: 3, reserved: 0 });
+    expect(await adapter.count('movements', { refId: response.body.transfer.refId })).toBe(2);
+    expect(await adapter.count('auditLogs', { action: 'inventory.transfer' })).toBe(1);
+  });
+
+  it('cancels an HTTP checkout by releasing the original reservation', async () => {
+    const { adapter } = await setup();
+    const checkout = await supertest(serverModule.app)
+      .post('/api/checkout')
+      .set('Idempotency-Key', 'cancel-route-checkout-001')
+      .send({
+        customerName: 'Hira Javed',
+        customerEmail: 'hira@example.com',
+        city: 'Karachi',
+        address: 'Block 7, Karachi',
+        paymentMethod: 'COD',
+        items: [{ sku: 'SKU-1', qty: 2 }]
+      });
+    expect(checkout.status).toBe(201);
+
+    const admin = await supertest(serverModule.app)
+      .post('/api/auth/login')
+      .send({ email: 'admin@example.com', password: 'AdminPassword123' });
+    expect(admin.status).toBe(200);
+
+    const response = await supertest(serverModule.app)
+      .post('/api/orders/' + checkout.body.order.id + '/cancel')
+      .set('Authorization', 'Bearer ' + admin.body.token)
+      .set('Idempotency-Key', 'cancel-route-order-001')
+      .send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body.order.status).toBe('CANCELLED');
+    expect((await adapter.find('stock', { sku: 'SKU-1', hubCode: 'HUB-KHI' }))[0]).toMatchObject({ onHand: 10, reserved: 0 });
+    expect(await adapter.count('movements', { type: 'RELEASE', refId: checkout.body.order.id })).toBe(1);
+    expect(await adapter.count('auditLogs', { action: 'order.cancel' })).toBe(1);
   });
 
   it('rejects out-of-stock checkout without reserving or creating an order', async () => {
