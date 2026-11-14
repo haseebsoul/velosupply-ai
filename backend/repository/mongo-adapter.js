@@ -133,25 +133,48 @@ class MongoAdapter {
       return callback({ session: existingContext.session, repository: this });
     }
     const session = this.client.startSession();
+    let committedRevision = null;
     try {
       let result;
+      const expectedRevision = this.expectedRevision;
       await session.withTransaction(async () => {
+        const metaCollection = this.collection(META_COLLECTION);
+        const existingMeta = await metaCollection.findOne({ _id: 'primary' }, { session });
+        const actualRevision = existingMeta && Number.isSafeInteger(existingMeta.revision)
+          ? existingMeta.revision : 0;
+
+        if (expectedRevision !== null && actualRevision !== expectedRevision) {
+          const error = new Error('Concurrent MongoDB write detected; reload state and retry.');
+          error.code = 'WRITE_CONFLICT';
+          error.status = 409;
+          throw error;
+        }
+
         const context = { session, dirty: false };
         result = await this.transactionContext.run(context, () => callback({ session, repository: this }));
-        if (context.dirty) {
-          const meta = this.collection(META_COLLECTION);
-          const update = await meta.updateOne(
-            { _id: 'primary' },
+        if (context.dirty && existingMeta) {
+          const update = await metaCollection.updateOne(
+            { _id: 'primary', revision: actualRevision },
             { $inc: { revision: 1 }, $set: { updatedAt: new Date() } },
             { session }
           );
           if (!update.matchedCount) {
-            const error = new Error('MongoDB metadata is not initialized for repository writes.');
-            error.code = 'REPOSITORY_NOT_INITIALIZED';
+            const error = new Error('Concurrent MongoDB metadata update detected.');
+            error.code = 'WRITE_CONFLICT';
+            error.status = 409;
             throw error;
           }
+          committedRevision = actualRevision + 1;
+        } else if (context.dirty && !existingMeta && expectedRevision !== null) {
+          const error = new Error('MongoDB metadata disappeared during a repository write.');
+          error.code = 'WRITE_CONFLICT';
+          error.status = 409;
+          throw error;
+        } else if (existingMeta) {
+          committedRevision = actualRevision;
         }
       });
+      if (committedRevision !== null) this.expectedRevision = committedRevision;
       return result;
     } finally {
       await session.endSession();
