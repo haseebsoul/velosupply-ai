@@ -13,6 +13,33 @@ function integer(value, field, minimum = 0) {
   if (!Number.isSafeInteger(value) || value < minimum) throw new TypeError(field + ' must be an integer >= ' + minimum);
   return value;
 }
+async function runIdempotent(repository, input, operation) {
+  const key = input.idempotencyKey ? requiredString(input.idempotencyKey, 'Idempotency-Key') : null;
+  if (!key) return operation();
+  if (key.length > 200) throw new TypeError('Idempotency-Key must be 200 characters or fewer');
+  const payload = { ...input };
+  delete payload.idempotencyKey;
+  const requestHash = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+  const existing = await repository.find('idempotencyKeys', { key }, { limit: 1 });
+  if (existing.length) {
+    if (existing[0].requestHash !== requestHash) {
+      const error = new Error('Idempotency key has already been used for a different request');
+      error.code = 'KEY_REUSED';
+      throw error;
+    }
+    return existing[0].response;
+  }
+  const response = await operation();
+  await repository.insert('idempotencyKeys', {
+    id: 'IDEM-' + key,
+    key,
+    requestHash,
+    response,
+    at: new Date().toISOString()
+  });
+  return response;
+}
+
 function createDomainRepositories(adapter) {
   if (!adapter) throw new TypeError('A persistence adapter is required');
 
@@ -541,7 +568,7 @@ function createDomainRepositories(adapter) {
       const reason = requiredString(input.reason, 'reason');
       const actorId = requiredString(input.actorId, 'actorId');
       const refId = requiredString(input.refId || 'ADJUST-' + randomUUID(), 'refId');
-      return adapter.withTransaction(async ({ repository }) => {
+      return adapter.withTransaction(async ({ repository }) => runIdempotent(repository, input, async () => {
         const rows = await repository.find('stock', { sku, hubCode }, { limit: 1 });
         const stock = rows[0];
         if (!stock) {
@@ -588,7 +615,7 @@ function createDomainRepositories(adapter) {
           meta: { delta, reason, refId }, at: movement.at
         });
         return { stock: { ...stock, onHand: nextOnHand }, movement };
-      });
+      }));
     },
 
     async restock(input) {
@@ -597,7 +624,7 @@ function createDomainRepositories(adapter) {
       const qty = integer(input.qty, 'qty', 1);
       const actorId = requiredString(input.actorId, 'actorId');
       const refId = requiredString(input.refId || 'RECEIVE-' + randomUUID(), 'refId');
-      return adapter.withTransaction(async ({ repository }) => {
+      return adapter.withTransaction(async ({ repository }) => runIdempotent(repository, input, async () => {
         const rows = await repository.find('stock', { sku, hubCode }, { limit: 1 });
         const stock = rows[0];
         if (!stock) {
@@ -631,7 +658,7 @@ function createDomainRepositories(adapter) {
           meta: { qty, refId }, at
         });
         return { stock: { ...stock, onHand: stock.onHand + qty }, movement };
-      });
+      }));
     },
 
     async append(input) {
@@ -681,7 +708,7 @@ function createDomainRepositories(adapter) {
       const at = input.at || new Date().toISOString();
       const refId = input.refId || 'TRANSFER-' + randomUUID();
 
-      return adapter.withTransaction(async ({ repository }) => {
+      return adapter.withTransaction(async ({ repository }) => runIdempotent(repository, input, async () => {
         const warehousesFound = await repository.find('warehouses', {
           code: { $in: [fromHubCode, toHubCode] }
         });
@@ -765,7 +792,7 @@ function createDomainRepositories(adapter) {
           meta: { fromHubCode, toHubCode, qty, refId }, at
         });
         return { transferOut, transferIn, refId, sourceOnHand: sourceStock.onHand - qty, destinationOnHand: destinationStock.onHand + qty };
-      });
+      }));
     },
 
     async reconcile(sku, hubCode, expectedOnHand, expectedReserved) {
