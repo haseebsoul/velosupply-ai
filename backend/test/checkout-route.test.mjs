@@ -36,10 +36,11 @@ async function setup(dataMode = 'test') {
       }],
       products: [{
         id: 'PROD-1', sku: 'SKU-1', name: 'Hybrid Solar Inverter',
-        category: 'Power', priceExGstPkr: 1000, stock: 10,
+        category: 'Power', priceExGstPkr: 1000, stock: 10, supplierId: 'SUP-1', leadDays: 7,
         warehouse_hub: 'HUB-KHI', reorder_threshold: 2, status: 'optimal'
       }],
       stock: [],
+      suppliers: [{ id: 'SUP-1', name: 'Demo Supplier', city: 'Karachi', leadDays: 7, reliabilityScore: 90, status: 'active', demoRecord: true }],
       orders: [],
       orderItems: [],
       movements: [],
@@ -174,7 +175,7 @@ describe('Pakistan checkout HTTP route', () => {
     expect(await adapter.count('movements', { sku: 'SKU-1', hubCode: 'HUB-KHI' })).toBe(2);
   });
 
-  it('routes restock through a RECEIVE movement and synchronized stock projection', async () => {
+  it('creates a draft restock PO and only receives inventory after approve, ship and receive', async () => {
     const { adapter } = await setup();
     const login = await supertest(serverModule.app)
       .post('/api/auth/login')
@@ -187,11 +188,38 @@ describe('Pakistan checkout HTTP route', () => {
       .set('Idempotency-Key', 'restock-route-001')
       .send({ quantity: 2 });
 
-    expect(response.status).toBe(200);
-    expect(response.body.product.stock).toBe(12);
+    expect(response.status).toBe(201);
+    const po = response.body.purchaseOrder;
+    expect(po).toMatchObject({ status: 'draft', supplierId: 'SUP-1', hubCode: 'HUB-KHI', totalPkr: 2000 });
+    expect(po.lines).toEqual([expect.objectContaining({ sku: 'SKU-1', qty: 2 })]);
+    expect((await adapter.find('stock', { sku: 'SKU-1', hubCode: 'HUB-KHI' }))[0]).toMatchObject({ onHand: 10, reserved: 0 });
+    expect(await adapter.count('movements', { sku: 'SKU-1', hubCode: 'HUB-KHI' })).toBe(0);
+
+    const approved = await supertest(serverModule.app)
+      .patch('/api/purchase-orders/' + po.id + '/status')
+      .set('Authorization', 'Bearer ' + login.body.token)
+      .set('Idempotency-Key', 'po-approve-001')
+      .send({ status: 'approved' });
+    expect(approved.status).toBe(200);
+    const shipped = await supertest(serverModule.app)
+      .patch('/api/purchase-orders/' + po.id + '/status')
+      .set('Authorization', 'Bearer ' + login.body.token)
+      .set('Idempotency-Key', 'po-ship-001')
+      .send({ status: 'shipped' });
+    expect(shipped.status).toBe(200);
+    const received = await supertest(serverModule.app)
+      .patch('/api/purchase-orders/' + po.id + '/status')
+      .set('Authorization', 'Bearer ' + login.body.token)
+      .set('Idempotency-Key', 'po-receive-001')
+      .send({ status: 'received' });
+
+    expect(received.status).toBe(200);
     expect((await adapter.find('stock', { sku: 'SKU-1', hubCode: 'HUB-KHI' }))[0]).toMatchObject({ onHand: 12, reserved: 0 });
-    expect(await adapter.count('movements', { type: 'RECEIVE', sku: 'SKU-1', hubCode: 'HUB-KHI' })).toBe(2);
-    expect(await adapter.count('auditLogs', { action: 'inventory.restock' })).toBe(1);
+    const movements = await adapter.find('movements', { sku: 'SKU-1', hubCode: 'HUB-KHI' });
+    expect(movements.map((movement) => movement.type)).toEqual(['RECEIVE', 'RECEIVE']);
+    expect(movements[1]).toMatchObject({ qty: 2, reason: 'purchase_order_received', refId: po.id });
+    expect(await adapter.count('auditLogs', { action: 'purchase_order.create' })).toBe(1);
+    expect(await adapter.count('auditLogs', { action: 'purchase_order.received' })).toBe(1);
   });
 
   it('registers a buyer in the users collection with explicit unverified filer status and audit', async () => {
