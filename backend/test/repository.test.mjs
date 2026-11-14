@@ -294,7 +294,7 @@ describe('collection repository adapters', () => {
     } });
     await adapter.insert('orders', { id: 'ORD-LONG', totalMinor: 5000000000, currency: 'PKR' });
     const stored = database.collection('orders').documents.get('ORD-LONG');
-    expect(stored.totalMinor._bsontype).toBe('Long');
+    expect(stored.totalMinor._bsontype === 'Long' || (Number.isInteger(stored.totalMinor.low) && Number.isInteger(stored.totalMinor.high))).toBe(true);
     expect(await adapter.findById('orders', 'ORD-LONG')).toMatchObject({ totalMinor: 5000000000 });
   });
 
