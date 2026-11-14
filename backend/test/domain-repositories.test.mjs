@@ -260,6 +260,70 @@ describe('domain repositories and immutable ledgers', () => {
     expect(await adapter.findById('stock', 'LEGACY-1:KHI')).toMatchObject({ onHand: 6, reserved: 2 });
   });
 
+  it('creates draft purchase orders and writes RECEIVE only after shipment and receipt', async () => {
+    const { adapter, domain } = await harness({
+      warehouses: [{ id: 'WH-KHI', code: 'HUB-KHI', name: 'Port Qasim Hub', seedOrigin: true }],
+      suppliers: [{ id: 'SUP-1', name: 'Demo Supplier', leadDays: 7, reliabilityScore: 90 }],
+      products: [{
+        id: 'PROD-1', sku: 'SKU-1', name: 'Hybrid Solar Inverter',
+        priceExGstPkr: 1000, supplierId: 'SUP-1', stock: 10,
+        warehouse_hub: 'HUB-KHI', status: 'active'
+      }],
+      stock: [{ id: 'SKU-1:HUB-KHI', sku: 'SKU-1', hubCode: 'HUB-KHI', onHand: 10, reserved: 0 }]
+    });
+    const po = await domain.purchaseOrders.createDraft({
+      sku: 'SKU-1', hubCode: 'HUB-KHI', qty: 2,
+      actorId: 'operator-1', actorRole: 'operator', idempotencyKey: 'po-domain-001'
+    });
+    expect(po).toMatchObject({ status: 'draft', supplierId: 'SUP-1', totalPkr: 2000 });
+    expect(await adapter.count('movements')).toBe(0);
+    expect((await adapter.find('stock', { sku: 'SKU-1', hubCode: 'HUB-KHI' }))[0].onHand).toBe(10);
+
+    const approved = await domain.purchaseOrders.transition(po.id, 'approved', {
+      id: 'operator-1', role: 'operator'
+    }, 'po-domain-approve-001');
+    expect(approved.status).toBe('approved');
+    const shipped = await domain.purchaseOrders.transition(po.id, 'shipped', {
+      id: 'operator-1', role: 'operator'
+    }, 'po-domain-ship-001');
+    expect(shipped.status).toBe('shipped');
+    const received = await domain.purchaseOrders.transition(po.id, 'received', {
+      id: 'operator-1', role: 'operator'
+    }, 'po-domain-receive-001');
+    expect(received.status).toBe('received');
+    expect((await adapter.find('stock', { sku: 'SKU-1', hubCode: 'HUB-KHI' }))[0]).toMatchObject({ onHand: 12, reserved: 0 });
+    const movements = await adapter.find('movements', { sku: 'SKU-1', hubCode: 'HUB-KHI' });
+    expect(movements.map((movement) => movement.type)).toEqual(['RECEIVE', 'RECEIVE']);
+    expect(movements[1]).toMatchObject({ qty: 2, refType: 'purchase_order', refId: po.id });
+    expect(await adapter.count('auditLogs', { action: 'purchase_order.create' })).toBe(1);
+    expect(await adapter.count('auditLogs', { action: 'purchase_order.received' })).toBe(1);
+  });
+
+  it('requires administrator approval for purchase orders above Rs 2,000,000', async () => {
+    const { domain } = await harness({
+      warehouses: [{ id: 'WH-KHI', code: 'HUB-KHI', name: 'Port Qasim Hub', seedOrigin: true }],
+      suppliers: [{ id: 'SUP-1', name: 'Demo Supplier', leadDays: 7, reliabilityScore: 90 }],
+      products: [{
+        id: 'PROD-1', sku: 'SKU-1', name: 'Hybrid Solar Inverter',
+        priceExGstPkr: 1000, supplierId: 'SUP-1', stock: 10,
+        warehouse_hub: 'HUB-KHI', status: 'active'
+      }],
+      stock: [{ id: 'SKU-1:HUB-KHI', sku: 'SKU-1', hubCode: 'HUB-KHI', onHand: 10, reserved: 0 }]
+    });
+    const po = await domain.purchaseOrders.createDraft({
+      sku: 'SKU-1', hubCode: 'HUB-KHI', qty: 2001,
+      actorId: 'operator-1', actorRole: 'operator', idempotencyKey: 'po-domain-large-001'
+    });
+    expect(po.totalPkr).toBe(2001000);
+    await expect(domain.purchaseOrders.transition(po.id, 'approved', {
+      id: 'operator-1', role: 'operator'
+    }, 'po-domain-large-approve-operator')).rejects.toMatchObject({ code: 'ADMIN_APPROVAL_REQUIRED' });
+    const approved = await domain.purchaseOrders.transition(po.id, 'approved', {
+      id: 'admin-1', role: 'admin'
+    }, 'po-domain-large-approve-admin');
+    expect(approved.status).toBe('approved');
+  });
+
   it('reconciles on-hand stock from append-only movements', async () => {
     const { adapter, domain } = await harness();
     await domain.stockMovements.append({ sku: 'SKU-1', hubCode: 'WH-1', type: 'RECEIVE', reason: 'opening_balance', qty: 10, refType: 'opening_balance', refId: 'open-1' });
