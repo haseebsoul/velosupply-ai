@@ -58,7 +58,7 @@ function createFileAdapter(options) {
   }
 
   function collectionPath(name) {
-    const pathValue = STATE_PATHS[canonicalCollectionName(name)];
+    const pathValue = STATE_PATHS[name] || (canonicalCollectionName(name) === 'movements' ? STATE_PATHS.stockMovements : undefined);
     if (!pathValue) throw new Error('Unsupported file repository collection: ' + name);
     return pathValue;
   }
