@@ -70,6 +70,23 @@ export interface Order {
   createdAt?: string
 }
 
+export interface InventoryThreat {
+  id: string
+  type: 'inventory' | 'warehouse'
+  level: 'CRITICAL' | 'HIGH' | 'WARN' | 'MEDIUM'
+  severity?: 'critical' | 'high' | 'medium'
+  message: string
+  daysOfCover?: number
+  avgDaily?: number
+  available?: number
+  onOrder?: number
+  reorderPoint?: number
+  recommendQty?: number
+  supplier?: { id: string; name: string; reliabilityScore?: number; leadDays?: number } | null
+  product?: Product
+  warehouse?: Warehouse
+}
+
 export interface Metrics {
   gmv24h: number
   activeOrders: number
