@@ -540,6 +540,203 @@ function createDomainRepositories(adapter) {
         }
         return { order: saved, items: savedItems };
       });
+    },
+
+    async advanceStatus(orderId, nextStatus, actor) {
+      const allowed = {
+        PLACED: ['CONFIRMED', 'CANCELLED'],
+        CONFIRMED: ['PICKING', 'CANCELLED'],
+        PICKING: ['PACKED'],
+        PACKED: ['DISPATCHED'],
+        DISPATCHED: ['DELIVERED']
+      };
+      const actorId = requiredString(actor.id, 'actor.id');
+      return adapter.withTransaction(async ({ repository }) => {
+        const order = await repository.findById('orders', orderId);
+        if (!order) return null;
+        if (!(allowed[order.status] || []).includes(nextStatus)) {
+          const error = new Error('Invalid order transition: ' + order.status + ' -> ' + nextStatus);
+          error.code = 'INVALID_TRANSITION';
+          throw error;
+        }
+        const orderItems = await repository.find('orderItems', { orderId });
+        const items = orderItems.length ? orderItems : (order.items || []).map((item) => ({
+          sku: item.sku || (repository.find ? null : null),
+          qty: item.qty || item.quantity,
+          hubCode: item.hubCode || order.hubs?.[0] || order.warehouse_hub
+        }));
+        const at = new Date().toISOString();
+
+        if (nextStatus === 'CANCELLED' || nextStatus === 'DISPATCHED') {
+          for (const item of items) {
+            let sku = item.sku;
+            if (!sku && item.productId) {
+              const productRows = await repository.find('products', { id: item.productId }, { limit: 1 });
+              sku = productRows[0]?.sku;
+            }
+            if (!sku) throw new Error('Order item is missing its SKU');
+            const hubCode = requiredString(item.hubCode || order.hubs?.[0] || order.warehouse_hub, 'hubCode');
+            const qty = integer(item.qty || item.quantity, 'order item quantity', 1);
+            const stockRows = await repository.find('stock', { sku, hubCode }, { limit: 1 });
+            const stock = stockRows[0];
+            if (!stock) throw new Error('Stock row not found for order item ' + sku);
+            if (nextStatus === 'CANCELLED') {
+              if (stock.reserved < qty) throw new Error('Reserved stock is lower than order quantity for ' + sku);
+              await repository.update('stock', stock.id, { ...stock, reserved: stock.reserved - qty });
+              await repository.insert('movements', {
+                id: 'MOV-' + randomUUID(), sku, hubCode, type: 'RELEASE', qty,
+                reason: 'order_cancelled', refType: 'order', refId: orderId, actorId, at
+              });
+            } else {
+              if (stock.onHand < qty || stock.reserved < qty) {
+                const error = new Error('Insufficient reserved stock to dispatch ' + sku);
+                error.code = 'STOCK_MISMATCH';
+                throw error;
+              }
+              await repository.update('stock', stock.id, {
+                ...stock, onHand: stock.onHand - qty, reserved: stock.reserved - qty
+              });
+              await repository.insert('movements', {
+                id: 'MOV-' + randomUUID(), sku, hubCode, type: 'SHIP', qty,
+                reason: 'order_dispatch', refType: 'order', refId: orderId, actorId, at
+              });
+              const products = await repository.find('products', { sku, warehouse_hub: hubCode });
+              for (const product of products) {
+                await repository.update('products', product.id, { stock: stock.onHand - qty, updatedAt: at });
+              }
+            }
+          }
+        }
+
+        const timeline = [...(order.timeline || []), {
+          status: nextStatus, at, actorId, note: 'Order status advanced'
+        }];
+        const paymentState = nextStatus === 'DELIVERED' && order.paymentMethod === 'COD'
+          ? 'paid' : order.paymentState;
+        const updated = await repository.update('orders', orderId, {
+          status: nextStatus, timeline, paymentState, updatedAt: at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId, actorRole: actor.role || 'operator',
+          action: nextStatus === 'CANCELLED' ? 'order.cancel' : 'order.status_update',
+          targetType: 'order', targetId: orderId,
+          meta: { previousStatus: order.status, status: nextStatus }, at
+        });
+        return updated;
+      });
+    },
+
+    async requestReturn(orderId, input, actor) {
+      const actorId = requiredString(actor.id, 'actor.id');
+      const reason = requiredString(input.reason, 'reason');
+      return adapter.withTransaction(async ({ repository }) => {
+        const order = await repository.findById('orders', orderId);
+        if (!order) return null;
+        if (order.status !== 'DELIVERED') {
+          const error = new Error('Only delivered orders can be returned');
+          error.code = 'INVALID_TRANSITION';
+          throw error;
+        }
+        const at = new Date().toISOString();
+        const returnRecord = await repository.insert('returns', {
+          id: 'RET-' + randomUUID(),
+          orderId, buyerId: order.buyerId || order.userId,
+          reason, description: input.description || '',
+          status: 'requested', hubCode: input.hubCode || null, createdAt: at, updatedAt: at
+        });
+        const updated = await repository.update('orders', orderId, {
+          status: 'RETURN_REQUESTED',
+          timeline: [...(order.timeline || []), { status: 'RETURN_REQUESTED', at, actorId, note: reason }],
+          updatedAt: at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId, actorRole: actor.role || 'buyer',
+          action: 'return.request', targetType: 'return', targetId: returnRecord.id,
+          meta: { orderId, reason }, at
+        });
+        return { return: returnRecord, order: updated };
+      });
+    },
+
+    async decideReturn(returnId, decision, actor) {
+      if (!['approved', 'rejected'].includes(decision)) throw new TypeError('Decision must be approved or rejected');
+      const actorId = requiredString(actor.id, 'actor.id');
+      return adapter.withTransaction(async ({ repository }) => {
+        const record = await repository.findById('returns', returnId);
+        if (!record) return null;
+        if (record.status !== 'requested') {
+          const error = new Error('Only requested returns can be approved or rejected');
+          error.code = 'INVALID_TRANSITION';
+          throw error;
+        }
+        const at = new Date().toISOString();
+        const updated = await repository.update('returns', returnId, {
+          status: decision, decidedBy: actorId, updatedAt: at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId, actorRole: actor.role || 'operator',
+          action: 'return.' + decision, targetType: 'return', targetId: returnId,
+          meta: { orderId: record.orderId }, at
+        });
+        return updated;
+      });
+    },
+
+    async receiveReturn(returnId, hubCodeInput, actor) {
+      const hubCode = requiredString(hubCodeInput, 'hubCode');
+      const actorId = requiredString(actor.id, 'actor.id');
+      return adapter.withTransaction(async ({ repository }) => {
+        const record = await repository.findById('returns', returnId);
+        if (!record) return null;
+        if (record.status !== 'approved') {
+          const error = new Error('Only approved returns can be received');
+          error.code = 'INVALID_TRANSITION';
+          throw error;
+        }
+        const order = await repository.findById('orders', record.orderId);
+        if (!order) throw new Error('Return order not found');
+        const orderItems = await repository.find('orderItems', { orderId: order.id });
+        const items = orderItems.length ? orderItems : (order.items || []);
+        const at = new Date().toISOString();
+        for (const item of items) {
+          let sku = item.sku;
+          if (!sku && item.productId) {
+            const productRows = await repository.find('products', { id: item.productId }, { limit: 1 });
+            sku = productRows[0]?.sku;
+          }
+          if (!sku) throw new Error('Returned order item is missing its SKU');
+          const qty = integer(item.qty || item.quantity, 'return quantity', 1);
+          const stockRows = await repository.find('stock', { sku, hubCode }, { limit: 1 });
+          const stock = stockRows[0] || { id: sku + ':' + hubCode, sku, hubCode, onHand: 0, reserved: 0 };
+          await repository.update('stock', stock.id, { ...stock, onHand: stock.onHand + qty }, { upsert: !stockRows.length });
+          if (!stockRows.length) {
+            const updatedRows = await repository.find('stock', { sku, hubCode }, { limit: 1 });
+            if (!updatedRows.length) await repository.insert('stock', { ...stock, onHand: qty });
+          }
+          await repository.insert('movements', {
+            id: 'MOV-' + randomUUID(), sku, hubCode, type: 'RETURN_IN', qty,
+            reason: 'customer_return', refType: 'return', refId: returnId, actorId, at
+          });
+          const products = await repository.find('products', { sku, warehouse_hub: hubCode });
+          for (const product of products) {
+            await repository.update('products', product.id, { stock: stock.onHand + qty, updatedAt: at });
+          }
+        }
+        const updatedReturn = await repository.update('returns', returnId, {
+          status: 'received', receivedAt: at, receivedBy: actorId, hubCode, updatedAt: at
+        });
+        const updatedOrder = await repository.update('orders', order.id, {
+          status: 'RETURNED',
+          timeline: [...(order.timeline || []), { status: 'RETURNED', at, actorId, note: 'Return received at ' + hubCode }],
+          updatedAt: at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId, actorRole: actor.role || 'operator',
+          action: 'return.receive', targetType: 'return', targetId: returnId,
+          meta: { orderId: order.id, hubCode }, at
+        });
+        return { return: updatedReturn, order: updatedOrder };
+      });
     }
   };
 
