@@ -242,7 +242,7 @@ function validate(schema, source = 'body') {
 }
 
 function authenticate(req, res, next) {
-  const match = (req.get('authorization') || '').match(/^Bearer\\s+(.+)$/i);
+  const match = (req.get('authorization') || '').match(/^Bearer\s+(.+)$/i);
   if (!match) return res.status(401).json({ error: 'Authentication required' });
   let payload;
   try {
@@ -263,7 +263,7 @@ function authenticate(req, res, next) {
 }
 
 function optionalAuthenticate(req, res, next) {
-  const match = (req.get('authorization') || '').match(/^Bearer\\s+(.+)$/i);
+  const match = (req.get('authorization') || '').match(/^Bearer\s+(.+)$/i);
   if (!match) return next();
   let payload;
   try {
