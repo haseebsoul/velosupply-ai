@@ -52,10 +52,10 @@ Copy `backend/.env.example` to `backend/.env` and set `MONGODB_URI`, `MONGODB_DB
 - `/register` — stakeholder registration for Administrator (invitation key required), Operations team, or Buyer.
 - `/dashboard` — live metrics and orders.
 - `/dashboard/topology` — warehouse network and scenario simulations.
-- `/dashboard/threats` — low-stock alerts and AI restock actions.
+- `/dashboard/threats` — stock-cover alerts with available units, days of cover, supplier reliability and recommended draft purchase orders.
 - `/dashboard/activity` — telemetry event stream and throughput chart.
 - `/dashboard/messages` — priority support notice and workspace updates.
-- `/dashboard/manage` — inventory controls and operating simulation parameters.
+- `/dashboard/manage` — inventory controls, operating simulation parameters and purchase-order approval/shipment/receipt workflow.
 - `/dashboard/rewards` — efficiency score and program status.
 - `/dashboard/reports` — SLA summary and downloadable CSV audit report.
 - `/dashboard/account` — backend health check and session controls.
@@ -63,7 +63,7 @@ Copy `backend/.env.example` to `backend/.env` and set `MONGODB_URI`, `MONGODB_DB
 
 ## API overview
 
-Public endpoints include `GET /api/health`, `GET /api/products`, `POST /api/auth/login`, and `POST /api/auth/register`. Authenticated routes provide profile, checkout, orders, metrics, warehouses, threats, inventory updates, and simulations. Admin user-management endpoints require an admin bearer token. Live telemetry is broadcast over `/ws/telemetry`.
+Public endpoints include `GET /api/health`, `GET /api/products`, `POST /api/auth/login`, and `POST /api/auth/register`. Authenticated routes provide profile, buyer-owned orders/invoices, checkout, metrics, warehouses, stock-cover threats, inventory updates, purchase orders and simulations. Purchase orders move through draft → approved → shipped → received; the receive transition alone increases stock. Admin user-management endpoints require an admin bearer token. Live telemetry is broadcast over `/ws/telemetry`.
 
 
 ## Design notes
@@ -82,13 +82,13 @@ The application exposes `dataMode` from `GET /api/health` and `GET /api/metrics`
 
 ### Sample data (not real business records)
 
-The local demo seed contains 5 non-Pakistan hubs (Newark, Austin, Rotterdam, Dubai and Singapore), 24 synthetic products, 12 synthetic orders, three demo accounts and generated event logs. It also has illustrative starting metrics. These are development examples, not live inventory, supplier feeds, customers, or carrier shipments.
+The current local demo seed contains six Pakistan-labelled demonstration hubs, 12 synthetic hardware SKUs, 26 demo accounts (one admin, four operators and 21 buyers), five fictional suppliers, 60 synthetic PKR orders and order items/invoices, eight purchase orders, stock movements, five incidents, eight alerts, 150 audit entries and six support messages. All generated business records are marked as demo. These are development examples, not verified Pakistani inventory, supplier feeds, customers, or carrier shipments. The known original five-global-hub/24-product demo fixture is upgraded; unknown customized demo state is preserved.
 
-The legacy heartbeat generator randomizes packet-rate and detection-time values only for demo state outside production. Those values are not network packet inspection or threat detection. `GET /api/threats` currently reports inventory threshold and warehouse-status alerts; it does not detect cyberattacks. Scenario simulations change the local demo model and are blocked in production unless `SIMULATIONS_ENABLED=true` is explicitly configured.
+The legacy heartbeat generator randomizes packet-rate and detection-time values only for demo state outside production. Those values are not network packet inspection or threat detection. `GET /api/threats` calculates inventory days of cover, reorder points and suggested replenishment from SHIP movement history, and reports warehouse-status alerts; it does not detect cyberattacks. Scenario simulations remain demo/owner-gated behavior and are blocked in production unless `SIMULATIONS_ENABLED=true` is explicitly configured.
 
 ### Real application behavior
 
-Authenticated login/JWT checks, authorization rules, product/order API calls, stock updates and persistence are implemented. A checkout request creates an application order and reduces the chosen product's stored stock. That record becomes real application data only after a real buyer places the order against a configured, persistent database. The present checkout does not charge a payment method or create a carrier booking. Payment methods and carriers remain simulated adapters / planned integrations.
+Authenticated login/JWT checks, authorization rules, product/order API calls and collection-backed persistence are implemented for the connected workflows. Checkout reserves available stock and creates a PKR order, order items, invoice, idempotency record and audit entry transactionally. Stock adjustment and hub transfers append ledger movements. Restock recommendations create a draft purchase order; stock changes only after the PO is approved, marked shipped and received. Production checkout requires an authenticated buyer. These records become production application data only when deployed against a configured persistent database. No payment is charged and no carrier booking is created.
 
 The Reliability layer measures actual API request timing/status, process memory and event-loop lag, WebSocket ping/pong latency, and the health probes while the backend is running. Its 1-second sample ring is in process memory; five-minute aggregates and SRE state are persisted through the configured storage adapter. The complete 30-day SLO window is not restart-safe yet.
 
@@ -106,12 +106,12 @@ Atlas Network Access currently has no IP/CIDR entries. Before a local or deploye
 - The file adapter preserves `backend/db.json`, atomic temporary-file replacement and rollback. Its write queue is process-local; do not horizontally scale multiple backend processes against one JSON file. Use MongoDB for multi-instance deployments.
 - `movements` is the canonical append-only stock ledger; `stockMovements` is only the legacy state alias. `auditLogs` is also append-only. Update/delete calls fail, and state snapshot diffs cannot edit or truncate either ledger.
 - The canonical checkout aliases `POST /api/checkout` and `POST /api/orders/checkout` call the domain checkout transaction. It allocates stock by the buyer city, reserves units, stores PKR prices in integer paisa, writes separate `orderItems`, creates an invoice, writes the audit entry and persists the Idempotency-Key response atomically.
-- Inventory adjustment, restock receipt and two-hub transfer routes use transactional domain operations, append ADJUST/RECEIVE/TRANSFER movements, update stock projections and write audit entries. Order status transitions commit RELEASE on cancellation, SHIP on dispatch, and RETURN_IN on return receipt. Return requests, decisions and receipts are persisted with audit history.
+- Inventory adjustment and two-hub transfer routes use transactional domain operations, append ADJUST/TRANSFER_OUT/TRANSFER_IN movements, update stock projections and write audit entries. A restock recommendation creates a draft PO; its approved → shipped → received lifecycle writes a PO-linked RECEIVE movement and updates stock only on receipt. Order status transitions commit RELEASE on cancellation, SHIP on dispatch and RETURN_IN on return receipt. Return requests, decisions and physical return receipts are persisted with audit history; financial refunds are not executed.
 - User registration/login, role changes and soft deletion use repository-backed user operations. Authentication resolves the current account from the users collection. The last administrator cannot be demoted or deleted. Buyer order/invoice reads are limited to the authenticated buyer; buyer self-cancel/return aliases are available.
 - Product, warehouse, order, log and stock-cover reads use current collection reads. The Threats API calculates 7/14-day shipped-unit averages, days of cover, reorder point and recommended quantity from the SRS.
 - The Pakistan demo seed now matches SRS Sections 8.1–8.4: 6 demonstration hubs, 12 specified SKUs, 1 administrator, 4 operators, 21 buyers with `filerStatus: "unverified"`, 5 fictional suppliers, 60 synthetic PKR orders over 45 days with ledger movements, 8 purchase orders, 5 incidents, 8 alerts, 150 audit entries and 6 support messages. Seed records are explicitly marked demo. The production bootstrap remains empty and the seed never overwrites a non-demo database.
 - `npm run migrate:state` runs the backup-first migration/verification flow. It never populates production with demo records. A known original five-global-hub/24-product demo fixture is upgraded; unknown customized demo state is preserved.
-- **Remaining compatibility-state routes:** newsletter subscription, rewards claims, scenario simulation and some SRE/telemetry state still use the compatibility state object followed by revision-guarded persistence. They cannot silently overwrite a concurrent MongoDB update, but should be migrated to collection-specific service calls before treating the whole API as fully repository-native. Supplier and purchase-order administration, full product/warehouse CRUD and Settings workflows are not yet exposed as full collection-backed HTTP workflows.
+- **Remaining compatibility-state routes:** newsletter subscription, rewards claims, scenario simulation and some SRE/telemetry state still use the compatibility state object followed by revision-guarded persistence. Supplier master CRUD, full product/warehouse CRUD and Settings workflows are not exposed as complete repository-backed HTTP workflows. The basic purchase-order lifecycle is connected through the inventory-restock and purchase-order status routes, but broader procurement and supplier administration remain incomplete. The seeded support messages are not yet exposed through message CRUD endpoints; the Messages page still contains static demo content.
 - The local file adapter is for single-process development; only the MongoDB adapter has the cross-instance revision guard. No full deployment load/concurrency test has been performed.
 - Live Atlas application-driver connectivity and migration have not been verified. The actual backend host egress IP/CIDR still needs to be added to Atlas Network Access; do not use `0.0.0.0/0`.
 
@@ -134,6 +134,6 @@ The API also exposes `/livez` and `/readyz`. `GET /api/health` retains its origi
 
 - Set `BACKUP_EXPORT=true` to enable the weekly JSON export when using Atlas. Atlas automated backups remain the primary Atlas backup mechanism. Local mode writes a nightly JSON backup under `backend/backups/` and retains the last seven daily files.
 - Structured request logs include a request ID returned in `x-request-id`. The API applies a 300-request/minute IP limit and a 10-login/minute IP limit. Five failed login attempts for an email in 15 minutes trigger a 15-minute lockout.
-- An append-only `movements` repository and stock reconciliation service are implemented on the v16 branch, but the existing checkout/restock/inventory handlers have not yet been moved to use that ledger. The stock accuracy health probe therefore remains degraded until the API writes and reconciliations use the ledger. No external payment gateway exists yet.
+- Checkout, inventory adjustment, hub transfer, cancellation, dispatch, return receipt and purchase-order receipt are connected to the append-only `movements` ledger. The opening balance is a current snapshot and cannot reconstruct older history. The Messages page remains static despite synthetic message records in the demo seed. No external payment gateway exists yet.
 - SRE telemetry keeps a 3,600-sample in-process one-second ring and persistent five-minute aggregate buckets. The one-second ring resets when the process restarts.
 - Run backend tests with `cd backend; npm test`. The CI workflow runs the backend syntax checks and SRE tests before the frontend build.
