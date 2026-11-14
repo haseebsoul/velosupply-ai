@@ -549,18 +549,28 @@ const checkoutHandler = asyncRoute(async (req, res) => {
   const buyerId = req.user?.id || 'GUEST-' + randomUUID();
   const city = req.body.city || req.body.shippingRegion;
   const address = req.body.address || req.body.shippingRegion;
-  const result = await domainRepositories.orders.checkout({
-    buyerId,
-    buyerEmail: req.body.customerEmail || req.user?.email,
-    customerName: req.body.customerName || req.user?.name,
-    city,
-    address,
-    paymentMethod: req.body.paymentMethod || 'COD',
-    items,
-    idempotencyKey,
-    actorId: req.user?.id || buyerId,
-    actorRole: req.user?.role || 'buyer'
-  });
+  let result;
+  try {
+    result = await domainRepositories.orders.checkout({
+      buyerId,
+      buyerEmail: req.body.customerEmail || req.user?.email,
+      customerName: req.body.customerName || req.user?.name,
+      city,
+      address,
+      paymentMethod: req.body.paymentMethod || 'COD',
+      items,
+      idempotencyKey,
+      actorId: req.user?.id || buyerId,
+      actorRole: req.user?.role || 'buyer'
+    });
+  } catch (error) {
+    if (error.code === 'KEY_REUSED') return res.status(422).json({ error: error.code, message: error.message });
+    if (error.code === 'OUT_OF_STOCK' || error.code === 'PRODUCT_UNAVAILABLE' ||
+        error.code === 'PRICE_UNAVAILABLE' || error.code === 'TARIFF_UNAVAILABLE') {
+      return res.status(409).json({ error: error.code, message: error.message });
+    }
+    throw error;
+  }
 
   db = await repository.readState();
   const event = telemetryEvent({
@@ -1027,4 +1037,14 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, server, start, loadDatabaseState, refreshMetrics, sre };
+function configureForTests(state, storageRepository) {
+  if (!state || !storageRepository) throw new TypeError('Test state and repository are required');
+  db = state;
+  repository = storageRepository;
+  domainRepositories = createDomainRepositories(storageRepository);
+  mongoClient = null;
+  stateCollection = null;
+  refreshMetrics();
+}
+
+module.exports = { app, server, start, loadDatabaseState, refreshMetrics, configureForTests, sre };
