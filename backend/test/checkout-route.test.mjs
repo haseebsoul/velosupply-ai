@@ -19,6 +19,10 @@ async function setup() {
       schemaVersion: 3,
       dataMode: 'test',
       users: [{
+        id: 'USER-ADMIN', name: 'Demo Admin', email: 'admin@example.com',
+        role: 'admin', passwordHash: await bcrypt.hash('AdminPassword123', 10),
+        isActive: true, deletedAt: null
+      }, {
         id: 'USER-OPS', name: 'Demo Operator', email: 'operator@example.com',
         role: 'operator', passwordHash: await bcrypt.hash('Operator123', 10),
         isActive: true, deletedAt: null
@@ -167,6 +171,43 @@ describe('Pakistan checkout HTTP route', () => {
     expect((await adapter.find('stock', { sku: 'SKU-1', hubCode: 'HUB-KHI' }))[0]).toMatchObject({ onHand: 12, reserved: 0 });
     expect(await adapter.count('movements', { type: 'RECEIVE', sku: 'SKU-1', hubCode: 'HUB-KHI' })).toBe(2);
     expect(await adapter.count('auditLogs', { action: 'inventory.restock' })).toBe(1);
+  });
+
+  it('registers a buyer in the users collection with explicit unverified filer status and audit', async () => {
+    const { adapter } = await setup();
+    const response = await supertest(serverModule.app)
+      .post('/api/auth/register')
+      .send({ name: 'New Buyer', email: 'newbuyer@example.com', password: 'Password123' });
+
+    expect(response.status).toBe(201);
+    expect(response.body.user).toMatchObject({ role: 'buyer', filerStatus: 'unverified', isActive: true });
+    expect(await adapter.count('users', { email: 'newbuyer@example.com', role: 'buyer' })).toBe(1);
+    expect(await adapter.count('auditLogs', { action: 'user.register' })).toBe(1);
+  });
+
+  it('soft-deletes accounts through repository operations without deleting order history', async () => {
+    const { adapter } = await setup();
+    await adapter.insert('orders', {
+      id: 'ORDER-HISTORY-1', buyerId: 'USER-OPS', userId: 'USER-OPS',
+      currency: 'PKR', totalMinor: 12000
+    });
+    const login = await supertest(serverModule.app)
+      .post('/api/auth/login')
+      .send({ email: 'admin@example.com', password: 'AdminPassword123' });
+    expect(login.status).toBe(200);
+
+    const deleted = await supertest(serverModule.app)
+      .delete('/api/admin/users/USER-OPS')
+      .set('Authorization', 'Bearer ' + login.body.token);
+    expect(deleted.status).toBe(200);
+    expect(await adapter.findById('users', 'USER-OPS')).toMatchObject({ isActive: false });
+    expect(await adapter.count('orders', { userId: 'USER-OPS' })).toBe(1);
+
+    const oldOperatorLogin = await supertest(serverModule.app)
+      .get('/api/auth/me')
+      .set('Authorization', 'Bearer ' + (await supertest(serverModule.app)
+        .post('/api/auth/login').send({ email: 'operator@example.com', password: 'Operator123' })).body.token);
+    expect(oldOperatorLogin.status).toBe(401);
   });
 
   it('rejects out-of-stock checkout without reserving or creating an order', async () => {
