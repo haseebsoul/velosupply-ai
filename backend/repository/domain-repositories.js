@@ -588,6 +588,34 @@ function createDomainRepositories(adapter) {
       });
     },
 
+    async confirmRoute(orderId, actor) {
+      const actorId = requiredString(actor.id, 'actor.id');
+      return adapter.withTransaction(async ({ repository }) => {
+        const order = await repository.findById('orders', orderId);
+        if (!order) return null;
+        const hubs = Array.isArray(order.hubs) && order.hubs.length
+          ? order.hubs
+          : order.warehouse_hub ? [order.warehouse_hub] : [];
+        if (!hubs.length) {
+          const error = new Error('Order has no reserved fulfillment hub; route allocation must be established during checkout.');
+          error.code = 'ORDER_NOT_ALLOCATED';
+          throw error;
+        }
+        const at = new Date().toISOString();
+        const updated = await repository.update('orders', orderId, {
+          routeConfirmedAt: at,
+          routeConfirmedBy: actorId,
+          updatedAt: at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId, actorRole: actor.role || 'operator',
+          action: 'order.route_confirmed', targetType: 'order', targetId: orderId,
+          meta: { hubs }, at
+        });
+        return { order: updated, hubs };
+      });
+    },
+
     async advanceStatus(orderId, nextStatus, actor) {
       const allowed = {
         PLACED: ['CONFIRMED', 'CANCELLED'],
