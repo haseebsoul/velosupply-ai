@@ -38,24 +38,23 @@ try {
 }
 
 const PORT = Number(process.env.PORT) || 8000;
-const generatedDefaults = {};
+let generatedDevelopmentDefault = false;
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') throw new Error('JWT_SECRET must be set in production');
   process.env.JWT_SECRET = randomBytes(32).toString('base64url');
-  generatedDefaults.JWT_SECRET = process.env.JWT_SECRET;
+  generatedDevelopmentDefault = true;
 }
 if (!process.env.CORS_ORIGIN) {
   if (process.env.NODE_ENV === 'production') throw new Error('CORS_ORIGIN must be set in production');
   process.env.CORS_ORIGIN = 'http://localhost:5173';
-  generatedDefaults.CORS_ORIGIN = process.env.CORS_ORIGIN;
+  generatedDevelopmentDefault = true;
 }
 const JWT_SECRET = process.env.JWT_SECRET;
-if (Object.keys(generatedDefaults).length) {
+if (generatedDevelopmentDefault) {
   process.stdout.write(JSON.stringify({
     ts: new Date().toISOString(),
     level: 'WARN',
-    msg: 'Generated development defaults. Save these values in backend/.env to keep sessions stable across restarts.',
-    defaults: generatedDefaults
+    msg: 'A development default was generated; secret values are omitted.'
   }) + '\n');
 }
 
