@@ -513,6 +513,8 @@ No new cluster was created because the existing free cluster already satisfies t
 
 ### Data provenance findings
 
+> Historical snapshot note: the following data-provenance bullets describe the repository state inspected on 13 November 2026, before the Pakistan v16 seed replacement and the newer HTTP/domain integrations. They are retained as historical Atlas/bootstrap evidence, not as the current local demo seed or current API behavior. The current implementation status is recorded in Section 21.
+
 - Local JSON fallback: seeded demo dataset when `MONGODB_URI` is absent in development.
 - Seed records: 5 demo hubs (Newark, Austin, Rotterdam, Dubai, Singapore), 24 synthetic products, 12 synthetic orders, three development users and generated logs.
 - Seeded demo login: `admin@velosupply.ai`, `operator@velosupply.ai`, `buyer@velosupply.ai`; seeded password is `Velo@12345`. Production's empty Atlas bootstrap contains no demo users.
@@ -554,3 +556,38 @@ This direct Atlas inspection confirms the cluster and empty bootstrap record exi
 - At this initial domain-service checkpoint, the services were not yet wired into HTTP handlers. This statement is historical and is superseded by the later route-integration status in Section 18: checkout, inventory adjustment, hub transfer, PO receipt and order lifecycle now use the append-only ledger.
 - The SRS calls for Zod validation at API/domain boundaries; these new service validations are explicit runtime checks, not yet a complete Zod schema layer for every collection.
 - No live Atlas runtime migration or persistence smoke test has been performed; the known Atlas IP allowlist gap remains.
+
+
+## 21. PR #4 current implementation and verification snapshot
+
+**Review date:** 14 November 2026  
+**PR:** [#4 — VeloSupply v16 collection-aware persistence](https://github.com/haseebsoul/velosupply-ai/pull/4)  
+**Branch:** \`pakistan/v16-multi-collection\`  
+**Verified commit:** \`fe6a6688945a62de2400b14c51d98e4c0465ea3b\`
+
+### Frontend build regression review
+
+- The earlier CI failure was reproduced from GitHub Actions run [#43542214964](https://github.com/haseebsoul/velosupply-ai/actions/runs/43542214964): \`CommandPages.tsx\` imported \`useMemo\` without using it and referenced \`productsAtRisk\` after its definition had been removed.
+- At the reviewed branch head, \`useMemo\` is imported, \`productsAtRisk\` is defined, and the Reports Executive Summary consumes the resulting count. The memo now evaluates available (unreserved) units against the product reorder threshold; it falls back to \`stock - reserved\` only when the API response omits \`available\`. Non-finite values are excluded rather than counted as a risk. This avoids calling reserved stock sellable stock.
+- The \`/dashboard/threats\` view is separate: it consumes \`GET /api/threats\` and renders days of cover, available quantity, on-order quantity, reorder point, suggested quantity and assigned supplier metadata.
+
+### Pakistan seed and connected behavior
+
+- The current local seed contains six Pakistan-labelled demo hubs, 12 specified demo SKUs, 26 demo accounts (1 admin, 4 operators, 21 buyers), five fictional suppliers, 60 synthetic PKR orders/order items/invoices, eight purchase orders, a stock movement ledger, five incidents, eight alerts, 150 synthetic audit events and six synthetic support messages. Seed records carry demo provenance; buyer filer state is \`unverified\`. This is not verified Pakistani business data.
+- Production fallback remains an empty production state. Collection normalization initializes omitted state paths as empty arrays. The seed refuses to replace non-demo state and preserves unknown customized demo states.
+- HTTP restock no longer directly increments stock. \`POST /api/inventory/restock/:id\` creates a draft purchase order. Staff transitions it through approved → shipped → received; only the received transition increments on-hand stock and appends the purchase-order-linked \`RECEIVE\` movement. Operators cannot approve purchase orders above Rs 2,000,000; an administrator is required.
+- \`GET /api/purchase-orders\` and \`PATCH /api/purchase-orders/:id/status\` are connected to the purchase-order repository service and are surfaced in the Manage Inventory dashboard. Supplier master CRUD remains absent.
+- The six seeded message records are not yet served by message CRUD/read-state endpoints. The Messages page remains static demo content; the seed count must not be interpreted as a live inbox.
+- Newsletter/rewards/simulation and portions of SRE/telemetry remain compatibility-state paths. Full product/warehouse CRUD and Settings workflows are also incomplete.
+
+### CI verification at this head
+
+GitHub Actions run [#43542854503](https://github.com/haseebsoul/velosupply-ai/actions/runs/43542854503) passed on \`fe6a6688945a62de2400b14c51d98e4c0465ea3b\`:
+
+- Backend dependency installation and reproducible \`npm ci\` passed.
+- Backend JavaScript syntax checks passed.
+- \`npm test\`: **61 tests passed across 7 test files**.
+- Frontend palette-token validation and root development-script syntax checks passed.
+- Frontend \`npm ci\` and \`npm run build\` (TypeScript + Vite production build) passed.
+
+This is hosted GitHub Actions verification. A local \`git clone\` was not possible from the tool environment because DNS resolution for \`github.com\` failed; no claim of a separate local build is made. No Atlas data, credentials, network access, or deployment was changed during this review. PR #4 remains Draft pending human review and the outstanding integration/owner-side verification work.
