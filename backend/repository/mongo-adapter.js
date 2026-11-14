@@ -43,8 +43,10 @@ function convertLongsToNumbers(value) {
   if (Array.isArray(value)) return value.map(convertLongsToNumbers);
   if (!value || typeof value !== 'object' || value instanceof Date) return value;
   if (value._bsontype && value._bsontype !== 'Long') return value;
-  if (value._bsontype === 'Long') {
-    const number = value.toNumber();
+  const isLong = value._bsontype === 'Long' || (Number.isInteger(value.low) && Number.isInteger(value.high) && typeof value.unsigned === 'boolean');
+  if (isLong) {
+    const longValue = value._bsontype === 'Long' ? value : Long.fromBits(value.low, value.high, value.unsigned);
+    const number = longValue.toNumber();
     if (!Number.isSafeInteger(number)) throw new RangeError('MongoDB integer minor-unit value exceeds JavaScript safe integer range');
     return number;
   }
