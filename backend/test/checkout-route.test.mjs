@@ -229,7 +229,7 @@ describe('Pakistan checkout HTTP route', () => {
       .send({ name: 'New Buyer', email: 'newbuyer@example.com', password: 'Password123' });
 
     expect(response.status).toBe(201);
-    expect(response.body.user).toMatchObject({ role: 'buyer', filerStatus: 'unverified', isActive: true });
+    expect(response.body.user).toMatchObject({ role: 'user', filerStatus: 'unverified', isActive: true });
     expect(await adapter.count('users', { email: 'newbuyer@example.com', role: 'buyer' })).toBe(1);
     expect(await adapter.count('auditLogs', { action: 'user.register' })).toBe(1);
   });

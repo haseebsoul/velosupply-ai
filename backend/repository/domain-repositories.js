@@ -73,6 +73,8 @@ function createDomainRepositories(adapter) {
   if (!adapter) throw new TypeError('A persistence adapter is required');
 
   const users = {
+    getById(id) { return adapter.findById('users', id); },
+    list(filter = {}) { return adapter.find('users', filter); },
     findByEmail(email) { return adapter.find('users', { email: requiredString(email, 'email').toLowerCase() }, { limit: 1 }).then((rows) => rows[0] || null); },
     async create(input) {
       const email = requiredString(input.email, 'email').toLowerCase();
@@ -116,6 +118,48 @@ function createDomainRepositories(adapter) {
           at
         });
         return user;
+      });
+    },
+    async loginStatus(email, now = Date.now()) {
+      const normalizedEmail = requiredString(email, 'email').toLowerCase();
+      const rows = await adapter.find('loginAttempts', { email: normalizedEmail });
+      const recent = rows.filter((entry) => {
+        const at = Date.parse(entry.at);
+        return Number.isFinite(at) && now - at < 15 * 60 * 1000;
+      });
+      return { locked: recent.length >= 5, recentFailures: recent.length };
+    },
+    async recordLoginFailure(input) {
+      const email = requiredString(input.email, 'email').toLowerCase();
+      const ip = String(input.ip || '').slice(0, 64);
+      return adapter.withTransaction(async ({ repository }) => {
+        const rows = await repository.find('loginAttempts', { email });
+        const now = Date.now();
+        const recent = rows.filter((entry) => {
+          const at = Date.parse(entry.at);
+          return Number.isFinite(at) && now - at < 15 * 60 * 1000;
+        });
+        if (recent.length >= 5) return { locked: true, recentFailures: recent.length };
+        const at = new Date(now).toISOString();
+        await repository.insert('loginAttempts', { id: 'LOGIN-' + randomUUID(), email, ip, at });
+        return { locked: false, recentFailures: recent.length + 1 };
+      });
+    },
+    async recordLoginSuccess(id, email, actor = null) {
+      const normalizedEmail = requiredString(email, 'email').toLowerCase();
+      return adapter.withTransaction(async ({ repository }) => {
+        const user = await repository.findById('users', id);
+        if (!user || user.isActive === false || user.deletedAt || user.status === 'suspended') return null;
+        const attempts = await repository.find('loginAttempts', { email: normalizedEmail });
+        for (const attempt of attempts) await repository.remove('loginAttempts', attempt.id);
+        const at = new Date().toISOString();
+        const updated = await repository.update('users', id, { lastLoginAt: at, updatedAt: at });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: actor?.id || id,
+          actorRole: actor?.role || user.role, action: 'user.login',
+          targetType: 'user', targetId: id, meta: {}, at
+        });
+        return updated;
       });
     },
     async changeRole(id, role, actor) {

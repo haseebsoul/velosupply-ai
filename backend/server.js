@@ -152,6 +152,7 @@ function metricsScore() { return Number(db.metrics?.efficiencyScore || 0); }
 
 function safeUser(user) {
   const { passwordHash, ...result } = user;
+  if (result.role === 'buyer') result.role = 'user';
   return result;
 }
 
@@ -252,9 +253,8 @@ function validate(schema, source = 'body') {
 
 function loadAuthenticatedUser(token) {
   const payload = jwt.verify(token, JWT_SECRET);
-  if (repository && typeof repository.findById === 'function') {
-    return repository.findById('users', payload.sub);
-  }
+  if (domainRepositories?.users?.getById) return domainRepositories.users.getById(payload.sub);
+  if (repository && typeof repository.findById === 'function') return repository.findById('users', payload.sub);
   return Promise.resolve(db.users.find((entry) => entry.id === payload.sub));
 }
 
@@ -268,7 +268,7 @@ function authenticate(req, res, next) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
   Promise.resolve(userPromise).then((user) => {
-    if (!user || user.isActive === false || user.deletedAt) {
+    if (!user || user.isActive === false || user.deletedAt || user.status === 'suspended') {
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
     req.user = user;
@@ -286,7 +286,7 @@ function optionalAuthenticate(req, res, next) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
   Promise.resolve(userPromise).then((user) => {
-    if (!user || user.isActive === false || user.deletedAt) {
+    if (!user || user.isActive === false || user.deletedAt || user.status === 'suspended') {
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
     req.user = user;
@@ -557,60 +557,31 @@ app.post('/api/newsletter', validate(newsletterSchema), asyncRoute(async (req, r
   res.status(201).json({ success: true, subscribed: true, alreadySubscribed: false });
 }));
 app.post('/api/auth/login', sre.rateLimit({ limit: 10, windowMs: 60_000, name: 'login' }), validate(loginSchema), asyncRoute(async (req, res) => {
-  const now = Date.now();
-  const attempts = repository ? await repository.find('loginAttempts', { email: req.body.email }) : (db.sre?.loginAttempts || []);
-  const recentFailures = attempts.filter((entry) => now - Date.parse(entry.at) < 15 * 60 * 1000);
-  if (recentFailures.length >= 5) return res.status(423).json({ error: 'Account temporarily locked. Try again in 15 minutes.' });
+  const email = req.body.email;
+  const lock = await domainRepositories.users.loginStatus(email);
+  if (lock.locked) return res.status(423).json({ error: 'Account temporarily locked. Try again in 15 minutes.' });
 
-  const user = domainRepositories
-    ? await domainRepositories.users.findByEmail(req.body.email)
-    : db.users.find((entry) => entry.email === req.body.email);
-  if (!user || !(await bcrypt.compare(req.body.password, user.passwordHash))) {
-    const failure = {
-      id: 'LOGIN-' + randomUUID(),
-      email: req.body.email,
-      ip: req.ip,
-      at: new Date().toISOString()
-    };
-    if (repository) await repository.insert('loginAttempts', failure);
-    else {
-      if (!db.sre) db.sre = {};
-      if (!Array.isArray(db.sre.loginAttempts)) db.sre.loginAttempts = [];
-      db.sre.loginAttempts.push(failure);
-      await persist();
-    }
+  const user = await domainRepositories.users.findByEmail(email);
+  const validPassword = Boolean(user?.passwordHash) && await bcrypt.compare(req.body.password, user.passwordHash);
+  if (!user || !validPassword) {
+    const failure = await domainRepositories.users.recordLoginFailure({ email, ip: req.ip });
+    if (failure.locked) return res.status(423).json({ error: 'Account temporarily locked. Try again in 15 minutes.' });
     return res.status(401).json({ error: 'Invalid email or password' });
   }
-  if (user.isActive === false || user.deletedAt) return res.status(403).json({ error: 'Account is inactive. Contact an administrator.' });
-  if (user.status === 'suspended') return res.status(403).json({ error: 'Account is suspended. Contact an administrator.' });
-
-  const at = new Date().toISOString();
-  if (repository) {
-    await repository.withTransaction(async ({ repository: tx }) => {
-      const attemptsForEmail = await tx.find('loginAttempts', { email: req.body.email });
-      for (const attempt of attemptsForEmail) await tx.remove('loginAttempts', attempt.id);
-      await tx.update('users', user.id, { lastLoginAt: at, updatedAt: at });
-      await tx.insert('auditLogs', {
-        id: 'AUD-' + randomUUID(),
-        actorId: user.id,
-        actorRole: user.role,
-        action: 'user.login',
-        targetType: 'user',
-        targetId: user.id,
-        meta: { ip: req.ip },
-        at
-      });
-    });
-    db = await repository.readState();
-  } else {
-    db.sre.loginAttempts = (db.sre.loginAttempts || []).filter((entry) => entry.email !== req.body.email);
-    user.lastLoginAt = at;
-    await persist();
+  if (user.isActive === false || user.deletedAt) {
+    return res.status(403).json({ error: 'Account is inactive. Contact an administrator.' });
   }
-  const token = jwt.sign({ sub: user.id, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
-  res.json({ token, user: safeUser({ ...user, lastLoginAt: at }) });
-}));
+  if (user.status === 'suspended') {
+    return res.status(403).json({ error: 'Account is suspended. Contact an administrator.' });
+  }
 
+  const authenticatedUser = await domainRepositories.users.recordLoginSuccess(user.id, email);
+  if (!authenticatedUser) return res.status(403).json({ error: 'Account is inactive. Contact an administrator.' });
+  db = await repository.readState();
+  const tokenRole = authenticatedUser.role === 'buyer' ? 'user' : authenticatedUser.role;
+  const token = jwt.sign({ sub: authenticatedUser.id, role: tokenRole }, JWT_SECRET, { expiresIn: '12h' });
+  res.json({ token, user: safeUser(authenticatedUser) });
+}));
 async function register(req, res) {
   if (req.body.role === 'admin' || req.body.role === 'operator') {
     const roleName = req.body.role;
@@ -655,9 +626,8 @@ async function register(req, res) {
   }
 
   db = await repository.readState();
-  addLog('Account registered for ' + user.email + '.', 'INFO', 'USER', { userId: user.id });
-  await persist();
-  const token = jwt.sign({ sub: user.id, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
+  const tokenRole = user.role === 'buyer' ? 'user' : user.role;
+  const token = jwt.sign({ sub: user.id, role: tokenRole }, JWT_SECRET, { expiresIn: '12h' });
   res.status(201).json({ token, user: safeUser(user) });
 }
 
@@ -914,7 +884,7 @@ app.get('/api/threats', requireRoles('admin', 'operator'), asyncRoute(async (_re
 }));
 
 app.get('/api/admin/users', requireRoles('admin'), asyncRoute(async (_req, res) => {
-  const users = repository ? await repository.find('users', {}) : db.users;
+  const users = await domainRepositories.users.list();
   res.json(users.filter((user) => !user.deletedAt).map(safeUser));
 }));
 app.patch('/api/admin/users/:id', requireRoles('admin'), validate(roleSchema), asyncRoute(async (req, res) => {
@@ -929,7 +899,6 @@ app.patch('/api/admin/users/:id', requireRoles('admin'), validate(roleSchema), a
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
     db = await repository.readState();
-    addLog(`Role updated for ${user.name}: ${user.role}.`, 'INFO', 'USER', { userId: user.id });
     res.json({ user: safeUser(user) });
   } catch (error) {
     if (error.code === 'ADMIN_EXISTS' || error.code === 'LAST_ADMIN') {
@@ -947,7 +916,6 @@ app.delete('/api/admin/users/:id', requireRoles('admin'), asyncRoute(async (req,
     );
     if (!user) return res.status(404).json({ error: 'User not found' });
     db = await repository.readState();
-    addLog(`User account soft-deleted for ${user.email}.`, 'WARN', 'USER', { userId: user.id });
     res.json({ success: true, user: safeUser(user) });
   } catch (error) {
     if (error.code === 'LAST_ADMIN' || error.code === 'USER_INACTIVE') return res.status(409).json({ error: error.message });
