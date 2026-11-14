@@ -241,34 +241,48 @@ function validate(schema, source = 'body') {
   };
 }
 
+function loadAuthenticatedUser(token) {
+  const payload = jwt.verify(token, JWT_SECRET);
+  if (repository && typeof repository.findById === 'function') {
+    return repository.findById('users', payload.sub);
+  }
+  return Promise.resolve(db.users.find((entry) => entry.id === payload.sub));
+}
+
 function authenticate(req, res, next) {
   const match = (req.get('authorization') || '').match(/^Bearer\s+(.+)$/i);
   if (!match) return res.status(401).json({ error: 'Authentication required' });
+  let userPromise;
   try {
-    const payload = jwt.verify(match[1], JWT_SECRET);
-    const user = db.users.find((entry) => entry.id === payload.sub);
-    if (!user || user.isActive === false || user.deletedAt) return res.status(401).json({ error: 'Invalid or expired token' });
-    req.user = user;
-    next();
+    userPromise = loadAuthenticatedUser(match[1]);
   } catch (_error) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
-}
-
-function optionalAuthenticate(req, res, next) {
-  const match = (req.get('authorization') || '').match(/^Bearer\s+(.+)$/i);
-  if (!match) return next();
-  try {
-    const payload = jwt.verify(match[1], JWT_SECRET);
-    const user = db.users.find((entry) => entry.id === payload.sub);
+  Promise.resolve(userPromise).then((user) => {
     if (!user || user.isActive === false || user.deletedAt) {
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
     req.user = user;
     return next();
+  }).catch(next);
+}
+
+function optionalAuthenticate(req, res, next) {
+  const match = (req.get('authorization') || '').match(/^Bearer\s+(.+)$/i);
+  if (!match) return next();
+  let userPromise;
+  try {
+    userPromise = loadAuthenticatedUser(match[1]);
   } catch (_error) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
+  Promise.resolve(userPromise).then((user) => {
+    if (!user || user.isActive === false || user.deletedAt) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+    req.user = user;
+    return next();
+  }).catch(next);
 }
 
 function requireRoles(...roles) {
@@ -447,15 +461,17 @@ app.get('/api/metrics', (_req, res) => res.json({
   sre: sre.currentMetrics(),
   slos: sre.sloReport()
 }));
-app.get('/api/products', (req, res) => {
+app.get('/api/products', asyncRoute(async (req, res) => {
   const search = String(req.query.search || '').trim().toLowerCase();
   const category = String(req.query.category || '').trim().toLowerCase();
-  const products = db.products.filter((product) =>
+  const allProducts = repository ? await repository.find('products', {}) : db.products;
+  const products = allProducts.filter((product) =>
+    !product.archivedAt && product.status !== 'inactive' &&
     (!category || category === 'all' || product.category.toLowerCase() === category) &&
     (!search || `${product.name} ${product.sku} ${product.description}`.toLowerCase().includes(search))
   );
   res.json(products);
-});
+}));
 app.post('/api/newsletter', validate(newsletterSchema), asyncRoute(async (req, res) => {
   const existing = db.newsletter.find((entry) => entry.email === req.body.email);
   if (existing) return res.json({ success: true, subscribed: true, alreadySubscribed: true });
@@ -603,7 +619,9 @@ app.get('/api/admin/backup', requireRoles('admin'), (req, res) => {
 app.get('/api/auth/me', (req, res) => res.json({ user: safeUser(req.user) }));
 app.post('/api/auth/logout', (_req, res) => res.json({ success: true }));
 
-app.get('/api/warehouses', (_req, res) => res.json(db.warehouses));
+app.get('/api/warehouses', asyncRoute(async (_req, res) => {
+  res.json(repository ? await repository.find('warehouses', {}) : db.warehouses);
+}));
 app.get('/api/rewards', (req, res) => {
   const claims = (db.rewardClaims || []).filter((claim) => claim.userId === req.user.id);
   res.json({ offers: rewardOffers, claims });
@@ -622,35 +640,89 @@ app.post('/api/rewards/:offerId/claim', asyncRoute(async (req, res) => {
   await persist();
   res.status(201).json({ claim });
 }));
-app.get('/api/orders', (req, res) => {
-  if (req.user.role === 'admin' || req.user.role === 'operator') return res.json(db.orders);
-  const ownOrders = db.orders.filter((order) =>
-    order.buyerId === req.user.id || String(order.customerEmail || '').toLowerCase() === req.user.email
+app.get('/api/orders', asyncRoute(async (req, res) => {
+  const allOrders = repository ? await repository.find('orders', {}) : db.orders;
+  if (req.user.role === 'admin' || req.user.role === 'operator') return res.json(allOrders);
+  const ownOrders = allOrders.filter((order) =>
+    order.buyerId === req.user.id || order.userId === req.user.id ||
+    String(order.customerEmail || '').toLowerCase() === req.user.email
   );
   res.json(ownOrders);
-});
-app.get('/api/logs', (_req, res) => res.json(db.logs));
-app.get('/api/threats', (_req, res) => {
-  const products = db.products.filter((product) => product.stock <= product.reorder_threshold).map((product) => ({
-    id: product.id,
-    type: 'inventory',
-    level: product.stock <= 3 ? 'CRITICAL' : 'WARN',
-    message: `${product.name} has ${product.stock} units remaining.`,
-    product
-  }));
-  const warehouses = db.warehouses.filter((hub) => hub.status !== 'online').map((hub) => ({
+}));
+app.get('/api/logs', asyncRoute(async (_req, res) => {
+  res.json(repository ? await repository.find('logs', {}) : db.logs);
+}));
+app.get('/api/threats', asyncRoute(async (_req, res) => {
+  const [products, stockRows, movementRows, purchaseOrders, hubs] = await Promise.all([
+    repository ? repository.find('products', {}) : db.products,
+    repository ? repository.find('stock', {}) : (db.stock || []),
+    repository ? repository.find('movements', {}) : (db.movements || []),
+    repository ? repository.find('purchaseOrders', {}) : (db.purchaseOrders || []),
+    repository ? repository.find('warehouses', {}) : db.warehouses
+  ]);
+  const now = Date.now();
+  const historyTimes = movementRows.map((movement) => Date.parse(movement.at)).filter(Number.isFinite);
+  const historyDays = historyTimes.length
+    ? (now - Math.min(...historyTimes)) / 86400000 : 0;
+  const lookbackDays = historyDays > 14 ? 14 : 7;
+  const since = now - lookbackDays * 86400000;
+  const shippedBySku = new Map();
+  for (const movement of movementRows) {
+    if (movement.type !== 'SHIP' || !Number.isFinite(Date.parse(movement.at)) || Date.parse(movement.at) < since) continue;
+    shippedBySku.set(movement.sku, (shippedBySku.get(movement.sku) || 0) + movement.qty);
+  }
+  const stockBySku = new Map(stockRows.map((row) => [row.sku, row]));
+  const onOrderBySku = new Map();
+  for (const purchaseOrder of purchaseOrders) {
+    if (!['approved', 'shipped'].includes(String(purchaseOrder.status).toLowerCase())) continue;
+    for (const line of purchaseOrder.lines || []) {
+      onOrderBySku.set(line.sku, (onOrderBySku.get(line.sku) || 0) + Number(line.qty || 0));
+    }
+  }
+  const productThreats = products.filter((product) => !product.archivedAt).map((product) => {
+    const row = stockBySku.get(product.sku);
+    const onHand = row ? row.onHand : product.stock;
+    const reserved = row ? row.reserved : (product.reserved || 0);
+    const available = Math.max(0, onHand - reserved);
+    const avgDaily = (shippedBySku.get(product.sku) || 0) / lookbackDays;
+    const daysOfCover = available / Math.max(avgDaily, 0.1);
+    const leadDays = Number(product.leadDays || 1);
+    const safetyStock = Number(product.safetyStock || 0);
+    const onOrder = onOrderBySku.get(product.sku) || Number(product.onOrder || 0);
+    const reorderPoint = Math.ceil(avgDaily * leadDays * 1.2) + safetyStock;
+    const recommendQty = Math.max(0, Math.ceil(avgDaily * (leadDays + 14)) - available - onOrder);
+    const severity = daysOfCover < 3 ? 'critical'
+      : daysOfCover < 7 ? 'high'
+        : daysOfCover < 14 ? 'medium' : null;
+    return severity ? {
+      id: product.id,
+      type: 'inventory',
+      level: severity.toUpperCase(),
+      severity,
+      message: product.name + ' has ' + daysOfCover.toFixed(1) + ' days of cover.',
+      daysOfCover: Number(daysOfCover.toFixed(1)),
+      avgDaily,
+      available,
+      onOrder,
+      reorderPoint,
+      recommendQty,
+      product: { ...product, stock: onHand, reserved, available }
+    } : null;
+  }).filter(Boolean);
+  const warehouseThreats = hubs.filter((hub) => hub.status !== 'online').map((hub) => ({
     id: hub.id,
     type: 'warehouse',
     level: hub.status === 'offline' ? 'CRITICAL' : 'WARN',
     message: `${hub.name} is ${hub.status}.`,
     warehouse: hub
   }));
-  res.json([...products, ...warehouses]);
-});
+  res.json([...productThreats, ...warehouseThreats]);
+}));
 
-app.get('/api/admin/users', requireRoles('admin'), (_req, res) => {
-  res.json(db.users.map(safeUser));
-});
+app.get('/api/admin/users', requireRoles('admin'), asyncRoute(async (_req, res) => {
+  const users = repository ? await repository.find('users', {}) : db.users;
+  res.json(users.filter((user) => !user.deletedAt).map(safeUser));
+}));
 app.patch('/api/admin/users/:id', requireRoles('admin'), validate(roleSchema), asyncRoute(async (req, res) => {
   if (req.params.id === req.user.id && !['admin'].includes(req.body.role)) {
     return res.status(400).json({ error: 'You cannot demote your own administrator account' });
