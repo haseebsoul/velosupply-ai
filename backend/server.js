@@ -552,9 +552,6 @@ const checkoutHandler = asyncRoute(async (req, res) => {
 app.post('/api/orders/checkout', optionalAuthenticate, validate(checkoutSchema), checkoutHandler);
 app.post('/api/checkout', optionalAuthenticate, validate(checkoutSchema), checkoutHandler);
 
-app.post('/api/orders/checkout', validate(checkoutSchema), checkoutHandler);
-app.post('/api/checkout', validate(checkoutSchema), checkoutHandler);
-
 app.use('/api', authenticate);
 app.use('/api/sre', requireRoles('admin', 'operator'), sre.router);
 app.get('/api/admin/backup', requireRoles('admin'), (req, res) => {
