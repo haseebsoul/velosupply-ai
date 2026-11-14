@@ -5,6 +5,7 @@ const { randomUUID } = require('node:crypto');
 const {
   COLLECTION_NAMES,
   INDEXES,
+  COLLECTION_VALIDATORS,
   APPEND_ONLY_COLLECTIONS,
   canonicalCollectionName,
   assertAppendOnlyTransition,
@@ -73,6 +74,22 @@ class MongoAdapter {
   }
 
   async createIndexes() {
+    if (typeof this.database.listCollections === 'function' && typeof this.database.createCollection === 'function') {
+      for (const [name, validator] of Object.entries(COLLECTION_VALIDATORS)) {
+        const cursor = this.database.listCollections({ name }, { nameOnly: true });
+        if (!(await cursor.hasNext())) {
+          try {
+            await this.database.createCollection(name, {
+              validator,
+              validationLevel: 'strict',
+              validationAction: 'error'
+            });
+          } catch (error) {
+            if (error.code !== 48 && error.codeName !== 'NamespaceExists') throw error;
+          }
+        }
+      }
+    }
     for (const [name, indexes] of Object.entries(INDEXES)) {
       await this.collection(name).createIndexes(indexes);
     }
