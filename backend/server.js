@@ -1122,7 +1122,26 @@ app.post('/api/simulation/trigger', requireRoles('admin', 'operator'), validate(
 }));
 
 app.use((_req, res) => res.status(404).json({ error: 'Route not found' }));
-app.use((error, req, res, _next) => {
+app.use((error, req, res, next) => {
+  if (error.code === 'WRITE_CONFLICT' && repository) {
+    repository.readState().then((freshState) => {
+      db = freshState;
+      process.stdout.write(JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'WARN',
+        msg: 'Concurrent write rejected; repository state refreshed for safe retry.',
+        route: req.originalUrl?.split('?')[0] || req.path,
+        status: 409,
+        userId: req.user?.id || null,
+        reqId: req.requestId || null
+      }) + '\\n');
+      res.status(409).json({
+        error: 'WRITE_CONFLICT',
+        message: 'Another application instance changed this record. The latest state has been refreshed; retry with the same Idempotency-Key.'
+      });
+    }).catch(next);
+    return;
+  }
   const status = error instanceof SyntaxError && error.status === 400
     ? 400
     : Number.isInteger(error.status) && error.status >= 400 && error.status < 600 ? error.status : 500;
