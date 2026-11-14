@@ -459,6 +459,104 @@ function createDomainRepositories(adapter) {
   }
 
   const stockMovements = {
+    async adjust(input) {
+      const sku = requiredString(input.sku, 'sku');
+      const hubCode = requiredString(input.hubCode, 'hubCode');
+      const delta = input.delta;
+      if (!Number.isSafeInteger(delta) || delta === 0) throw new TypeError('delta must be a non-zero signed integer');
+      const reason = requiredString(input.reason, 'reason');
+      const actorId = requiredString(input.actorId, 'actorId');
+      const refId = requiredString(input.refId || 'ADJUST-' + randomUUID(), 'refId');
+      return adapter.withTransaction(async ({ repository }) => {
+        const rows = await repository.find('stock', { sku, hubCode }, { limit: 1 });
+        const stock = rows[0];
+        if (!stock) {
+          const error = new Error('Stock row not found for ' + sku + ' at ' + hubCode);
+          error.code = 'STOCK_NOT_FOUND';
+          throw error;
+        }
+        const history = await repository.find('movements', { sku, hubCode });
+        if (history.length === 0 && stock.onHand > 0) {
+          await repository.insert('movements', {
+            id: 'MOV-' + randomUUID(), sku, hubCode, type: 'RECEIVE',
+            qty: stock.onHand, reason: 'opening_balance',
+            refType: 'opening_balance', refId: 'legacy-opening:' + sku + ':' + hubCode,
+            actorId: 'system', at: new Date().toISOString()
+          });
+        }
+        const movement = {
+          id: 'MOV-' + randomUUID(), sku, hubCode, type: 'ADJUST',
+          qty: delta, reason, refType: 'admin_action', refId,
+          actorId, at: new Date().toISOString()
+        };
+        const balance = movementBalance([...history, movement]);
+        if (balance.onHand < 0 || balance.reserved < 0 || balance.reserved > balance.onHand) {
+          const error = new Error('Adjustment would make available inventory negative');
+          error.code = 'NEGATIVE_STOCK';
+          throw error;
+        }
+        const nextOnHand = stock.onHand + delta;
+        await repository.update('stock', stock.id, { ...stock, onHand: nextOnHand });
+        const productsForSku = await repository.find('products', { sku, warehouse_hub: hubCode });
+        for (const product of productsForSku) {
+          await repository.update('products', product.id, {
+            stock: nextOnHand,
+            updatedAt: movement.at
+          });
+        }
+        await repository.insert('movements', movement);
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId, actorRole: input.actorRole || 'operator',
+          action: 'inventory.adjust', targetType: 'stock', targetId: sku + ':' + hubCode,
+          meta: { delta, reason, refId }, at: movement.at
+        });
+        return { stock: { ...stock, onHand: nextOnHand }, movement };
+      });
+    },
+
+    async restock(input) {
+      const sku = requiredString(input.sku, 'sku');
+      const hubCode = requiredString(input.hubCode, 'hubCode');
+      const qty = integer(input.qty, 'qty', 1);
+      const actorId = requiredString(input.actorId, 'actorId');
+      const refId = requiredString(input.refId || 'RECEIVE-' + randomUUID(), 'refId');
+      return adapter.withTransaction(async ({ repository }) => {
+        const rows = await repository.find('stock', { sku, hubCode }, { limit: 1 });
+        const stock = rows[0];
+        if (!stock) {
+          const error = new Error('Stock row not found for ' + sku + ' at ' + hubCode);
+          error.code = 'STOCK_NOT_FOUND';
+          throw error;
+        }
+        const at = new Date().toISOString();
+        const history = await repository.find('movements', { sku, hubCode });
+        if (history.length === 0 && stock.onHand > 0) {
+          await repository.insert('movements', {
+            id: 'MOV-' + randomUUID(), sku, hubCode, type: 'RECEIVE',
+            qty: stock.onHand, reason: 'opening_balance',
+            refType: 'opening_balance', refId: 'legacy-opening:' + sku + ':' + hubCode,
+            actorId: 'system', at
+          });
+        }
+        await repository.update('stock', stock.id, { ...stock, onHand: stock.onHand + qty });
+        const productsForSku = await repository.find('products', { sku, warehouse_hub: hubCode });
+        for (const product of productsForSku) {
+          await repository.update('products', product.id, { stock: stock.onHand + qty, updatedAt: at });
+        }
+        const movement = await repository.insert('movements', {
+          id: 'MOV-' + randomUUID(), sku, hubCode, type: 'RECEIVE', qty,
+          reason: requiredString(input.reason || 'restock', 'reason'),
+          refType: 'admin_action', refId, actorId, at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId, actorRole: input.actorRole || 'operator',
+          action: 'inventory.restock', targetType: 'stock', targetId: sku + ':' + hubCode,
+          meta: { qty, refId }, at
+        });
+        return { stock: { ...stock, onHand: stock.onHand + qty }, movement };
+      });
+    },
+
     async append(input) {
       const sku = requiredString(input.sku, 'sku');
       const hubCode = requiredString(input.hubCode || input.warehouseId, 'hubCode');
