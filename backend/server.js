@@ -494,25 +494,58 @@ app.post('/api/newsletter', validate(newsletterSchema), asyncRoute(async (req, r
   res.status(201).json({ success: true, subscribed: true, alreadySubscribed: false });
 }));
 app.post('/api/auth/login', sre.rateLimit({ limit: 10, windowMs: 60_000, name: 'login' }), validate(loginSchema), asyncRoute(async (req, res) => {
-  if (!db.sre) db.sre = {};
-  if (!Array.isArray(db.sre.loginAttempts)) db.sre.loginAttempts = [];
   const now = Date.now();
-  db.sre.loginAttempts = db.sre.loginAttempts.filter((entry) => now - Date.parse(entry.at) < 60 * 60 * 1000);
-  const recentFailures = db.sre.loginAttempts.filter((entry) => entry.email === req.body.email && now - Date.parse(entry.at) < 15 * 60 * 1000);
+  const attempts = repository ? await repository.find('loginAttempts', { email: req.body.email }) : (db.sre?.loginAttempts || []);
+  const recentFailures = attempts.filter((entry) => now - Date.parse(entry.at) < 15 * 60 * 1000);
   if (recentFailures.length >= 5) return res.status(423).json({ error: 'Account temporarily locked. Try again in 15 minutes.' });
-  const user = db.users.find((entry) => entry.email === req.body.email);
+
+  const user = domainRepositories
+    ? await domainRepositories.users.findByEmail(req.body.email)
+    : db.users.find((entry) => entry.email === req.body.email);
   if (!user || !(await bcrypt.compare(req.body.password, user.passwordHash))) {
-    db.sre.loginAttempts.push({ email: req.body.email, ip: req.ip, at: new Date().toISOString() });
-    await persist();
+    const failure = {
+      id: 'LOGIN-' + randomUUID(),
+      email: req.body.email,
+      ip: req.ip,
+      at: new Date().toISOString()
+    };
+    if (repository) await repository.insert('loginAttempts', failure);
+    else {
+      if (!db.sre) db.sre = {};
+      if (!Array.isArray(db.sre.loginAttempts)) db.sre.loginAttempts = [];
+      db.sre.loginAttempts.push(failure);
+      await persist();
+    }
     return res.status(401).json({ error: 'Invalid email or password' });
   }
   if (user.isActive === false || user.deletedAt) return res.status(403).json({ error: 'Account is inactive. Contact an administrator.' });
   if (user.status === 'suspended') return res.status(403).json({ error: 'Account is suspended. Contact an administrator.' });
-  db.sre.loginAttempts = db.sre.loginAttempts.filter((entry) => entry.email !== req.body.email);
-  user.lastLoginAt = new Date().toISOString();
-  await persist();
+
+  const at = new Date().toISOString();
+  if (repository) {
+    await repository.withTransaction(async ({ repository: tx }) => {
+      const attemptsForEmail = await tx.find('loginAttempts', { email: req.body.email });
+      for (const attempt of attemptsForEmail) await tx.remove('loginAttempts', attempt.id);
+      await tx.update('users', user.id, { lastLoginAt: at, updatedAt: at });
+      await tx.insert('auditLogs', {
+        id: 'AUD-' + randomUUID(),
+        actorId: user.id,
+        actorRole: user.role,
+        action: 'user.login',
+        targetType: 'user',
+        targetId: user.id,
+        meta: { ip: req.ip },
+        at
+      });
+    });
+    db = await repository.readState();
+  } else {
+    db.sre.loginAttempts = (db.sre.loginAttempts || []).filter((entry) => entry.email !== req.body.email);
+    user.lastLoginAt = at;
+    await persist();
+  }
   const token = jwt.sign({ sub: user.id, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
-  res.json({ token, user: safeUser(user) });
+  res.json({ token, user: safeUser({ ...user, lastLoginAt: at }) });
 }));
 
 async function register(req, res) {
