@@ -761,11 +761,17 @@ function createDomainRepositories(adapter) {
     async adjust(input) {
       const sku = requiredString(input.sku, 'sku');
       const hubCode = requiredString(input.hubCode, 'hubCode');
-      const delta = input.delta;
-      if (!Number.isSafeInteger(delta) || delta === 0) throw new TypeError('delta must be a non-zero signed integer');
       const reason = requiredString(input.reason, 'reason');
       const actorId = requiredString(input.actorId, 'actorId');
       const refId = requiredString(input.refId || 'ADJUST-' + randomUUID(), 'refId');
+      const requestedDelta = input.delta;
+      const targetOnHand = input.targetOnHand;
+      if (targetOnHand !== undefined && (!Number.isSafeInteger(targetOnHand) || targetOnHand < 0)) {
+        throw new TypeError('targetOnHand must be a non-negative integer');
+      }
+      if (targetOnHand === undefined && (!Number.isSafeInteger(requestedDelta) || requestedDelta === 0)) {
+        throw new TypeError('delta must be a non-zero signed integer');
+      }
       return adapter.withTransaction(async ({ repository }) => runIdempotent(repository, input, async () => {
         const rows = await repository.find('stock', { sku, hubCode }, { limit: 1 });
         const stock = rows[0];
@@ -774,6 +780,8 @@ function createDomainRepositories(adapter) {
           error.code = 'STOCK_NOT_FOUND';
           throw error;
         }
+        const delta = targetOnHand === undefined ? requestedDelta : targetOnHand - stock.onHand;
+        if (delta === 0) return { stock, movement: null };
         const history = await repository.find('movements', { sku, hubCode });
         const ledgerRows = [...history];
         if (history.length === 0 && stock.onHand > 0) {
@@ -803,6 +811,7 @@ function createDomainRepositories(adapter) {
         for (const product of productsForSku) {
           await repository.update('products', product.id, {
             stock: nextOnHand,
+            available: nextOnHand - stock.reserved,
             updatedAt: movement.at
           });
         }
@@ -810,7 +819,7 @@ function createDomainRepositories(adapter) {
         await repository.insert('auditLogs', {
           id: 'AUD-' + randomUUID(), actorId, actorRole: input.actorRole || 'operator',
           action: 'inventory.adjust', targetType: 'stock', targetId: sku + ':' + hubCode,
-          meta: { delta, reason, refId }, at: movement.at
+          meta: { delta, reason, refId, previousOnHand: stock.onHand, onHand: nextOnHand }, at: movement.at
         });
         return { stock: { ...stock, onHand: nextOnHand }, movement };
       }));
