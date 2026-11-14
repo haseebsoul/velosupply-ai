@@ -5,7 +5,7 @@ import { useLocation } from 'react-router-dom'
 import { api, errorMessage } from '../../lib/apiClient'
 import { useWebSocket } from '../../lib/useWebSocket'
 import { useAppStore } from '../../store/useAppStore'
-import type { Metrics, Order, Product, User, UserRole, Warehouse } from '../../types'
+import type { InventoryThreat, Metrics, Order, Product, User, UserRole, Warehouse } from '../../types'
 import { StatCard } from '../../components/dashboard/StatCard'
 import { ThreatRow } from '../../components/dashboard/ThreatRow'
 import { TerminalPanel } from '../../components/dashboard/TerminalPanel'
@@ -20,6 +20,7 @@ export function CommandPages() {
   const { events, latest, connected } = useWebSocket()
   const [metrics, setMetrics] = useState(initialMetrics)
   const [products, setProducts] = useState<Product[]>([])
+  const [threats, setThreats] = useState<InventoryThreat[]>([])
   const [orders, setOrders] = useState<Order[]>([])
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [users, setUsers] = useState<User[]>([])
@@ -43,6 +44,22 @@ export function CommandPages() {
     if (latest?.warehouses) setWarehouses(latest.warehouses)
     if (latest?.type === 'ORDER_CREATED' || latest?.type === 'THREAT_RESOLVED') void refresh()
   }, [latest, refresh])
+  const refreshThreats = useCallback(async () => {
+    if (!['admin', 'operator'].includes(user?.role ?? '')) {
+      setThreats([])
+      return
+    }
+    try {
+      const { data } = await api.get<InventoryThreat[]>('/threats')
+      setThreats(data)
+    } catch (reason) {
+      setError(errorMessage(reason))
+    }
+  }, [user?.role])
+  useEffect(() => {
+    if (pathname === '/dashboard/threats') void refreshThreats()
+  }, [pathname, refreshThreats])
+
   useEffect(() => {
     if (pathname === '/dashboard/rewards') {
       api.get<{ offers: typeof rewardOffers; claims: typeof rewardClaims }>('/rewards')
@@ -54,7 +71,6 @@ export function CommandPages() {
   useEffect(() => {
     if (pathname === '/dashboard/admin' && user?.role === 'admin') api.get<User[]>('/admin/users').then(({ data }) => setUsers(data)).catch((reason: unknown) => setError(errorMessage(reason)))
   }, [pathname, user?.role])
-  const productsAtRisk = useMemo(() => products.filter((product) => product.stock <= product.reorder_threshold), [products])
   const history = events.slice(-20).map((event, index) => ({ name: index.toString(), orders: event.metrics?.activeOrders ?? Math.max(0, metrics.activeOrders + (index % 5) - 2), throughput: event.metrics?.packetsPerSec ?? metrics.packetsPerSec }))
   const request = async (operation: () => Promise<unknown>, success: string, then?: () => void) => {
     try { await operation(); setNotice(success); setError(''); then?.(); await refresh() }
@@ -97,10 +113,16 @@ export function CommandPages() {
     </>}
 
     {pathname === '/dashboard/threats' && <>
-      <h1 className="ops-heading">Inventory threats</h1><p className="ops-copy">Proactive actions protect service levels and prevent lost sales.</p>
-      {productsAtRisk.length === 0 && warehouses.every((hub) => hub.status === 'online') && <div className="card-ops dash-card success-text">All inventory and fulfillment nodes are healthy.</div>}
-      {productsAtRisk.map((product) => <ThreatRow key={product.id} product={product} onResolve={() => request(() => api.post(`/inventory/restock/${product.id}`, {}, { headers: { 'Idempotency-Key': crypto.randomUUID() } }), `${product.sku} replenishment receipt recorded.`)} />)}
-      {warehouses.filter((hub) => hub.status !== 'online').map((hub) => <ThreatRow key={hub.id} hub={hub} />)}
+      <h1 className="ops-heading">Inventory threats</h1><p className="ops-copy">Days of cover, reorder recommendations and supplier reliability from the stock movement ledger.</p>
+      {!['admin', 'operator'].includes(user?.role ?? '') ? <div className="card-ops dash-card danger-text">Administrator or operator access is required to view inventory threats.</div>
+        : threats.length === 0 ? <div className="card-ops dash-card success-text">No inventory or warehouse threats currently meet the SRS thresholds.</div>
+        : threats.map((threat) => <ThreatRow key={threat.id} threat={threat} onResolve={() => threat.product && request(
+          () => api.post(`/inventory/restock/${threat.product!.id}`, { quantity: threat.recommendQty }, {
+            headers: { 'Idempotency-Key': crypto.randomUUID() }
+          }),
+          `Draft purchase order requested for ${threat.product!.sku}.`,
+          () => { void refreshThreats() }
+        )} />)}
       <div className="dash-grid"><StatCard title="AI EFFICIENCY SCORE" value={metrics.efficiencyScore} suffix=" pts" /><StatCard title="DETECTION TIME" value={metrics.detectionTimeMs} suffix="ms" /><StatCard title="THREATS BLOCKED" value={metrics.threatsBlocked} /></div>
     </>}
 
