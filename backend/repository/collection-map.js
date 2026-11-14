@@ -14,6 +14,8 @@ const STATE_PATHS = {
   tariffRules: ['tariffRules'],
   invoices: ['invoices'],
   returns: ['returns'],
+  refunds: ['refunds'],
+  payments: ['payments'],
   purchaseOrders: ['purchaseOrders'],
   messages: ['messages'],
   logs: ['logs'],
@@ -91,6 +93,27 @@ const COLLECTION_VALIDATORS = {
     bsonType: 'object', required: ['action', 'actorId', 'at'],
     properties: { action: { bsonType: 'string' }, actorId: { bsonType: 'string' }, at: { bsonType: 'string' } }
   } },
+  refunds: { $jsonSchema: {
+    bsonType: 'object', required: ['returnId', 'orderId', 'buyerId', 'amountMinor', 'currency', 'status', 'providerVerified', 'executionMode', 'createdAt'],
+    properties: {
+      returnId: { bsonType: 'string' }, orderId: { bsonType: 'string' },
+      buyerId: { bsonType: 'string' }, amountMinor: { bsonType: ['int', 'long'] },
+      currency: { enum: ['PKR'] },
+      status: { enum: ['manual_pending', 'blocked_unpaid', 'manual_review_required', 'manual_recorded'] },
+      providerVerified: { bsonType: 'bool' }, executionMode: { enum: ['manual'] },
+      externalReference: { bsonType: ['string', 'null'] }, createdAt: { bsonType: 'string' }
+    }
+  } },
+  payments: { $jsonSchema: {
+    bsonType: 'object', required: ['orderId', 'buyerId', 'amountMinor', 'currency', 'method', 'status', 'executionMode', 'providerVerified', 'externalReference', 'recordedAt'],
+    properties: {
+      orderId: { bsonType: 'string' }, buyerId: { bsonType: 'string' },
+      amountMinor: { bsonType: ['int', 'long'] }, currency: { enum: ['PKR'] },
+      method: { enum: ['cash'] }, status: { enum: ['manual_recorded'] },
+      executionMode: { enum: ['manual'] }, providerVerified: { bsonType: 'bool' },
+      externalReference: { bsonType: 'string' }, recordedAt: { bsonType: 'string' }
+    }
+  } },
   tariffRules: { $jsonSchema: {
     bsonType: 'object', required: ['code', 'version', 'source'],
     properties: {
@@ -141,6 +164,15 @@ const INDEXES = {
   ],
   returns: [
     { key: { orderId: 1, status: 1 }, name: 'returns_order_status' }
+  ],
+  refunds: [
+    { key: { returnId: 1 }, unique: true, name: 'refunds_return_unique' },
+    { key: { externalReference: 1 }, unique: true, sparse: true, name: 'refunds_external_reference_unique' },
+    { key: { orderId: 1, createdAt: -1 }, name: 'refunds_order_created' }
+  ],
+  payments: [
+    { key: { orderId: 1 }, unique: true, name: 'payments_order_unique' },
+    { key: { externalReference: 1 }, unique: true, name: 'payments_external_reference_unique' }
   ],
   purchaseOrders: [
     { key: { status: 1 }, name: 'purchase_orders_status' }
@@ -331,7 +363,7 @@ function canonicalCollectionName(name) {
   return COLLECTION_ALIASES[name] || name;
 }
 
-const APPEND_ONLY_COLLECTIONS = new Set(['movements', 'auditLogs']);
+const APPEND_ONLY_COLLECTIONS = new Set(['movements', 'auditLogs', 'payments']);
 
 function assertAppendOnlyTransition(name, before = [], after = []) {
   if (!APPEND_ONLY_COLLECTIONS.has(canonicalCollectionName(name))) return;

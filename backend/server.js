@@ -38,24 +38,23 @@ try {
 }
 
 const PORT = Number(process.env.PORT) || 8000;
-const generatedDefaults = {};
+let generatedDevelopmentDefault = false;
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') throw new Error('JWT_SECRET must be set in production');
   process.env.JWT_SECRET = randomBytes(32).toString('base64url');
-  generatedDefaults.JWT_SECRET = process.env.JWT_SECRET;
+  generatedDevelopmentDefault = true;
 }
 if (!process.env.CORS_ORIGIN) {
   if (process.env.NODE_ENV === 'production') throw new Error('CORS_ORIGIN must be set in production');
   process.env.CORS_ORIGIN = 'http://localhost:5173';
-  generatedDefaults.CORS_ORIGIN = process.env.CORS_ORIGIN;
+  generatedDevelopmentDefault = true;
 }
 const JWT_SECRET = process.env.JWT_SECRET;
-if (Object.keys(generatedDefaults).length) {
+if (generatedDevelopmentDefault) {
   process.stdout.write(JSON.stringify({
     ts: new Date().toISOString(),
     level: 'WARN',
-    msg: 'Generated development defaults. Save these values in backend/.env to keep sessions stable across restarts.',
-    defaults: generatedDefaults
+    msg: 'A development default was generated; secret values are omitted.'
   }) + '\n');
 }
 
@@ -431,6 +430,57 @@ const transferSchema = z.object({
   quantity: z.number().int().positive().max(10000),
   reason: z.string().trim().min(2).max(120)
 }).strict();
+const productCreateSchema = z.object({
+  sku: z.string().trim().min(1).max(80),
+  name: z.string().trim().min(2).max(160),
+  category: z.string().trim().min(1).max(80),
+  description: z.string().trim().max(4000).optional().default(''),
+  batchHash: z.string().trim().min(8).max(256),
+  originWarehouseId: z.string().trim().min(1).max(80),
+  price: z.number().finite().nonnegative().optional(),
+  priceExGstPkr: z.number().int().nonnegative().optional(),
+  stock: z.number().int().nonnegative().max(1000000).default(0),
+  reorder_threshold: z.number().int().nonnegative().max(1000000).default(0),
+  leadDays: z.number().int().nonnegative().optional(),
+  featured: z.boolean().default(false),
+  image_url: z.string().url().max(1000).optional()
+}).strict();
+const productUpdateSchema = z.object({
+  name: z.string().trim().min(2).max(160).optional(),
+  category: z.string().trim().min(1).max(80).optional(),
+  description: z.string().trim().max(4000).optional(),
+  price: z.number().finite().nonnegative().optional(),
+  priceExGstPkr: z.number().int().nonnegative().optional(),
+  leadDays: z.number().int().nonnegative().optional(),
+  reorder_threshold: z.number().int().nonnegative().optional(),
+  featured: z.boolean().optional()
+}).strict().refine((value) => Object.keys(value).length > 0, 'At least one product field is required');
+const warehouseCreateSchema = z.object({
+  code: z.string().trim().min(2).max(32).regex(/^[A-Za-z0-9_-]+$/),
+  name: z.string().trim().min(2).max(120),
+  city: z.string().trim().min(2).max(80),
+  address: z.string().trim().max(300).optional().default(''),
+  capacity: z.number().int().nonnegative().optional().default(0),
+  latency: z.number().finite().nonnegative().optional().default(0),
+  status: z.enum(['online', 'warning', 'offline']).optional().default('offline')
+}).strict();
+const warehouseUpdateSchema = z.object({
+  name: z.string().trim().min(2).max(120).optional(),
+  city: z.string().trim().min(2).max(80).optional(),
+  address: z.string().trim().max(300).optional(),
+  capacity: z.number().int().nonnegative().optional(),
+  latency: z.number().finite().nonnegative().optional(),
+  status: z.enum(['online', 'warning', 'offline']).optional()
+}).strict().refine((value) => Object.keys(value).length > 0, 'At least one warehouse field is required');
+const refundRecordSchema = z.object({
+  amountMinor: z.number().int().positive(),
+  externalReference: z.string().trim().min(3).max(200),
+  method: z.enum(['cash', 'bank_transfer', 'wallet', 'other'])
+}).strict();
+const codCollectionSchema = z.object({
+  amountMinor: z.number().int().positive(),
+  externalReference: z.string().trim().min(3).max(200)
+}).strict();
 const roleSchema = z.object({
   role: z.enum(['admin', 'operator', 'buyer', 'user'])
 }).strict();
@@ -684,11 +734,79 @@ app.get('/api/admin/backup', requireRoles('admin'), (req, res) => {
   res.json(snapshot);
 });
 
+app.get('/api/admin/warehouses', requireRoles('admin'), asyncRoute(async (_req, res) => {
+  const rows = await domainRepositories.warehouses.list();
+  res.json(rows.filter((warehouse) => !warehouse.archivedAt));
+}));
+app.post('/api/admin/warehouses', requireRoles('admin'), validate(warehouseCreateSchema), asyncRoute(async (req, res) => {
+  try {
+    const warehouse = await domainRepositories.warehouses.create(req.body, { id: req.user.id, role: req.user.role });
+    db = await repository.readState();
+    return res.status(201).json({ warehouse });
+  } catch (error) {
+    if (error.code === 'DUPLICATE_WAREHOUSE') return res.status(409).json({ error: error.code, message: error.message });
+    throw error;
+  }
+}));
+app.put('/api/admin/warehouses/:id', requireRoles('admin'), validate(warehouseUpdateSchema), asyncRoute(async (req, res) => {
+  const warehouse = await domainRepositories.warehouses.update(req.params.id, req.body, { id: req.user.id, role: req.user.role });
+  if (!warehouse) return res.status(404).json({ error: 'Warehouse not found' });
+  db = await repository.readState();
+  res.json({ warehouse });
+}));
+app.delete('/api/admin/warehouses/:id', requireRoles('admin'), asyncRoute(async (req, res) => {
+  try {
+    const warehouse = await domainRepositories.warehouses.archive(req.params.id, { id: req.user.id, role: req.user.role });
+    if (!warehouse) return res.status(404).json({ error: 'Warehouse not found' });
+    db = await repository.readState();
+    res.json({ success: true, warehouse });
+  } catch (error) {
+    if (error.code === 'WAREHOUSE_IN_USE') return res.status(409).json({ error: error.code, message: error.message });
+    throw error;
+  }
+}));
+app.get('/api/admin/products', requireRoles('admin'), asyncRoute(async (_req, res) => {
+  const rows = await domainRepositories.products.list();
+  res.json(rows);
+}));
+app.post('/api/admin/products', requireRoles('admin'), validate(productCreateSchema), asyncRoute(async (req, res) => {
+  try {
+    const product = await domainRepositories.products.create(req.body, { id: req.user.id, role: req.user.role });
+    db = await repository.readState();
+    return res.status(201).json({ product });
+  } catch (error) {
+    if (error.code === 'DUPLICATE_SKU' || error.code === 'DUPLICATE_STOCK') {
+      return res.status(409).json({ error: error.code, message: error.message });
+    }
+    throw error;
+  }
+}));
+app.put('/api/admin/products/:id', requireRoles('admin'), validate(productUpdateSchema), asyncRoute(async (req, res) => {
+  const product = await domainRepositories.products.update(req.params.id, req.body, { id: req.user.id, role: req.user.role });
+  if (!product) return res.status(404).json({ error: 'Product not found' });
+  db = await repository.readState();
+  res.json({ product });
+}));
+app.delete('/api/admin/products/:id', requireRoles('admin'), asyncRoute(async (req, res) => {
+  try {
+    const product = await domainRepositories.products.archive(req.params.id, { id: req.user.id, role: req.user.role });
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    db = await repository.readState();
+    res.json({ success: true, product });
+  } catch (error) {
+    if (error.code === 'PRODUCT_HAS_RESERVATIONS' || error.code === 'PRODUCT_HAS_STOCK') {
+      return res.status(409).json({ error: error.code, message: error.message });
+    }
+    throw error;
+  }
+}));
+
 app.get('/api/auth/me', (req, res) => res.json({ user: safeUser(req.user) }));
 app.post('/api/auth/logout', (_req, res) => res.json({ success: true }));
 
 app.get('/api/warehouses', asyncRoute(async (_req, res) => {
-  res.json(repository ? await repository.find('warehouses', {}) : db.warehouses);
+  const rows = await domainRepositories.warehouses.list();
+  res.json(rows.filter((warehouse) => !warehouse.archivedAt));
 }));
 app.get('/api/rewards', (req, res) => {
   const claims = (db.rewardClaims || []).filter((claim) => claim.userId === req.user.id);
@@ -1098,6 +1216,46 @@ app.get('/api/returns', asyncRoute(async (req, res) => {
   const rows = repository ? await repository.find('returns', {}) : (db.returns || []);
   if (req.user.role === 'admin' || req.user.role === 'operator') return res.json(rows);
   return res.json(rows.filter((entry) => entry.buyerId === req.user.id));
+}));
+app.get('/api/refunds', asyncRoute(async (req, res) => {
+  const rows = await domainRepositories.refunds.list();
+  if (req.user.role === 'admin' || req.user.role === 'operator') return res.json(rows);
+  return res.json(rows.filter((entry) => entry.buyerId === req.user.id));
+}));
+app.post('/api/orders/:id/payment/record-cod', requireRoles('admin', 'operator'), validate(codCollectionSchema), asyncRoute(async (req, res) => {
+  try {
+    const result = await domainRepositories.orders.recordCodCollection(req.params.id, req.body, {
+      id: req.user.id, role: req.user.role
+    });
+    if (!result) return res.status(404).json({ error: 'Order not found' });
+    db = await repository.readState();
+    return res.json({
+      ...result,
+      providerVerified: false,
+      message: 'COD collection reference recorded manually; cash receipt was not independently verified by VeloSupply.'
+    });
+  } catch (error) {
+    if ([
+      'INVALID_TRANSITION', 'PAYMENT_METHOD_UNSUPPORTED', 'PAYMENT_ALREADY_RECORDED',
+      'PAYMENT_AMOUNT_MISMATCH', 'PAYMENT_REFERENCE_REUSED'
+    ].includes(error.code)) {
+      return res.status(409).json({ error: error.code, message: error.message });
+    }
+    throw error;
+  }
+}));
+app.post('/api/refunds/:id/record', requireRoles('admin'), validate(refundRecordSchema), asyncRoute(async (req, res) => {
+  try {
+    const refund = await domainRepositories.refunds.recordManual(req.params.id, req.body, { id: req.user.id, role: req.user.role });
+    if (!refund) return res.status(404).json({ error: 'Refund not found' });
+    db = await repository.readState();
+    res.json({ refund, providerVerified: false, message: 'External refund reference recorded manually; no payment provider was called or verified.' });
+  } catch (error) {
+    if (['PAYMENT_NOT_CAPTURED', 'INVALID_TRANSITION', 'REFUND_AMOUNT_MISMATCH', 'REFUND_REFERENCE_REUSED'].includes(error.code)) {
+      return res.status(409).json({ error: error.code, message: error.message });
+    }
+    throw error;
+  }
 }));
 app.post('/api/orders/:id/cancel', asyncRoute(async (req, res) => {
   const order = repository ? await repository.findById('orders', req.params.id) : findById(db.orders, req.params.id, 'Order');

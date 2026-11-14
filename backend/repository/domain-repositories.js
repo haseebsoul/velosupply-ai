@@ -176,37 +176,145 @@ function createDomainRepositories(adapter) {
   };
 
   const warehouses = {
-    create(input) {
-      const code = requiredString(input.code, 'code');
+    list(filter = {}) { return adapter.find('warehouses', filter); },
+    getById(id) { return adapter.findById('warehouses', id); },
+    async create(input, actor = { id: 'system', role: 'system' }) {
+      const code = requiredString(input.code, 'code').toUpperCase();
       const name = requiredString(input.name, 'name');
-      return adapter.insert('warehouses', {
-        ...input, id: input.id || 'WH-' + randomUUID(), code, name,
-        seedOrigin: input.seedOrigin === true,
-        createdAt: input.createdAt || new Date().toISOString()
+      const status = input.status || 'offline';
+      if (!['online', 'warning', 'offline'].includes(status)) throw new TypeError('Warehouse status must be online, warning, or offline');
+      return adapter.withTransaction(async ({ repository }) => {
+        if ((await repository.find('warehouses', { code }, { limit: 1 })).length) {
+          const error = new Error('Warehouse code already exists');
+          error.code = 'DUPLICATE_WAREHOUSE';
+          throw error;
+        }
+        const at = new Date().toISOString();
+        const created = await repository.insert('warehouses', {
+          ...input, id: input.id || 'WH-' + randomUUID(), code, name,
+          status, seedOrigin: false, createdAt: at, updatedAt: at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: actor.id, actorRole: actor.role,
+          action: 'warehouse.create', targetType: 'warehouse', targetId: created.id,
+          meta: { code, name }, at
+        });
+        return created;
+      });
+    },
+    async update(id, changes, actor) {
+      const allowed = ['name', 'city', 'address', 'capacity', 'latency', 'status'];
+      for (const key of Object.keys(changes)) if (!allowed.includes(key)) throw new TypeError('Unsupported warehouse field: ' + key);
+      if (changes.status !== undefined && !['online', 'warning', 'offline'].includes(changes.status)) {
+        throw new TypeError('Warehouse status must be online, warning, or offline');
+      }
+      if (changes.capacity !== undefined) integer(changes.capacity, 'capacity');
+      if (changes.latency !== undefined && (!Number.isFinite(changes.latency) || changes.latency < 0)) {
+        throw new TypeError('latency must be a non-negative finite number');
+      }
+      return adapter.withTransaction(async ({ repository }) => {
+        const warehouse = await repository.findById('warehouses', id);
+        if (!warehouse) return null;
+        const at = new Date().toISOString();
+        const updated = await repository.update('warehouses', id, { ...changes, updatedAt: at });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: actor.id, actorRole: actor.role,
+          action: 'warehouse.update', targetType: 'warehouse', targetId: id,
+          meta: { fields: Object.keys(changes) }, at
+        });
+        return updated;
+      });
+    },
+    async archive(id, actor) {
+      return adapter.withTransaction(async ({ repository }) => {
+        const warehouse = await repository.findById('warehouses', id);
+        if (!warehouse) return null;
+        const code = warehouse.code || warehouse.id;
+        const [productsByOrigin, productsByHub, stock] = await Promise.all([
+          repository.find('products', { originWarehouseId: id }),
+          repository.find('products', { warehouse_hub: code }),
+          repository.find('stock', { hubCode: code })
+        ]);
+        const products = [...new Map([...productsByOrigin, ...productsByHub].map((product) => [product.id, product])).values()]
+          .filter((product) => !product.archivedAt);
+        if (products.length || stock.some((row) => (row.onHand || 0) > 0 || (row.reserved || 0) > 0)) {
+          const error = new Error('Warehouse cannot be archived while products or stock remain assigned to it');
+          error.code = 'WAREHOUSE_IN_USE';
+          throw error;
+        }
+        const at = new Date().toISOString();
+        const updated = await repository.update('warehouses', id, {
+          status: 'offline', archivedAt: at, updatedAt: at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: actor.id, actorRole: actor.role,
+          action: 'warehouse.archive', targetType: 'warehouse', targetId: id,
+          meta: { code }, at
+        });
+        return updated;
       });
     }
   };
 
   const products = {
-    async create(input) {
-      const sku = requiredString(input.sku, 'sku');
+    list(filter = {}) { return adapter.find('products', filter); },
+    getById(id) { return adapter.findById('products', id); },
+    async create(input, actor = { id: 'system', role: 'system' }) {
+      const sku = requiredString(input.sku, 'sku').toUpperCase();
       const batchHash = requiredString(input.batchHash, 'batchHash');
       const originWarehouseId = requiredString(input.originWarehouseId || input.warehouse_hub, 'originWarehouseId');
-      const warehouse = await adapter.findById('warehouses', originWarehouseId) ||
-        (await adapter.find('warehouses', { code: originWarehouseId }, { limit: 1 }))[0];
-      if (!warehouse) throw new TypeError('originWarehouseId must reference an existing warehouse');
-      return adapter.insert('products', {
-        ...input, id: input.id || 'PROD-' + randomUUID(), sku, batchHash,
-        originWarehouseId: warehouse.id,
-        archivedAt: null, createdAt: input.createdAt || new Date().toISOString()
+      const initialStock = integer(input.stock ?? 0, 'stock');
+      return adapter.withTransaction(async ({ repository }) => {
+        const warehouse = await repository.findById('warehouses', originWarehouseId) ||
+          (await repository.find('warehouses', { code: originWarehouseId }, { limit: 1 }))[0];
+        if (!warehouse || warehouse.archivedAt) throw new TypeError('originWarehouseId must reference an existing warehouse that is active');
+        if ((await repository.find('products', { sku }, { limit: 1 })).length) {
+          const error = new Error('Product SKU already exists');
+          error.code = 'DUPLICATE_SKU';
+          throw error;
+        }
+        const at = new Date().toISOString();
+        const hubCode = warehouse.code || warehouse.id;
+        const stockRows = await repository.find('stock', { sku, hubCode }, { limit: 1 });
+        if (stockRows.length) {
+          const error = new Error('Stock already exists for this SKU and warehouse');
+          error.code = 'DUPLICATE_STOCK';
+          throw error;
+        }
+        const status = initialStock === 0 ? 'out_of_stock' :
+          initialStock <= Number(input.reorder_threshold || 0) ? 'low' : 'optimal';
+        const product = await repository.insert('products', {
+          ...input,
+          id: input.id || 'PROD-' + randomUUID(),
+          sku, batchHash, originWarehouseId: warehouse.id,
+          warehouse_hub: hubCode, stock: initialStock, status,
+          archivedAt: null, createdAt: at, updatedAt: at
+        });
+        await repository.insert('stock', {
+          id: sku + ':' + hubCode, sku, hubCode, onHand: initialStock, reserved: 0
+        });
+        if (initialStock > 0) {
+          await repository.insert('movements', {
+            id: 'MOV-' + randomUUID(), sku, hubCode, type: 'RECEIVE',
+            qty: initialStock, reason: 'opening_balance',
+            refType: 'product_create', refId: product.id, actorId: actor.id, at
+          });
+        }
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: actor.id, actorRole: actor.role,
+          action: 'product.create', targetType: 'product', targetId: product.id,
+          meta: { sku, hubCode, initialStock, batchHash }, at
+        });
+        return product;
       });
     },
     async update(id, changes, actor) {
-      const allowed = ['name', 'category', 'description', 'price', 'priceExGstPkr', 'leadDays', 'status', 'featured', 'supplierId'];
+      const allowed = ['name', 'category', 'description', 'price', 'priceExGstPkr', 'leadDays', 'reorder_threshold', 'status', 'featured', 'supplierId'];
       for (const key of Object.keys(changes)) if (!allowed.includes(key)) throw new TypeError('Unsupported product field: ' + key);
       if (changes.priceExGstPkr !== undefined) integer(changes.priceExGstPkr, 'priceExGstPkr');
       if (changes.price !== undefined && (!Number.isFinite(changes.price) || changes.price < 0)) throw new TypeError('price must be a non-negative finite value');
       if (changes.leadDays !== undefined) integer(changes.leadDays, 'leadDays');
+      if (changes.reorder_threshold !== undefined) integer(changes.reorder_threshold, 'reorder_threshold');
       return adapter.withTransaction(async ({ repository }) => {
         const product = await repository.findById('products', id);
         if (!product) return null;
@@ -223,7 +331,18 @@ function createDomainRepositories(adapter) {
       return adapter.withTransaction(async ({ repository }) => {
         const product = await repository.findById('products', id);
         if (!product) return null;
-        const updated = await repository.update('products', id, { archivedAt: at, updatedAt: at });
+        const stockRows = await repository.find('stock', { sku: product.sku });
+        if (stockRows.some((row) => (row.reserved || 0) > 0)) {
+          const error = new Error('Product cannot be archived while units are reserved by open orders');
+          error.code = 'PRODUCT_HAS_RESERVATIONS';
+          throw error;
+        }
+        if (stockRows.some((row) => (row.onHand || 0) > 0)) {
+          const error = new Error('Product cannot be archived while sellable stock remains in any warehouse');
+          error.code = 'PRODUCT_HAS_STOCK';
+          throw error;
+        }
+        const updated = await repository.update('products', id, { archivedAt: at, status: 'inactive', updatedAt: at });
         await repository.insert('auditLogs', {
           id: 'AUD-' + randomUUID(), actorId: actor.id, actorRole: actor.role,
           action: 'product.archive', targetType: 'product', targetId: id, meta: {}, at
@@ -715,8 +834,7 @@ function createDomainRepositories(adapter) {
         const timeline = [...(order.timeline || []), {
           status: nextStatus, at, actorId, note: 'Order status advanced'
         }];
-        const paymentState = nextStatus === 'DELIVERED' && order.paymentMethod === 'COD'
-          ? 'paid' : order.paymentState;
+        const paymentState = order.paymentState;
         const updated = await repository.update('orders', orderId, {
           status: nextStatus, timeline, paymentState, updatedAt: at
         });
@@ -728,6 +846,69 @@ function createDomainRepositories(adapter) {
         });
         return updated;
       }));
+    },
+
+    async recordCodCollection(orderId, input, actor) {
+      const actorId = requiredString(actor.id, 'actor.id');
+      const externalReference = requiredString(input.externalReference, 'externalReference');
+      const amountMinor = integer(input.amountMinor, 'amountMinor', 1);
+      if (externalReference.length > 200) throw new TypeError('externalReference must be 200 characters or fewer');
+      return adapter.withTransaction(async ({ repository }) => {
+        const order = await repository.findById('orders', orderId);
+        if (!order) return null;
+        if (order.status !== 'DELIVERED') {
+          const error = new Error('COD collection can only be recorded after delivery');
+          error.code = 'INVALID_TRANSITION';
+          throw error;
+        }
+        if (order.paymentMethod !== 'COD') {
+          const error = new Error('Manual cash collection is only valid for COD orders');
+          error.code = 'PAYMENT_METHOD_UNSUPPORTED';
+          throw error;
+        }
+        const existingPayments = await repository.find('payments', { orderId }, { limit: 1 });
+        if (existingPayments.length) {
+          if (existingPayments[0].externalReference === externalReference &&
+              existingPayments[0].amountMinor === amountMinor) {
+            return { payment: existingPayments[0], order };
+          }
+          const error = new Error('A COD collection has already been recorded for this order');
+          error.code = 'PAYMENT_ALREADY_RECORDED';
+          throw error;
+        }
+        const orderAmountMinor = order.totalMinor ?? order.price?.totalMinor;
+        if (!Number.isSafeInteger(orderAmountMinor) || orderAmountMinor <= 0 || amountMinor !== orderAmountMinor) {
+          const error = new Error('Recorded COD amount must exactly equal the order PKR total');
+          error.code = 'PAYMENT_AMOUNT_MISMATCH';
+          throw error;
+        }
+        const reusedReference = await repository.find('payments', { externalReference }, { limit: 1 });
+        if (reusedReference.length) {
+          const error = new Error('External payment reference has already been used');
+          error.code = 'PAYMENT_REFERENCE_REUSED';
+          throw error;
+        }
+        const at = new Date().toISOString();
+        const payment = await repository.insert('payments', {
+          id: 'PAY-' + randomUUID(), orderId, buyerId: order.buyerId || order.userId,
+          amountMinor, currency: 'PKR', method: 'cash', status: 'manual_recorded',
+          executionMode: 'manual', providerVerified: false,
+          externalReference, recordedBy: actorId, recordedAt: at,
+          note: 'COD collection recorded manually; VeloSupply did not verify cash receipt or call a payment provider.'
+        });
+        const updated = await repository.update('orders', orderId, {
+          paymentState: 'paid_manual',
+          paymentRecordId: payment.id,
+          paymentRecordedAt: at,
+          updatedAt: at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId, actorRole: actor.role || 'operator',
+          action: 'payment.cod_collection_recorded', targetType: 'payment', targetId: payment.id,
+          meta: { orderId, amountMinor, externalReference, providerVerified: false }, at
+        });
+        return { payment, order: updated };
+      });
     },
 
     async requestReturn(orderId, input, actor) {
@@ -773,10 +954,25 @@ function createDomainRepositories(adapter) {
           error.code = 'INVALID_TRANSITION';
           throw error;
         }
+        const order = await repository.findById('orders', record.orderId);
+        if (!order || order.status !== 'RETURN_REQUESTED') {
+          const error = new Error('Return order is not in RETURN_REQUESTED state');
+          error.code = 'INVALID_TRANSITION';
+          throw error;
+        }
         const at = new Date().toISOString();
         const updated = await repository.update('returns', returnId, {
           status: decision, decidedBy: actorId, updatedAt: at
         });
+        if (decision === 'rejected') {
+          await repository.update('orders', order.id, {
+            status: 'DELIVERED',
+            timeline: [...(order.timeline || []), {
+              status: 'RETURN_REJECTED', at, actorId, note: 'Return request rejected'
+            }],
+            updatedAt: at
+          });
+        }
         await repository.insert('auditLogs', {
           id: 'AUD-' + randomUUID(), actorId, actorRole: actor.role || 'operator',
           action: 'return.' + decision, targetType: 'return', targetId: returnId,
@@ -837,13 +1033,89 @@ function createDomainRepositories(adapter) {
           timeline: [...(order.timeline || []), { status: 'RETURNED', at, actorId, note: 'Return received at ' + hubCode }],
           updatedAt: at
         });
+        const existingRefunds = await repository.find('refunds', { returnId }, { limit: 1 });
+        let refund = existingRefunds[0] || null;
+        if (!refund) {
+          const rawAmountMinor = order.totalMinor ?? order.price?.totalMinor;
+          const amountMinor = Number.isSafeInteger(rawAmountMinor) && rawAmountMinor >= 0 ? rawAmountMinor : 0;
+          const paymentCaptured = ['paid', 'captured', 'settled', 'paid_manual'].includes(String(order.paymentState || '').toLowerCase());
+          const refundStatus = amountMinor <= 0 ? 'manual_review_required' : paymentCaptured ? 'manual_pending' : 'blocked_unpaid';
+          refund = await repository.insert('refunds', {
+            id: 'REF-' + randomUUID(), returnId, orderId: order.id,
+            buyerId: order.buyerId || order.userId || 'unknown',
+            amountMinor, currency: 'PKR', status: refundStatus,
+            paymentStateAtRequest: order.paymentState || 'unknown',
+            executionMode: 'manual', providerVerified: false,
+            note: refundStatus === 'blocked_unpaid'
+              ? 'Payment is not recorded as captured; reconcile payment before refunding.'
+              : refundStatus === 'manual_review_required'
+                ? 'The historical order has no verified PKR minor-unit total; calculate the refund manually.'
+                : 'Complete the refund outside VeloSupply, then record the external reference.',
+            createdAt: at, updatedAt: at
+          });
+          await repository.insert('auditLogs', {
+            id: 'AUD-' + randomUUID(), actorId, actorRole: actor.role || 'operator',
+            action: 'refund.request', targetType: 'refund', targetId: refund.id,
+            meta: { orderId: order.id, returnId, amountMinor, status: refundStatus, executionMode: 'manual' }, at
+          });
+        }
         await repository.insert('auditLogs', {
           id: 'AUD-' + randomUUID(), actorId, actorRole: actor.role || 'operator',
           action: 'return.receive', targetType: 'return', targetId: returnId,
           meta: { orderId: order.id, hubCode }, at
         });
-        return { return: updatedReturn, order: updatedOrder };
+        return { return: updatedReturn, order: updatedOrder, refund };
       }));
+    }
+  };
+
+  const refunds = {
+    list(filter = {}) { return adapter.find('refunds', filter, { sort: { createdAt: -1 } }); },
+    getById(id) { return adapter.findById('refunds', id); },
+    async recordManual(id, input, actor) {
+      const actorId = requiredString(actor.id, 'actor.id');
+      const externalReference = requiredString(input.externalReference, 'externalReference');
+      const method = requiredString(input.method, 'method');
+      const amountMinor = integer(input.amountMinor, 'amountMinor', 1);
+      if (externalReference.length > 200) throw new TypeError('externalReference must be 200 characters or fewer');
+      if (!['cash', 'bank_transfer', 'wallet', 'other'].includes(method)) {
+        throw new TypeError('Refund method must be cash, bank_transfer, wallet, or other');
+      }
+      return adapter.withTransaction(async ({ repository }) => {
+        const refund = await repository.findById('refunds', id);
+        if (!refund) return null;
+        if (refund.status !== 'manual_pending') {
+          const error = new Error(refund.status === 'blocked_unpaid'
+            ? 'The order payment is not recorded as captured; refund confirmation is blocked'
+            : 'Only pending manual refunds can be recorded');
+          error.code = refund.status === 'blocked_unpaid' ? 'PAYMENT_NOT_CAPTURED' : 'INVALID_TRANSITION';
+          throw error;
+        }
+        if (amountMinor !== refund.amountMinor) {
+          const error = new Error('Recorded refund amount must equal the approved PKR refund amount');
+          error.code = 'REFUND_AMOUNT_MISMATCH';
+          throw error;
+        }
+        const reusedReference = await repository.find('refunds', { externalReference }, { limit: 1 });
+        if (reusedReference.length && reusedReference[0].id !== id) {
+          const error = new Error('External refund reference has already been used');
+          error.code = 'REFUND_REFERENCE_REUSED';
+          throw error;
+        }
+        const at = new Date().toISOString();
+        const updated = await repository.update('refunds', id, {
+          status: 'manual_recorded', amountRecordedMinor: amountMinor,
+          externalReference, method, recordedBy: actorId, recordedAt: at,
+          providerVerified: false, updatedAt: at,
+          note: 'External refund reference recorded manually; VeloSupply did not call or verify a payment provider.'
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId, actorRole: actor.role || 'admin',
+          action: 'refund.manual_recorded', targetType: 'refund', targetId: id,
+          meta: { orderId: refund.orderId, returnId: refund.returnId, amountMinor, method, externalReference, providerVerified: false }, at
+        });
+        return updated;
+      });
     }
   };
 
@@ -1237,7 +1509,7 @@ function createDomainRepositories(adapter) {
     }
   };
 
-  return { users, warehouses, products, orders, stockMovements, purchaseOrders, auditLogs, tariffRules };
+  return { users, warehouses, products, orders, stockMovements, refunds, purchaseOrders, auditLogs, tariffRules };
 }
 
 module.exports = { createDomainRepositories, BUYER_ROLES, MOVEMENT_TYPES };
