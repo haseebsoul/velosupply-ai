@@ -39,8 +39,14 @@ export interface Warehouse {
 }
 
 export interface OrderItem {
-  productId: string
-  quantity: number
+  productId?: string
+  sku?: string
+  name?: string
+  qty?: number
+  quantity?: number
+  unitExGstPkr?: number
+  unitPriceMinor?: number
+  hubCode?: string
 }
 
 export interface Order {
@@ -50,6 +56,15 @@ export interface Order {
   shippingRegion: string
   items: OrderItem[]
   total?: number
+  totalMinor?: number
+  currency?: string
+  buyerId?: string
+  userId?: string
+  city?: string
+  address?: string
+  paymentMethod?: string
+  paymentState?: string
+  price?: { currency?: string; totalPkr?: number; totalMinor?: number; subtotalExMinor?: number; gstMinor?: number; deliveryFeeMinor?: number; simulated?: boolean }
   status: string
   warehouse_hub?: string
   createdAt?: string
