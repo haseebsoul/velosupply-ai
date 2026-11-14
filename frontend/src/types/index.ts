@@ -15,6 +15,10 @@ export interface Product {
   category: string
   price: number
   priceExGstPkr?: number
+  currency?: 'PKR' | string
+  leadDays?: number
+  featured?: boolean
+  demoRecord?: boolean
   stock: number
   reorder_threshold: number
   warehouse_hub: string
