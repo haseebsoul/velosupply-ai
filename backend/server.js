@@ -170,13 +170,23 @@ function addLog(message, level = 'INFO', type = 'SYSTEM', metadata = {}) {
 
 function refreshMetrics() {
   const now = Date.now();
-  const activeOrders = db.orders.filter((order) => !['delivered', 'cancelled'].includes(order.status));
+  const isClosedOrder = (order) => ['DELIVERED', 'CANCELLED', 'RETURNED'].includes(String(order.status).toUpperCase());
+  const activeOrders = db.orders.filter((order) => !isClosedOrder(order));
   const activeWarehouses = db.warehouses.filter((hub) => hub.status === 'online').length;
   const fulfillmentHealth = db.warehouses.length ? Math.round((activeWarehouses / db.warehouses.length) * 100) : 0;
+  const gmv24h = db.orders
+    .filter((order) => {
+      const age = now - Date.parse(order.createdAt);
+      return Number.isFinite(age) && age >= 0 && age <= 24 * 60 * 60 * 1000 &&
+        String(order.status).toUpperCase() !== 'CANCELLED';
+    })
+    .reduce((sum, order) => {
+      const totalPkr = Number(order.total ?? order.price?.totalPkr ??
+        (Number.isSafeInteger(order.totalMinor) ? order.totalMinor / 100 : 0));
+      return sum + (Number.isFinite(totalPkr) ? totalPkr : 0);
+    }, 0);
   db.metrics = {
-    gmv24h: Number(db.orders
-      .filter((order) => now - Date.parse(order.createdAt) <= 24 * 60 * 60 * 1000 && order.status !== 'cancelled')
-      .reduce((sum, order) => sum + order.total, 0).toFixed(2)),
+    gmv24h: Number(gmv24h.toFixed(2)),
     activeOrders: activeOrders.length,
     fulfillmentHealth,
     packetsPerSec: db.metrics?.packetsPerSec ?? 0,
