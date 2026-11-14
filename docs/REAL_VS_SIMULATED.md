@@ -33,3 +33,11 @@ Newsletter subscription, rewards claims, scenario simulation and parts of SRE/te
 - Never describe a QR self-report as verified proof of delivery.
 - Do not describe FBR, PSW or NADRA integration as available without the required agreement or vendor access.
 - Do not treat the synthetic Pakistan demo fixture as live or independently verified Pakistani inventory, supplier, buyer or order data.
+
+
+## Manual COD collection and refund records (v17 API milestone)
+
+- A delivered COD order remains `pending_cod` until an administrator or operator records the collected amount and an external receipt reference through `POST /api/orders/:id/payment/record-cod`.
+- The API validates the exact PKR minor-unit total and prevents duplicate payment records. The record is explicitly `manual`; `providerVerified` remains `false` and no payment provider is called.
+- Once an approved return is physically received into a warehouse, the API creates a manual refund record. Unpaid orders are blocked; historical orders with no reliable minor-unit total require manual review.
+- An administrator can record an external refund reference through `POST /api/refunds/:id/record`. This records an operator-supplied reference only. It does not execute a refund, move money, or verify a payment provider.
