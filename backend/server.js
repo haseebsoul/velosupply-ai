@@ -708,10 +708,10 @@ app.get('/api/orders', asyncRoute(async (req, res) => {
   );
   res.json(ownOrders);
 }));
-app.get('/api/logs', asyncRoute(async (_req, res) => {
+app.get('/api/logs', requireRoles('admin', 'operator'), asyncRoute(async (_req, res) => {
   res.json(repository ? await repository.find('logs', {}) : db.logs);
 }));
-app.get('/api/threats', asyncRoute(async (_req, res) => {
+app.get('/api/threats', requireRoles('admin', 'operator'), asyncRoute(async (_req, res) => {
   const [products, stockRows, movementRows, purchaseOrders, hubs] = await Promise.all([
     repository ? repository.find('products', {}) : db.products,
     repository ? repository.find('stock', {}) : (db.stock || []),
