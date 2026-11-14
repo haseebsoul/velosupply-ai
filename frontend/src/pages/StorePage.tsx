@@ -21,7 +21,7 @@ export function StorePage() {
   }, [])
   const filtered = useMemo(() => products.filter((product) =>
     (category === 'All' || product.category === category) &&
-    (!inStock || product.stock > 0) &&
+    (!inStock || (product.available ?? product.stock) > 0) &&
     `${product.name} ${product.sku} ${product.description}`.toLowerCase().includes(query.toLowerCase()),
   ).sort((a, b) => sort === 'price-low' ? (a.priceExGstPkr ?? Number.MAX_SAFE_INTEGER) - (b.priceExGstPkr ?? Number.MAX_SAFE_INTEGER) : sort === 'price-high' ? (b.priceExGstPkr ?? 0) - (a.priceExGstPkr ?? 0) : sort === 'velocity' ? (b.leadDays ?? 999) - (a.leadDays ?? 999) : Number(Boolean(b.featured)) - Number(Boolean(a.featured))), [products, category, query, inStock, sort])
   return <div className="editorial"><EditorialNavbar /><main className="wrap section" style={{ minHeight: '80vh' }}>
