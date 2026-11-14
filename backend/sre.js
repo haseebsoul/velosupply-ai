@@ -6,6 +6,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const express = require('express');
 const { z } = require('zod');
+const { sanitizeLogValue } = require('./log-sanitizer');
 
 const WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const SAMPLE_LIMIT = 3600;
@@ -69,12 +70,28 @@ function createSRE(deps) {
   }
 
   function log(level, msg, fields = {}) {
-    const entry = { ts: new Date().toISOString(), level, msg, ...fields };
+    const safeFields = sanitizeLogValue(fields);
+    const metadata = safeFields && typeof safeFields === 'object' && !Array.isArray(safeFields)
+      ? safeFields
+      : { details: safeFields };
+    const entry = {
+      ...metadata,
+      ts: new Date().toISOString(),
+      level,
+      msg: sanitizeLogValue(msg)
+    };
     try { process.stdout.write(JSON.stringify(entry) + '\n'); } catch (_error) { /* stdout can be unavailable during shutdown */ }
     try {
       const db = getDb();
       if (Array.isArray(db.logs)) {
-        db.logs.unshift({ id: randomUUID(), type: 'SRE', level, message: msg, timestamp: entry.ts, metadata: fields });
+        db.logs.unshift({
+          id: randomUUID(),
+          type: 'SRE',
+          level,
+          message: entry.msg,
+          timestamp: entry.ts,
+          metadata
+        });
         db.logs = db.logs.slice(0, 500);
       }
     } catch (_error) { /* startup may not have loaded the database yet */ }
