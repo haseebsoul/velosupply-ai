@@ -534,6 +534,12 @@ async function createSeedData() {
     timestamp: new Date(now.getTime() - index * 1800000).toISOString(),
     demoRecord: true
   }));
+  for (const product of products) {
+    product.onOrder = purchaseOrders
+      .filter((po) => ['approved', 'shipped'].includes(po.status))
+      .reduce((sum, po) => sum + po.lines.filter((line) => line.sku === product.sku).reduce((lineSum, line) => lineSum + line.qty, 0), 0);
+  }
+
   const settings = [
     { key: 'currency', value: 'PKR' },
     { key: 'gstPct', value: 18 },
@@ -660,7 +666,8 @@ function hasCurrentSchema(current) {
       item.demoRecord === true
     );
   const movementValid = Array.isArray(current.movements) &&
-    current.movements.length >= 180 &&
+    current.movements.length >= 100 &&
+    current.orders.every((order) => current.movements.some((movement) => movement.type === 'RESERVE' && movement.refId === order.id)) &&
     current.movements.every((movement) =>
       typeof movement.sku === 'string' &&
       typeof movement.hubCode === 'string' &&
