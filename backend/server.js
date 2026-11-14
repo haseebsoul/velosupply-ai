@@ -395,7 +395,7 @@ const checkoutSchema = z.object({
 });
 const inventoryUpdateSchema = z.object({
   stock: z.number().int().nonnegative().optional(),
-  price: z.number().finite().nonnegative().optional(),
+  price: z.number().int().nonnegative().optional(),
   priceExGstPkr: z.number().int().nonnegative().optional(),
   reason: z.string().trim().min(2).max(120).optional()
 }).strict()
@@ -843,7 +843,10 @@ app.patch('/api/inventory/:id', requireRoles('admin', 'operator'), validate(inve
     }
   }
   const productChanges = {};
-  if (req.body.price !== undefined) productChanges.price = req.body.price;
+  if (req.body.price !== undefined) {
+    productChanges.price = req.body.price;
+    productChanges.priceExGstPkr = req.body.priceExGstPkr ?? req.body.price;
+  }
   if (req.body.priceExGstPkr !== undefined) productChanges.priceExGstPkr = req.body.priceExGstPkr;
   if (Object.keys(productChanges).length) {
     await domainRepositories.products.update(product.id, productChanges, { id: req.user.id, role: req.user.role });
