@@ -257,7 +257,7 @@ async function createSeedData() {
       const status = orderStatuses[productIndex][orderIndex];
       const qty = orderIndex >= 3 ? 7 : 1;
       const buyer = users[5 + ((productIndex * 5 + orderIndex) % buyerDefinitions.length)];
-      const ageDays = [41, 31, 21, 12, 4][orderIndex];
+      const ageDays = [45, 34, 22, 11, 1][orderIndex];
       const createdAt = new Date(now.getTime() - ageDays * 86400000).toISOString();
       const changedAt = new Date(new Date(createdAt).getTime() + 300000).toISOString();
       const orderId = 'ORD-' + String(productIndex * 5 + orderIndex + 1).padStart(4, '0');
