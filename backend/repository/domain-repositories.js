@@ -1140,15 +1140,18 @@ function createDomainRepositories(adapter) {
         }
         const unitExGstPkr = integer(product.priceExGstPkr, 'priceExGstPkr', 1);
         const totalPkr = unitExGstPkr * qty;
-        if (!Number.isSafeInteger(totalPkr)) throw new TypeError('Purchase order total exceeds safe integer range');
+        const totalMinor = totalPkr * 100;
+        if (!Number.isSafeInteger(totalPkr) || !Number.isSafeInteger(totalMinor)) {
+          throw new TypeError('Purchase order total exceeds safe integer range');
+        }
         const at = new Date().toISOString();
         const id = 'PO-' + randomUUID();
         const code = 'PO-' + at.slice(0, 10).replace(/-/g, '') + '-' + randomUUID().slice(0, 6).toUpperCase();
         const record = await repository.insert('purchaseOrders', {
           id, code, supplierId: supplier.id, supplierName: supplier.name,
-          lines: [{ sku, qty, unitExGstPkr, totalMinor: totalPkr * 100 }],
+          lines: [{ sku, qty, unitExGstPkr, totalMinor }],
           hubCode, status: 'draft',
-          totalPkr, totalMinor: totalPkr * 100,
+          totalPkr, totalMinor,
           createdBy: actorId, createdAt: at, updatedAt: at
         });
         await repository.insert('auditLogs', {
