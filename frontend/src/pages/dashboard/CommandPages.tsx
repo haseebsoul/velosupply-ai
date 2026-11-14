@@ -99,7 +99,7 @@ export function CommandPages() {
     {pathname === '/dashboard/threats' && <>
       <h1 className="ops-heading">Inventory threats</h1><p className="ops-copy">Proactive actions protect service levels and prevent lost sales.</p>
       {productsAtRisk.length === 0 && warehouses.every((hub) => hub.status === 'online') && <div className="card-ops dash-card success-text">All inventory and fulfillment nodes are healthy.</div>}
-      {productsAtRisk.map((product) => <ThreatRow key={product.id} product={product} onResolve={() => request(() => api.post(`/inventory/restock/${product.id}`), `${product.sku} replenishment purchase order executed.`)} />)}
+      {productsAtRisk.map((product) => <ThreatRow key={product.id} product={product} onResolve={() => request(() => api.post(`/inventory/restock/${product.id}`, {}, { headers: { 'Idempotency-Key': crypto.randomUUID() } }), `${product.sku} replenishment receipt recorded.`)} />)}
       {warehouses.filter((hub) => hub.status !== 'online').map((hub) => <ThreatRow key={hub.id} hub={hub} />)}
       <div className="dash-grid"><StatCard title="AI EFFICIENCY SCORE" value={metrics.efficiencyScore} suffix=" pts" /><StatCard title="DETECTION TIME" value={metrics.detectionTimeMs} suffix="ms" /><StatCard title="THREATS BLOCKED" value={metrics.threatsBlocked} /></div>
     </>}
