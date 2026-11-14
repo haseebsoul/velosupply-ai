@@ -22,12 +22,17 @@ async function runIdempotent(repository, input, operation) {
   const requestHash = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
   const existing = await repository.find('idempotencyKeys', { key }, { limit: 1 });
   if (existing.length) {
-    if (existing[0].requestHash !== requestHash) {
-      const error = new Error('Idempotency key has already been used for a different request');
-      error.code = 'KEY_REUSED';
-      throw error;
+    const age = Date.now() - Date.parse(existing[0].at || '');
+    if (Number.isFinite(age) && age >= 24 * 60 * 60 * 1000) {
+      await repository.remove('idempotencyKeys', existing[0].id);
+    } else {
+      if (existing[0].requestHash !== requestHash) {
+        const error = new Error('Idempotency key has already been used for a different request');
+        error.code = 'KEY_REUSED';
+        throw error;
+      }
+      return existing[0].response;
     }
-    return existing[0].response;
   }
   const response = await operation();
   await repository.insert('idempotencyKeys', {
@@ -561,7 +566,9 @@ function createDomainRepositories(adapter) {
         DISPATCHED: ['DELIVERED']
       };
       const actorId = requiredString(actor.id, 'actor.id');
-      return adapter.withTransaction(async ({ repository }) => {
+      return adapter.withTransaction(async ({ repository }) => runIdempotent(repository, {
+        orderId, nextStatus, actorId, actorRole: actor.role, idempotencyKey: actor.idempotencyKey
+      }, async () => {
         const order = await repository.findById('orders', orderId);
         if (!order) return null;
         if (!(allowed[order.status] || []).includes(nextStatus)) {
@@ -641,7 +648,7 @@ function createDomainRepositories(adapter) {
           meta: { previousStatus: order.status, status: nextStatus }, at
         });
         return updated;
-      });
+      }));
     },
 
     async requestReturn(orderId, input, actor) {
@@ -703,7 +710,9 @@ function createDomainRepositories(adapter) {
     async receiveReturn(returnId, hubCodeInput, actor) {
       const hubCode = requiredString(hubCodeInput, 'hubCode');
       const actorId = requiredString(actor.id, 'actor.id');
-      return adapter.withTransaction(async ({ repository }) => {
+      return adapter.withTransaction(async ({ repository }) => runIdempotent(repository, {
+        returnId, hubCode, actorId, actorRole: actor.role, idempotencyKey: actor.idempotencyKey
+      }, async () => {
         const record = await repository.findById('returns', returnId);
         if (!record) return null;
         if (record.status !== 'approved') {
@@ -754,7 +763,7 @@ function createDomainRepositories(adapter) {
           meta: { orderId: order.id, hubCode }, at
         });
         return { return: updatedReturn, order: updatedOrder };
-      });
+      }));
     }
   };
 
