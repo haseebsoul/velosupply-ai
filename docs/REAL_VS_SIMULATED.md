@@ -47,3 +47,8 @@ Newsletter subscription, rewards claims, scenario simulation and parts of SRE/te
 ## PR #6 reconciliation note
 
 This v17 API lifecycle implementation is rebased directly on the merged PR #4 `main` commit. The collection-backed product/warehouse routes, manual COD collection, and manual refund-record routes are covered by `backend/test/v17-api-lifecycle.test.mjs`. COD remains unpaid until an operator/admin records the exact PKR minor-unit amount and receipt reference. Refund recording only stores an externally supplied reference; it does not contact or verify a payment provider. Live Atlas verification remains intentionally deferred until the dedicated staging user, restricted network route, and secret-store URI are configured.
+
+
+## PR #8 authentication route follow-up
+
+The v19 auth follow-up moves user lookup, login lockout, last-login updates, user listing and authentication account-state checks through the user repository. Registration, successful login, role changes and soft deletion write audit records. The frontend continues to receive the `user` role alias while the database stores `buyer`. This does not add email verification, MFA, password reset or external identity proof.
