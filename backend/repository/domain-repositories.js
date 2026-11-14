@@ -45,6 +45,30 @@ async function runIdempotent(repository, input, operation) {
   return response;
 }
 
+async function ensureOpeningMovements(repository, stock, at = new Date().toISOString()) {
+  const history = await repository.find('movements', { sku: stock.sku, hubCode: stock.hubCode });
+  if (history.length) return history;
+  const baseline = [];
+  if (stock.onHand > 0) {
+    baseline.push({
+      id: 'MOV-' + randomUUID(), sku: stock.sku, hubCode: stock.hubCode,
+      type: 'RECEIVE', qty: stock.onHand, reason: 'opening_balance',
+      refType: 'opening_balance', refId: 'legacy-opening:' + stock.sku + ':' + stock.hubCode,
+      actorId: 'system', at
+    });
+  }
+  if (stock.reserved > 0) {
+    baseline.push({
+      id: 'MOV-' + randomUUID(), sku: stock.sku, hubCode: stock.hubCode,
+      type: 'RESERVE', qty: stock.reserved, reason: 'opening_reserved_balance',
+      refType: 'opening_balance', refId: 'legacy-reserved:' + stock.sku + ':' + stock.hubCode,
+      actorId: 'system', at
+    });
+  }
+  for (const movement of baseline) await repository.insert('movements', movement);
+  return baseline;
+}
+
 function createDomainRepositories(adapter) {
   if (!adapter) throw new TypeError('A persistence adapter is required');
 
@@ -376,15 +400,7 @@ function createDomainRepositories(adapter) {
           reserveRows.set(stock.id, { stock, qty: (reserveRows.get(stock.id)?.qty || 0) + allocation.qty });
         }
         for (const { stock, qty } of reserveRows.values()) {
-          const history = await repository.find('movements', { sku: stock.sku, hubCode: stock.hubCode });
-          if (history.length === 0 && stock.onHand > 0) {
-            await repository.insert('movements', {
-              id: 'MOV-' + randomUUID(), sku: stock.sku, hubCode: stock.hubCode,
-              type: 'RECEIVE', qty: stock.onHand, reason: 'opening_balance',
-              refType: 'opening_balance', refId: 'legacy-opening:' + stock.sku + ':' + stock.hubCode,
-              actorId: 'system', at: nowIso
-            });
-          }
+          await ensureOpeningMovements(repository, stock, nowIso);
           const nextReserved = stock.reserved + qty;
           const updated = await repository.update('stock', stock.id, {
             ...stock,
@@ -656,6 +672,7 @@ function createDomainRepositories(adapter) {
             const stockRows = await repository.find('stock', { sku, hubCode }, { limit: 1 });
             const stock = stockRows[0];
             if (!stock) throw new Error('Stock row not found for order item ' + sku);
+            await ensureOpeningMovements(repository, stock, at);
             if (nextStatus === 'CANCELLED') {
               if (stock.reserved < qty) throw new Error('Reserved stock is lower than order quantity for ' + sku);
               await repository.update('stock', stock.id, { ...stock, reserved: stock.reserved - qty });
@@ -794,6 +811,7 @@ function createDomainRepositories(adapter) {
           const qty = integer(item.qty || item.quantity, 'return quantity', 1);
           const stockRows = await repository.find('stock', { sku, hubCode }, { limit: 1 });
           const stock = stockRows[0] || { id: sku + ':' + hubCode, sku, hubCode, onHand: 0, reserved: 0 };
+          await ensureOpeningMovements(repository, stock, at);
           await repository.update('stock', stock.id, { ...stock, onHand: stock.onHand + qty }, { upsert: !stockRows.length });
           if (!stockRows.length) {
             const updatedRows = await repository.find('stock', { sku, hubCode }, { limit: 1 });
@@ -867,18 +885,8 @@ function createDomainRepositories(adapter) {
         }
         const delta = targetOnHand === undefined ? requestedDelta : targetOnHand - stock.onHand;
         if (delta === 0) return { stock, movement: null };
-        const history = await repository.find('movements', { sku, hubCode });
+        const history = await ensureOpeningMovements(repository, stock, new Date().toISOString());
         const ledgerRows = [...history];
-        if (history.length === 0 && stock.onHand > 0) {
-          const opening = {
-            id: 'MOV-' + randomUUID(), sku, hubCode, type: 'RECEIVE',
-            qty: stock.onHand, reason: 'opening_balance',
-            refType: 'opening_balance', refId: 'legacy-opening:' + sku + ':' + hubCode,
-            actorId: 'system', at: new Date().toISOString()
-          };
-          await repository.insert('movements', opening);
-          ledgerRows.push(opening);
-        }
         const movement = {
           id: 'MOV-' + randomUUID(), sku, hubCode, type: 'ADJUST',
           qty: delta, reason, refType: 'admin_action', refId,
@@ -925,15 +933,7 @@ function createDomainRepositories(adapter) {
           throw error;
         }
         const at = new Date().toISOString();
-        const history = await repository.find('movements', { sku, hubCode });
-        if (history.length === 0 && stock.onHand > 0) {
-          await repository.insert('movements', {
-            id: 'MOV-' + randomUUID(), sku, hubCode, type: 'RECEIVE',
-            qty: stock.onHand, reason: 'opening_balance',
-            refType: 'opening_balance', refId: 'legacy-opening:' + sku + ':' + hubCode,
-            actorId: 'system', at
-          });
-        }
+        await ensureOpeningMovements(repository, stock, at);
         await repository.update('stock', stock.id, { ...stock, onHand: stock.onHand + qty });
         const productsForSku = await repository.find('products', { sku, warehouse_hub: hubCode });
         for (const product of productsForSku) {
@@ -1021,27 +1021,9 @@ function createDomainRepositories(adapter) {
           id: sku + ':' + toHubCode, sku, hubCode: toHubCode,
           onHand: 0, reserved: 0
         };
-        const sourceHistory = await repository.find('movements', { sku, hubCode: fromHubCode });
-        const destinationHistory = await repository.find('movements', { sku, hubCode: toHubCode });
-        if (!sourceHistory.length && sourceStock.onHand > 0) {
-          await repository.insert('movements', {
-            id: 'MOV-' + randomUUID(), sku, hubCode: fromHubCode, type: 'RECEIVE',
-            qty: sourceStock.onHand, reason: 'opening_balance',
-            refType: 'opening_balance', refId: 'legacy-opening:' + sku + ':' + fromHubCode,
-            actorId: 'system', at
-          });
-        }
-        if (!destinationHistory.length && destinationStock.onHand > 0) {
-          await repository.insert('movements', {
-            id: 'MOV-' + randomUUID(), sku, hubCode: toHubCode, type: 'RECEIVE',
-            qty: destinationStock.onHand, reason: 'opening_balance',
-            refType: 'opening_balance', refId: 'legacy-opening:' + sku + ':' + toHubCode,
-            actorId: 'system', at
-          });
-        }
-        const sourceBalance = movementBalance(sourceHistory.length
-          ? sourceHistory
-          : sourceStock.onHand > 0 ? [{ type: 'RECEIVE', qty: sourceStock.onHand }] : []);
+        const sourceHistory = await ensureOpeningMovements(repository, sourceStock, at);
+        const destinationHistory = await ensureOpeningMovements(repository, destinationStock, at);
+        const sourceBalance = movementBalance(sourceHistory);
         if (sourceBalance.onHand - sourceBalance.reserved < qty) {
           const error = new Error('Insufficient available stock for transfer');
           error.code = 'NEGATIVE_STOCK';
