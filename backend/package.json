@@ -10,7 +10,8 @@
     "seed": "node seed.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "migrate:state": "node migrate-state.js"
+    "migrate:state": "node migrate-state.js",
+    "test:atlas:staging": "node scripts/verify-atlas-staging.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
