@@ -174,6 +174,70 @@ describe('domain repositories and immutable ledgers', () => {
     expect((await adapter.find('stock', { sku: 'SKU-1', hubCode: 'HUB-KHI' }))[0].reserved).toBe(0);
   });
 
+  it('releases reserved inventory when a buyer cancels a placed order', async () => {
+    const { adapter, domain } = await harness({
+      warehouses: [{ id: 'HUB-KHI', code: 'HUB-KHI', name: 'Port Qasim Hub', city: 'Karachi', seedOrigin: true }],
+      products: [{
+        id: 'PROD-1', sku: 'SKU-1', name: 'Hybrid Solar Inverter',
+        priceExGstPkr: 1000, stock: 10, warehouse_hub: 'HUB-KHI', status: 'active'
+      }]
+    });
+    const placed = await domain.orders.checkout({
+      buyerId: 'buyer-1', city: 'Karachi', address: 'Street 1, Karachi',
+      paymentMethod: 'COD', items: [{ sku: 'SKU-1', qty: 2 }], idempotencyKey: 'cancel-001'
+    });
+    const confirmed = await domain.orders.advanceStatus(placed.order.id, 'CONFIRMED', { id: 'operator-1', role: 'operator' });
+    expect(confirmed.status).toBe('CONFIRMED');
+    const cancelled = await domain.orders.advanceStatus(placed.order.id, 'CANCELLED', { id: 'buyer-1', role: 'buyer' });
+    expect(cancelled.status).toBe('CANCELLED');
+    expect(await adapter.findById('stock', 'SKU-1:HUB-KHI')).toMatchObject({ onHand: 10, reserved: 0 });
+    expect(await adapter.count('movements', { type: 'RELEASE', refId: placed.order.id })).toBe(1);
+    expect(await adapter.count('auditLogs', { action: 'order.cancel' })).toBe(1);
+  });
+
+  it('ships reserved stock on dispatch and books a received return through RETURN_IN', async () => {
+    const { adapter, domain } = await harness({
+      warehouses: [{ id: 'HUB-KHI', code: 'HUB-KHI', name: 'Port Qasim Hub', city: 'Karachi', seedOrigin: true }],
+      products: [{
+        id: 'PROD-1', sku: 'SKU-1', name: 'Hybrid Solar Inverter',
+        priceExGstPkr: 1000, stock: 10, warehouse_hub: 'HUB-KHI', status: 'active'
+      }]
+    });
+    const placed = await domain.orders.checkout({
+      buyerId: 'buyer-1', city: 'Karachi', address: 'Street 1, Karachi',
+      paymentMethod: 'COD', items: [{ sku: 'SKU-1', qty: 2 }], idempotencyKey: 'return-001'
+    });
+    for (const status of ['CONFIRMED', 'PICKING', 'PACKED', 'DISPATCHED', 'DELIVERED']) {
+      await domain.orders.advanceStatus(placed.order.id, status, { id: 'operator-1', role: 'operator' });
+    }
+    expect(await adapter.findById('stock', 'SKU-1:HUB-KHI')).toMatchObject({ onHand: 8, reserved: 0 });
+    const requested = await domain.orders.requestReturn(placed.order.id, { reason: 'Damaged packaging' }, { id: 'buyer-1', role: 'buyer' });
+    const approved = await domain.orders.decideReturn(requested.return.id, 'approved', { id: 'operator-1', role: 'operator' });
+    expect(approved.status).toBe('approved');
+    const received = await domain.orders.receiveReturn(requested.return.id, 'HUB-KHI', { id: 'operator-1', role: 'operator' });
+    expect(received.order.status).toBe('RETURNED');
+    expect(await adapter.findById('stock', 'SKU-1:HUB-KHI')).toMatchObject({ onHand: 10, reserved: 0 });
+    expect(await adapter.count('movements', { type: 'SHIP', refId: placed.order.id })).toBe(1);
+    expect(await adapter.count('movements', { type: 'RETURN_IN', refId: requested.return.id })).toBe(1);
+    expect(await adapter.count('auditLogs', { action: 'return.receive' })).toBe(1);
+  });
+
+  it('rejects illegal order state transitions without changing order state', async () => {
+    const { domain } = await harness({
+      warehouses: [{ id: 'HUB-KHI', code: 'HUB-KHI', name: 'Port Qasim Hub', city: 'Karachi', seedOrigin: true }],
+      products: [{
+        id: 'PROD-1', sku: 'SKU-1', name: 'Hybrid Solar Inverter',
+        priceExGstPkr: 1000, stock: 10, warehouse_hub: 'HUB-KHI', status: 'active'
+      }]
+    });
+    const placed = await domain.orders.checkout({
+      buyerId: 'buyer-1', city: 'Karachi', address: 'Street 1, Karachi',
+      paymentMethod: 'COD', items: [{ sku: 'SKU-1', qty: 1 }], idempotencyKey: 'state-001'
+    });
+    await expect(domain.orders.advanceStatus(placed.order.id, 'DISPATCHED', { id: 'operator-1', role: 'operator' }))
+      .rejects.toMatchObject({ code: 'INVALID_TRANSITION' });
+  });
+
   it('reconciles on-hand stock from append-only movements', async () => {
     const { adapter, domain } = await harness();
     await domain.stockMovements.append({ sku: 'SKU-1', hubCode: 'WH-1', type: 'RECEIVE', reason: 'opening_balance', qty: 10, refType: 'opening_balance', refId: 'open-1' });
