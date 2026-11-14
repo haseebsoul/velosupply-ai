@@ -196,6 +196,9 @@ function createFileAdapter(options) {
     },
 
     async withTransaction(callback) {
+      if (transactionContext.getStore()) {
+        return callback({ session: null, repository: adapter });
+      }
       const operation = queue.catch(() => {}).then(async () => {
         const before = clone(state);
         return transactionContext.run({ adapter }, async () => {
