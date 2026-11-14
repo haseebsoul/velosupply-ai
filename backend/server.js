@@ -2,7 +2,7 @@ const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
-const { randomUUID, randomBytes, timingSafeEqual } = require('node:crypto');
+const { randomUUID, randomBytes, timingSafeEqual, createHash } = require('node:crypto');
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
@@ -546,7 +546,7 @@ const checkoutHandler = asyncRoute(async (req, res) => {
     const product = findById(db.products, item.productId, 'Product');
     return { sku: product.sku, qty: item.quantity };
   });
-  const buyerId = req.user?.id || 'GUEST-' + randomUUID();
+  const buyerId = req.user?.id || 'GUEST-' + createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 24);
   const city = req.body.city || req.body.shippingRegion;
   const address = req.body.address || req.body.shippingRegion;
   let result;
