@@ -73,7 +73,7 @@ export function CartDrawer() {
             <>
               {lines.map(({ product, quantity }) => <div className="cart-line" key={product.id}>
                 <div><strong>{product.name}</strong><div className="mono-label">{product.sku} · {product.warehouse_hub}</div><div className="mono" style={{ marginTop: 7 }}>{typeof product.priceExGstPkr === 'number' && Number.isSafeInteger(product.priceExGstPkr) ? money.format(product.priceExGstPkr) : 'PKR price not configured'} each</div></div>
-                <div className="quantity-control"><button aria-label={`Decrease ${product.name}`} onClick={() => setQuantity(product.id, quantity - 1)}><Minus size={14} /></button><span className="mono">{quantity}</span><button aria-label={`Increase ${product.name}`} disabled={quantity >= product.stock} onClick={() => setQuantity(product.id, quantity + 1)}><Plus size={14} /></button></div>
+                <div className="quantity-control"><button aria-label={`Decrease ${product.name}`} onClick={() => setQuantity(product.id, quantity - 1)}><Minus size={14} /></button><span className="mono">{quantity}</span><button aria-label={`Increase ${product.name}`} disabled={quantity >= (product.available ?? product.stock)} onClick={() => setQuantity(product.id, quantity + 1)}><Plus size={14} /></button></div>
               </div>)}
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '20px 0', fontWeight: 700 }}>Subtotal before GST and delivery <span className="mono">{money.format(total)}</span></div>
               <form onSubmit={handleSubmit(submit)} style={{ display: 'grid', gap: 12 }}>
