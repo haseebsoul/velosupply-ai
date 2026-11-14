@@ -277,6 +277,58 @@ describe('Pakistan checkout HTTP route', () => {
     expect(await adapter.count('auditLogs', { action: 'order.cancel' })).toBe(1);
   });
 
+  it('exposes only the buyer own orders and invoices through /api/me routes', async () => {
+    const { adapter } = await setup();
+    const registered = await supertest(serverModule.app)
+      .post('/api/auth/register')
+      .send({
+        name: 'Hira Javed',
+        email: 'hira@example.com',
+        role: 'buyer',
+        password: 'BuyerPassword123'
+      });
+    expect(registered.status).toBe(201);
+    const token = registered.body.token;
+
+    const checkout = await supertest(serverModule.app)
+      .post('/api/checkout')
+      .set('Authorization', 'Bearer ' + token)
+      .set('Idempotency-Key', 'buyer-order-001')
+      .send({
+        customerName: 'Hira Javed',
+        customerEmail: 'hira@example.com',
+        city: 'Karachi',
+        address: 'Block 7, Karachi',
+        paymentMethod: 'COD',
+        items: [{ sku: 'SKU-1', qty: 1 }]
+      });
+    expect(checkout.status).toBe(201);
+
+    const orders = await supertest(serverModule.app)
+      .get('/api/me/orders')
+      .set('Authorization', 'Bearer ' + token);
+    expect(orders.status).toBe(200);
+    expect(orders.body).toHaveLength(1);
+    expect(orders.body[0].id).toBe(checkout.body.order.id);
+
+    const orderDetail = await supertest(serverModule.app)
+      .get('/api/me/orders/' + checkout.body.order.id)
+      .set('Authorization', 'Bearer ' + token);
+    expect(orderDetail.status).toBe(200);
+    const invoices = await supertest(serverModule.app)
+      .get('/api/me/invoices')
+      .set('Authorization', 'Bearer ' + token);
+    expect(invoices.status).toBe(200);
+    expect(invoices.body).toHaveLength(1);
+
+    const invoiceDetail = await supertest(serverModule.app)
+      .get('/api/me/invoices/' + invoices.body[0].id)
+      .set('Authorization', 'Bearer ' + token);
+    expect(invoiceDetail.status).toBe(200);
+    expect(invoiceDetail.body.invoice.orderId).toBe(checkout.body.order.id);
+    expect(await adapter.count('invoices', { buyerId: registered.body.user.id })).toBe(1);
+  });
+
   it('rejects out-of-stock checkout without reserving or creating an order', async () => {
     const { adapter } = await setup();
     const response = await supertest(serverModule.app)
