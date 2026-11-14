@@ -7,6 +7,7 @@ import supertest from 'supertest';
 
 const require = createRequire(import.meta.url);
 const { createFileAdapter } = require('../repository/file-adapter.js');
+const bcrypt = require('bcryptjs');
 const serverModule = require('../server.js');
 let temporaryDirectory;
 
@@ -17,7 +18,11 @@ async function setup() {
     loadInitial: async () => ({
       schemaVersion: 3,
       dataMode: 'test',
-      users: [],
+      users: [{
+        id: 'USER-OPS', name: 'Demo Operator', email: 'operator@example.com',
+        role: 'operator', passwordHash: await bcrypt.hash('Operator123', 10),
+        isActive: true, deletedAt: null
+      }],
       warehouses: [{
         id: 'WH-KHI', code: 'HUB-KHI', name: 'Port Qasim Hub',
         city: 'Karachi', seedOrigin: true
@@ -110,6 +115,57 @@ describe('Pakistan checkout HTTP route', () => {
     expect(retry.body.order.id).toBe(first.body.order.id);
     expect(changed.status).toBe(422);
     expect(changed.body.error).toBe('KEY_REUSED');
+  });
+
+  it('routes stock adjustment through the ledger, enforces idempotency and audits the change', async () => {
+    const { adapter } = await setup();
+    const login = await supertest(serverModule.app)
+      .post('/api/auth/login')
+      .send({ email: 'operator@example.com', password: 'Operator123' });
+    expect(login.status).toBe(200);
+
+    const payload = { stock: 6, reason: 'cycle_count' };
+    const first = await supertest(serverModule.app)
+      .patch('/api/inventory/PROD-1')
+      .set('Authorization', 'Bearer ' + login.body.token)
+      .set('Idempotency-Key', 'adjust-route-001')
+      .send(payload);
+    expect(first.status).toBe(200);
+    expect(first.body.product.stock).toBe(6);
+
+    const movements = await adapter.find('movements', { sku: 'SKU-1', hubCode: 'HUB-KHI' });
+    expect(movements.map((movement) => movement.type)).toEqual(['RECEIVE', 'ADJUST']);
+    expect((await adapter.find('stock', { sku: 'SKU-1', hubCode: 'HUB-KHI' }))[0]).toMatchObject({ onHand: 6, reserved: 0 });
+    expect(await adapter.count('auditLogs', { action: 'inventory.adjust' })).toBe(1);
+
+    const changedRetry = await supertest(serverModule.app)
+      .patch('/api/inventory/PROD-1')
+      .set('Authorization', 'Bearer ' + login.body.token)
+      .set('Idempotency-Key', 'adjust-route-001')
+      .send({ stock: 5, reason: 'cycle_count' });
+    expect(changedRetry.status).toBe(422);
+    expect(changedRetry.body.error).toBe('KEY_REUSED');
+    expect(await adapter.count('movements', { sku: 'SKU-1', hubCode: 'HUB-KHI' })).toBe(2);
+  });
+
+  it('routes restock through a RECEIVE movement and synchronized stock projection', async () => {
+    const { adapter } = await setup();
+    const login = await supertest(serverModule.app)
+      .post('/api/auth/login')
+      .send({ email: 'operator@example.com', password: 'Operator123' });
+    expect(login.status).toBe(200);
+
+    const response = await supertest(serverModule.app)
+      .post('/api/inventory/restock/PROD-1')
+      .set('Authorization', 'Bearer ' + login.body.token)
+      .set('Idempotency-Key', 'restock-route-001')
+      .send({ quantity: 2 });
+
+    expect(response.status).toBe(200);
+    expect(response.body.product.stock).toBe(12);
+    expect((await adapter.find('stock', { sku: 'SKU-1', hubCode: 'HUB-KHI' }))[0]).toMatchObject({ onHand: 12, reserved: 0 });
+    expect(await adapter.count('movements', { type: 'RECEIVE', sku: 'SKU-1', hubCode: 'HUB-KHI' })).toBe(2);
+    expect(await adapter.count('auditLogs', { action: 'inventory.restock' })).toBe(1);
   });
 
   it('rejects out-of-stock checkout without reserving or creating an order', async () => {
