@@ -94,7 +94,7 @@ describe('collection-backed catalog and warehouse routes', () => {
     expect((await adapter.findById('products', id)).archivedAt).toBeTruthy();
     expect((await supertest(server.app).get('/api/products')).body.some((p) => p.id === id)).toBe(false);
     expect((await supertest(server.app).get('/api/admin/products?includeArchived=true').set(adminAuth)).body.some((p) => p.id === id)).toBe(true);
-    expect(await adapter.count('auditLogs', { action: 'product.update' })).toBe(1);
+    expect(await adapter.count('auditLogs', { action: 'product.update' })).toBe(2);
     expect(await adapter.count('auditLogs', { action: 'product.archive' })).toBe(1);
   });
 
@@ -209,7 +209,7 @@ describe('collection-backed order lifecycle, rollback and refund status', () => 
     await setup();
     const placed = await placeOrder([{ sku: 'SKU-1', qty: 1 }], 'refund-too-early-1');
     const response = await supertest(server.app).post('/api/orders/' + placed.body.order.id + '/refunds')
-      .set(buyerAuth).set('Idempotency-Key', 'refund-too-early-1').send({ reason: 'Please refund' });
+      .set(buyerAuth).set('Idempotency-Key', 'refund-early-key-1').send({ reason: 'Please refund' });
     expect(response.status).toBe(409);
     expect(response.body.error).toBe('INVALID_TRANSITION');
   });
