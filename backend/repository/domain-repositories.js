@@ -476,20 +476,23 @@ function createDomainRepositories(adapter) {
           throw error;
         }
         const history = await repository.find('movements', { sku, hubCode });
+        const ledgerRows = [...history];
         if (history.length === 0 && stock.onHand > 0) {
-          await repository.insert('movements', {
+          const opening = {
             id: 'MOV-' + randomUUID(), sku, hubCode, type: 'RECEIVE',
             qty: stock.onHand, reason: 'opening_balance',
             refType: 'opening_balance', refId: 'legacy-opening:' + sku + ':' + hubCode,
             actorId: 'system', at: new Date().toISOString()
-          });
+          };
+          await repository.insert('movements', opening);
+          ledgerRows.push(opening);
         }
         const movement = {
           id: 'MOV-' + randomUUID(), sku, hubCode, type: 'ADJUST',
           qty: delta, reason, refType: 'admin_action', refId,
           actorId, at: new Date().toISOString()
         };
-        const balance = movementBalance([...history, movement]);
+        const balance = movementBalance([...ledgerRows, movement]);
         if (balance.onHand < 0 || balance.reserved < 0 || balance.reserved > balance.onHand) {
           const error = new Error('Adjustment would make available inventory negative');
           error.code = 'NEGATIVE_STOCK';
