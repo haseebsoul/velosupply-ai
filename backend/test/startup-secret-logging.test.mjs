@@ -18,7 +18,7 @@ describe('startup secret logging', () => {
       "const records = output.trim().split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line));",
       "if (records.length !== 1 || records[0].level !== 'WARN' || records[0].msg !== 'A development default was generated; secret values are omitted.' || Object.prototype.hasOwnProperty.call(records[0], 'defaults')) process.exit(22);",
       "process.stderr.write('startup-secret-log-check:passed\\n');"
-    ].join('\\n');
+    ].join('\n');
 
     const result = spawnSync(process.execPath, ['-e', childScript], {
       cwd: backendDirectory,
