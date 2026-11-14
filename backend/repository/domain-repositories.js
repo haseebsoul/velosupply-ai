@@ -1,6 +1,6 @@
 'use strict';
 
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 
 const BUYER_ROLES = new Set(['buyer', 'operator', 'admin']);
 const MOVEMENT_TYPES = new Set(['RECEIVE', 'RESERVE', 'RELEASE', 'SHIP', 'ADJUST', 'TRANSFER_OUT', 'TRANSFER_IN', 'RETURN_IN']);
@@ -80,7 +80,275 @@ function createDomainRepositories(adapter) {
       .sort((a, b) => Number(b.version) - Number(a.version))[0] || null;
   }
 
+  const HUB_RANKING = {
+    Karachi: ['HUB-KHI', 'HUB-LHE', 'HUB-ISB'],
+    Lahore: ['HUB-LHE', 'HUB-ISB', 'HUB-FSD'],
+    Islamabad: ['HUB-ISB', 'HUB-LHE', 'HUB-PEW'],
+    Rawalpindi: ['HUB-ISB', 'HUB-LHE', 'HUB-PEW'],
+    Faisalabad: ['HUB-FSD', 'HUB-LHE', 'HUB-ISB'],
+    Multan: ['HUB-LHE', 'HUB-FSD', 'HUB-KHI'],
+    Peshawar: ['HUB-PEW', 'HUB-ISB', 'HUB-LHE'],
+    Quetta: ['HUB-UET', 'HUB-KHI', 'HUB-LHE']
+  };
+
   const orders = {
+    async checkout(input) {
+      const buyerId = requiredString(input.buyerId, 'buyerId');
+      const city = requiredString(input.city, 'city');
+      const address = requiredString(input.address, 'address');
+      const paymentMethod = requiredString(input.paymentMethod, 'paymentMethod').toUpperCase();
+      const idempotencyKey = requiredString(input.idempotencyKey, 'Idempotency-Key');
+      if (!['COD', 'JAZZCASH', 'EASYPAISA', 'RAAST', 'CARD', 'BANK_TRANSFER'].includes(paymentMethod)) {
+        throw new TypeError('Unsupported payment method');
+      }
+      if (!Array.isArray(input.items) || input.items.length === 0 || input.items.length > 50) {
+        throw new TypeError('Checkout requires between 1 and 50 order lines');
+      }
+      const itemRows = input.items.map((item) => ({
+        sku: requiredString(item.sku, 'sku'),
+        qty: integer(item.qty, 'qty', 1)
+      }));
+      const quantities = new Map();
+      for (const item of itemRows) quantities.set(item.sku, (quantities.get(item.sku) || 0) + item.qty);
+      const normalizedItems = [...quantities.entries()].map(([sku, qty]) => ({ sku, qty }));
+      const requestBody = {
+        buyerId, city, address, paymentMethod,
+        items: normalizedItems
+      };
+      const requestHash = createHash('sha256').update(JSON.stringify(requestBody)).digest('hex');
+
+      const execute = () => adapter.withTransaction(async ({ repository }) => {
+        const prior = await repository.find('idempotencyKeys', { key: idempotencyKey }, { limit: 1 });
+        if (prior.length) {
+          if (prior[0].requestHash !== requestHash) {
+            const error = new Error('Idempotency key has already been used for a different request');
+            error.code = 'KEY_REUSED';
+            throw error;
+          }
+          return prior[0].response;
+        }
+
+        const now = new Date();
+        const nowIso = now.toISOString();
+        const tariffRows = await repository.find('tariffRules', {});
+        const activeTariffRule = (code) => tariffRows
+          .filter((rule) => rule.code === code &&
+            ['demo-estimate', 'official', 'licensed-provider'].includes(rule.source) &&
+            (!rule.effectiveFrom || Date.parse(rule.effectiveFrom) <= now.getTime()) &&
+            (!rule.effectiveTo || Date.parse(rule.effectiveTo) >= now.getTime()))
+          .sort((a, b) => Number(b.version) - Number(a.version))[0] || null;
+        const gstRule = activeTariffRule('PK-GST');
+        const deliveryRule = activeTariffRule('PK-DELIVERY-' + city.toUpperCase());
+        const thresholdRule = activeTariffRule('PK-FREE-DELIVERY-THRESHOLD');
+        if (!gstRule || !deliveryRule || !thresholdRule) {
+          const error = new Error('Current sourced tariff rules are required before a PKR checkout can be placed');
+          error.code = 'TARIFF_UNAVAILABLE';
+          throw error;
+        }
+        const gstPct = Number(gstRule.ratePct);
+        const deliveryFeePkr = Number(deliveryRule.amountPkr);
+        const freeDeliveryThresholdPkr = Number(thresholdRule.amountPkr);
+        if (!Number.isSafeInteger(gstPct) || gstPct < 0 || gstPct > 100 ||
+            !Number.isSafeInteger(deliveryFeePkr) || deliveryFeePkr < 0 ||
+            !Number.isSafeInteger(freeDeliveryThresholdPkr) || freeDeliveryThresholdPkr < 0) {
+          throw new TypeError('Active tariff rule values are invalid');
+        }
+
+        const rankedHubs = HUB_RANKING[city];
+        if (!rankedHubs) throw new TypeError('Unsupported delivery city: ' + city);
+        const lines = [];
+        for (const item of normalizedItems) {
+          const productsFound = await repository.find('products', { sku: item.sku }, { limit: 1 });
+          const product = productsFound[0];
+          if (!product || product.status === 'inactive' || product.archivedAt) {
+            const error = new Error('Product not found or inactive: ' + item.sku);
+            error.code = 'PRODUCT_UNAVAILABLE';
+            throw error;
+          }
+          const unitExGstPkr = product.priceExGstPkr;
+          if (!Number.isSafeInteger(unitExGstPkr) || unitExGstPkr < 0) {
+            const error = new Error('Product does not have a valid PKR priceExGstPkr: ' + item.sku);
+            error.code = 'PRICE_UNAVAILABLE';
+            throw error;
+          }
+          const stockRows = await repository.find('stock', { sku: item.sku });
+          const byHub = new Map(stockRows.map((stock) => [stock.hubCode, stock]));
+          const eligible = rankedHubs
+            .map((hubCode) => byHub.get(hubCode))
+            .filter((stock) => stock && Number.isSafeInteger(stock.onHand) &&
+              Number.isSafeInteger(stock.reserved) && stock.onHand - stock.reserved >= item.qty);
+          lines.push({ ...item, product, unitExGstPkr, stockByHub: byHub, eligible });
+        }
+
+        const sharedHub = rankedHubs.find((hubCode) => lines.every((line) => {
+          const stock = line.stockByHub.get(hubCode);
+          return stock && stock.onHand - stock.reserved >= line.qty;
+        }));
+        const allocations = [];
+        let splitShipment = false;
+        if (sharedHub) {
+          for (const line of lines) allocations.push({ ...line, hubCode: sharedHub });
+        } else {
+          splitShipment = true;
+          for (const line of lines) {
+            const selected = line.eligible[0];
+            if (!selected) {
+              const error = new Error('Insufficient available stock for ' + line.sku);
+              error.code = 'OUT_OF_STOCK';
+              throw error;
+            }
+            allocations.push({ ...line, hubCode: selected.hubCode });
+          }
+        }
+
+        const pricedItems = allocations.map((line) => {
+          const unitPriceMinor = line.unitExGstPkr * 100;
+          const lineExMinor = unitPriceMinor * line.qty;
+          const lineGstMinor = Math.round(lineExMinor * gstPct / 100);
+          if (![unitPriceMinor, lineExMinor, lineGstMinor].every(Number.isSafeInteger)) {
+            throw new TypeError('PKR line amount exceeds the safe integer range');
+          }
+          return {
+            sku: line.sku,
+            name: line.product.name,
+            qty: line.qty,
+            unitExGstPkr: line.unitExGstPkr,
+            unitPriceMinor,
+            lineExMinor,
+            lineGstMinor,
+            hubCode: line.hubCode
+          };
+        });
+        const subtotalExMinor = pricedItems.reduce((sum, item) => sum + item.lineExMinor, 0);
+        const gstMinor = pricedItems.reduce((sum, item) => sum + item.lineGstMinor, 0);
+        const deliveryFeeChargedPkr = subtotalExMinor > freeDeliveryThresholdPkr * 100 ? 0 : deliveryFeePkr;
+        const deliveryFeeMinor = deliveryFeeChargedPkr * 100;
+        const totalMinor = subtotalExMinor + gstMinor + deliveryFeeMinor;
+        if (![subtotalExMinor, gstMinor, deliveryFeeMinor, totalMinor].every(Number.isSafeInteger)) {
+          throw new TypeError('PKR order totals exceed the safe integer range');
+        }
+
+        const orderId = 'ORD-' + randomUUID();
+        const orderCode = 'VS-' + randomUUID().slice(0, 8).toUpperCase();
+        const hubs = [...new Set(allocations.map((item) => item.hubCode))];
+        const reserveRows = new Map();
+        for (const allocation of allocations) {
+          const stock = allocation.stockByHub.get(allocation.hubCode);
+          if (!stock) throw new Error('Selected stock row disappeared during checkout');
+          reserveRows.set(stock.id, { stock, qty: (reserveRows.get(stock.id)?.qty || 0) + allocation.qty });
+        }
+        for (const { stock, qty } of reserveRows.values()) {
+          const history = await repository.find('movements', { sku: stock.sku, hubCode: stock.hubCode });
+          if (history.length === 0 && stock.onHand > 0) {
+            await repository.insert('movements', {
+              id: 'MOV-' + randomUUID(), sku: stock.sku, hubCode: stock.hubCode,
+              type: 'RECEIVE', qty: stock.onHand, reason: 'opening_balance',
+              refType: 'opening_balance', refId: 'legacy-opening:' + stock.sku + ':' + stock.hubCode,
+              actorId: 'system', at: nowIso
+            });
+          }
+          const updated = await repository.update('stock', stock.id, {
+            ...stock,
+            reserved: stock.reserved + qty
+          });
+          if (!updated) throw new Error('Unable to reserve stock for ' + stock.sku);
+          await repository.insert('movements', {
+            id: 'MOV-' + randomUUID(), sku: stock.sku, hubCode: stock.hubCode,
+            type: 'RESERVE', qty, reason: 'checkout', refType: 'order', refId: orderId,
+            actorId: input.actorId || buyerId, at: nowIso
+          });
+        }
+
+        const paymentState = paymentMethod === 'COD' ? 'pending_cod' : 'pending';
+        const order = {
+          id: orderId,
+          code: orderCode,
+          buyerId,
+          userId: buyerId,
+          ...(input.buyerEmail ? { buyerEmail: input.buyerEmail } : {}),
+          ...(input.customerName ? { customerName: input.customerName } : {}),
+          city,
+          address,
+          items: pricedItems.map(({ sku, name, qty, unitExGstPkr }) => ({ sku, name, qty, unitExGstPkr })),
+          currency: 'PKR',
+          price: {
+            currency: 'PKR', subtotalExMinor, gstMinor, deliveryFeeMinor, totalMinor,
+            subtotalEx: Math.round(subtotalExMinor / 100),
+            gst: Math.round(gstMinor / 100),
+            deliveryFee: deliveryFeeChargedPkr,
+            totalPkr: Math.round(totalMinor / 100),
+            simulated: [gstRule, deliveryRule, thresholdRule].some((rule) => rule.source === 'demo-estimate')
+          },
+          subtotalExMinor, gstMinor, deliveryFeeMinor, totalMinor,
+          paymentMethod,
+          paymentState,
+          paymentSimulated: paymentMethod !== 'COD',
+          hubs,
+          splitShipment,
+          status: 'PLACED',
+          timeline: [{ status: 'PLACED', at: nowIso, actorId: input.actorId || buyerId, note: 'Order placed' }],
+          createdAt: nowIso,
+          updatedAt: nowIso
+        };
+        await repository.insert('orders', order);
+        const savedItems = [];
+        for (const [index, item] of pricedItems.entries()) {
+          savedItems.push(await repository.insert('orderItems', {
+            id: 'ITEM-' + randomUUID(), orderId,
+            sku: item.sku, name: item.name, qty: item.qty,
+            unitExGstPkr: item.unitExGstPkr,
+            unitPriceMinor: item.unitPriceMinor,
+            lineExMinor: item.lineExMinor,
+            lineGstMinor: item.lineGstMinor,
+            hubCode: item.hubCode,
+            currency: 'PKR',
+            lineNumber: index + 1
+          }));
+        }
+        const invoice = {
+          id: 'INV-' + randomUUID(),
+          code: 'INV-' + orderCode,
+          orderId,
+          buyerId,
+          lines: pricedItems.map(({ sku, name, qty, unitExGstPkr, lineExMinor, lineGstMinor }) => ({
+            sku, name, qty, unitExGstPkr, lineExMinor, lineGstMinor
+          })),
+          gstMinor,
+          totalMinor,
+          currency: 'PKR',
+          issuedAt: nowIso
+        };
+        await repository.insert('invoices', invoice);
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: input.actorId || buyerId,
+          actorRole: input.actorRole || 'buyer', action: 'order.create',
+          targetType: 'order', targetId: orderId,
+          meta: { code: orderCode, totalMinor, paymentMethod },
+          at: nowIso
+        });
+        const response = { order, items: savedItems, invoice };
+        await repository.insert('idempotencyKeys', {
+          id: 'IDEM-' + idempotencyKey, key: idempotencyKey,
+          requestHash, response, at: nowIso
+        });
+        return response;
+      });
+
+      try {
+        return await execute();
+      } catch (error) {
+        if (error.code !== 'DUPLICATE_KEY' && error.code !== 11000) throw error;
+        const prior = await adapter.find('idempotencyKeys', { key: idempotencyKey }, { limit: 1 });
+        if (!prior.length) throw error;
+        if (prior[0].requestHash !== requestHash) {
+          const conflict = new Error('Idempotency key has already been used for a different request');
+          conflict.code = 'KEY_REUSED';
+          throw conflict;
+        }
+        return prior[0].response;
+      }
+    },
+
     async createWithItems(orderInput, itemInputs) {
       const buyerId = requiredString(orderInput.buyerId || orderInput.userId, 'buyerId');
       const city = requiredString(orderInput.city, 'city');
