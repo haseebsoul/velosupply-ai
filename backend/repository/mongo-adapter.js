@@ -27,7 +27,7 @@ const TTL_COLLECTIONS = new Set(['healthChecks', 'idempotencyKeys', 'loginAttemp
 
 function convertMinorUnitsToLong(value) {
   if (Array.isArray(value)) return value.map(convertMinorUnitsToLong);
-  if (!value || typeof value !== 'object') return value;
+  if (!value || typeof value !== 'object' || value instanceof Date) return value;
   const result = {};
   for (const [key, child] of Object.entries(value)) {
     if (/Minor$/.test(key) && typeof child === 'number' && Number.isSafeInteger(child)) {
@@ -41,7 +41,8 @@ function convertMinorUnitsToLong(value) {
 
 function convertLongsToNumbers(value) {
   if (Array.isArray(value)) return value.map(convertLongsToNumbers);
-  if (!value || typeof value !== 'object') return value;
+  if (!value || typeof value !== 'object' || value instanceof Date) return value;
+  if (value._bsontype && value._bsontype !== 'Long') return value;
   if (value._bsontype === 'Long') {
     const number = value.toNumber();
     if (!Number.isSafeInteger(number)) throw new RangeError('MongoDB integer minor-unit value exceeds JavaScript safe integer range');
