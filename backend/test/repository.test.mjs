@@ -104,6 +104,20 @@ class FakeDatabase {
     if (!this.collections.has(name)) this.collections.set(name, new FakeCollection());
     return this.collections.get(name);
   }
+  listCollections(filter = {}) {
+    return { hasNext: async () => this.collections.has(filter.name) };
+  }
+  async createCollection(name, options = {}) {
+    if (this.collections.has(name)) {
+      const error = new Error('NamespaceExists');
+      error.code = 48;
+      throw error;
+    }
+    const collection = new FakeCollection();
+    collection.options = options;
+    this.collections.set(name, collection);
+    return collection;
+  }
 }
 
 describe('collection repository adapters', () => {
@@ -264,6 +278,8 @@ describe('collection repository adapters', () => {
     expect(await adapter.count('stockMovements')).toBe(1);
     expect(await adapter.count('movements')).toBe(1);
     expect(database.collection('stockMovements').documents.has('MOV-1')).toBe(true);
+    expect(database.collection('users').options.validationAction).toBe('error');
+    expect(database.collection('stockMovements').options.validator.$jsonSchema.required).toContain('refId');
     expect(database.collection('movements').documents.size).toBe(0);
     await expect(adapter.remove('movements', 'MOV-1')).rejects.toThrow('append-only');
   });
