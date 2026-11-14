@@ -881,20 +881,23 @@ app.post('/api/inventory/transfer', requireRoles('admin', 'operator'), validate(
   }
 }));
 
-app.get('/api/returns', (req, res) => {
-  const rows = db.returns || [];
+app.get('/api/returns', asyncRoute(async (req, res) => {
+  const rows = repository ? await repository.find('returns', {}) : (db.returns || []);
   if (req.user.role === 'admin' || req.user.role === 'operator') return res.json(rows);
   return res.json(rows.filter((entry) => entry.buyerId === req.user.id));
-});
+}));
 app.post('/api/orders/:id/cancel', asyncRoute(async (req, res) => {
-  const order = findById(db.orders, req.params.id, 'Order');
+  const order = repository ? await repository.findById('orders', req.params.id) : findById(db.orders, req.params.id, 'Order');
+  if (!order) return res.status(404).json({ error: 'Order not found' });
   if (req.user.role !== 'admin' && req.user.role !== 'operator' &&
       order.buyerId !== req.user.id && order.userId !== req.user.id) {
     return res.status(403).json({ error: 'You may only cancel your own order' });
   }
+  const idempotencyKey = req.get('Idempotency-Key');
+  if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for order cancellation' });
   try {
     const updated = await domainRepositories.orders.advanceStatus(order.id, 'CANCELLED', {
-      id: req.user.id, role: req.user.role
+      id: req.user.id, role: req.user.role, idempotencyKey
     });
     db = await repository.readState();
     publish('ORDER_STATUS', `Order ${updated.code || updated.id} cancelled and reserved stock released.`, 'INFO', { order: updated });
@@ -902,11 +905,13 @@ app.post('/api/orders/:id/cancel', asyncRoute(async (req, res) => {
     return res.json({ order: updated });
   } catch (error) {
     if (error.code === 'INVALID_TRANSITION') return res.status(409).json({ error: error.code, message: error.message });
+    if (error.code === 'KEY_REUSED') return res.status(422).json({ error: error.code, message: error.message });
     throw error;
   }
 }));
 app.post('/api/orders/:id/return', validate(returnRequestSchema), asyncRoute(async (req, res) => {
-  const order = findById(db.orders, req.params.id, 'Order');
+  const order = repository ? await repository.findById('orders', req.params.id) : findById(db.orders, req.params.id, 'Order');
+  if (!order) return res.status(404).json({ error: 'Order not found' });
   if (req.user.role !== 'admin' && req.user.role !== 'operator' &&
       order.buyerId !== req.user.id && order.userId !== req.user.id) {
     return res.status(403).json({ error: 'You may only return your own order' });
@@ -939,9 +944,11 @@ app.post('/api/returns/:id/decision', requireRoles('admin', 'operator'), validat
   }
 }));
 app.post('/api/returns/:id/receive', requireRoles('admin', 'operator'), validate(returnReceiveSchema), asyncRoute(async (req, res) => {
+  const idempotencyKey = req.get('Idempotency-Key');
+  if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for return inventory receipt' });
   try {
     const result = await domainRepositories.orders.receiveReturn(req.params.id, req.body.hubCode, {
-      id: req.user.id, role: req.user.role
+      id: req.user.id, role: req.user.role, idempotencyKey
     });
     if (!result) return res.status(404).json({ error: 'Return not found' });
     db = await repository.readState();
@@ -954,9 +961,14 @@ app.post('/api/returns/:id/receive', requireRoles('admin', 'operator'), validate
   }
 }));
 app.patch('/api/orders/:id/status', requireRoles('admin', 'operator'), validate(orderStatusSchema), asyncRoute(async (req, res) => {
+  const requiresIdempotency = ['CANCELLED', 'DISPATCHED'].includes(req.body.status);
+  const idempotencyKey = req.get('Idempotency-Key');
+  if (requiresIdempotency && !idempotencyKey) {
+    return res.status(400).json({ error: 'Idempotency-Key header is required for stock-changing order transitions' });
+  }
   try {
     const updated = await domainRepositories.orders.advanceStatus(req.params.id, req.body.status, {
-      id: req.user.id, role: req.user.role
+      id: req.user.id, role: req.user.role, idempotencyKey
     });
     if (!updated) return res.status(404).json({ error: 'Order not found' });
     db = await repository.readState();
@@ -966,6 +978,7 @@ app.patch('/api/orders/:id/status', requireRoles('admin', 'operator'), validate(
   } catch (error) {
     if (error.code === 'INVALID_TRANSITION') return res.status(409).json({ error: error.code, message: error.message });
     if (error.code === 'STOCK_MISMATCH') return res.status(409).json({ error: error.code, message: error.message });
+    if (error.code === 'KEY_REUSED') return res.status(422).json({ error: error.code, message: error.message });
     throw error;
   }
 }));
