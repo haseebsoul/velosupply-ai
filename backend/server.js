@@ -823,24 +823,11 @@ app.delete('/api/admin/users/:id', requireRoles('admin'), asyncRoute(async (req,
 app.patch('/api/inventory/:id', requireRoles('admin', 'operator'), validate(inventoryUpdateSchema), asyncRoute(async (req, res) => {
   const product = repository ? await repository.findById('products', req.params.id) : findById(db.products, req.params.id, 'Product');
   if (!product || product.archivedAt) return res.status(404).json({ error: 'Product not found' });
-  if (req.body.stock !== undefined && req.body.stock !== product.stock) {
-    const idempotencyKey = req.get('Idempotency-Key');
-    if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for inventory writes' });
-    try {
-      await domainRepositories.stockMovements.adjust({
-        sku: product.sku,
-        hubCode: product.warehouse_hub || 'unassigned',
-        targetOnHand: req.body.stock,
-        reason: req.body.reason,
-        actorId: req.user.id,
-        actorRole: req.user.role,
-        idempotencyKey
-      });
-    } catch (error) {
-      if (error.code === 'NEGATIVE_STOCK') return res.status(409).json({ error: 'NEGATIVE_STOCK', message: error.message });
-      if (error.code === 'KEY_REUSED') return res.status(422).json({ error: 'KEY_REUSED', message: error.message });
-      throw error;
-    }
+
+  const stockChanged = req.body.stock !== undefined && req.body.stock !== product.stock;
+  const idempotencyKey = req.get('Idempotency-Key');
+  if (stockChanged && !idempotencyKey) {
+    return res.status(400).json({ error: 'Idempotency-Key header is required for inventory writes' });
   }
   const productChanges = {};
   if (req.body.price !== undefined) {
@@ -848,15 +835,39 @@ app.patch('/api/inventory/:id', requireRoles('admin', 'operator'), validate(inve
     productChanges.priceExGstPkr = req.body.priceExGstPkr ?? req.body.price;
   }
   if (req.body.priceExGstPkr !== undefined) productChanges.priceExGstPkr = req.body.priceExGstPkr;
-  if (Object.keys(productChanges).length) {
-    await domainRepositories.products.update(product.id, productChanges, { id: req.user.id, role: req.user.role });
+
+  try {
+    await repository.withTransaction(async () => {
+      if (stockChanged) {
+        await domainRepositories.stockMovements.adjust({
+          sku: product.sku,
+          hubCode: product.warehouse_hub || 'unassigned',
+          targetOnHand: req.body.stock,
+          reason: req.body.reason,
+          actorId: req.user.id,
+          actorRole: req.user.role,
+          idempotencyKey
+        });
+      }
+      if (Object.keys(productChanges).length) {
+        await domainRepositories.products.update(product.id, productChanges, {
+          id: req.user.id, role: req.user.role
+        });
+      }
+    });
+  } catch (error) {
+    if (error.code === 'NEGATIVE_STOCK') return res.status(409).json({ error: 'NEGATIVE_STOCK', message: error.message });
+    if (error.code === 'KEY_REUSED') return res.status(422).json({ error: 'KEY_REUSED', message: error.message });
+    throw error;
   }
+
   db = await repository.readState();
   const updatedProduct = findById(db.products, req.params.id, 'Product');
   addLog(`Inventory updated for ${updatedProduct.sku}.`, 'INFO', 'INVENTORY', { productId: updatedProduct.id });
   await persist();
   res.json({ product: updatedProduct });
 }));
+
 app.get('/api/inventory/:id/ledger', requireRoles('admin', 'operator'), asyncRoute(async (req, res) => {
   const product = repository ? await repository.findById('products', req.params.id) : findById(db.products, req.params.id, 'Product');
   if (!product) return res.status(404).json({ error: 'Product not found' });
