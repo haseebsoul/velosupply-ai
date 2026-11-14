@@ -31,10 +31,56 @@ function createDomainRepositories(adapter) {
         createdAt: input.createdAt || new Date().toISOString()
       });
     },
-    async softDelete(id, at = new Date().toISOString()) {
-      const user = await adapter.findById('users', id);
-      if (!user) return null;
-      return adapter.update('users', id, { isActive: false, deletedAt: at });
+    async changeRole(id, role, actor) {
+      if (!BUYER_ROLES.has(role)) throw new TypeError('Unsupported user role');
+      return adapter.withTransaction(async ({ repository }) => {
+        const user = await repository.findById('users', id);
+        if (!user) return null;
+        const activeAdmins = await repository.find('users', { role: 'admin', isActive: true });
+        if (role === 'admin' && user.role !== 'admin' && activeAdmins.length) {
+          const error = new Error('ADMIN_EXISTS');
+          error.code = 'ADMIN_EXISTS';
+          throw error;
+        }
+        if (user.role === 'admin' && role !== 'admin' && activeAdmins.length <= 1) {
+          const error = new Error('The last administrator cannot be demoted');
+          error.code = 'LAST_ADMIN';
+          throw error;
+        }
+        const at = new Date().toISOString();
+        const updated = await repository.update('users', id, { role, updatedAt: at });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: actor.id, actorRole: actor.role,
+          action: 'user.role_update', targetType: 'user', targetId: id,
+          meta: { role }, at
+        });
+        return updated;
+      });
+    },
+    async softDelete(id, actor, at = new Date().toISOString()) {
+      return adapter.withTransaction(async ({ repository }) => {
+        const user = await repository.findById('users', id);
+        if (!user) return null;
+        if (user.isActive === false || user.deletedAt) {
+          const error = new Error('User account is already inactive');
+          error.code = 'USER_INACTIVE';
+          throw error;
+        }
+        if (user.role === 'admin') {
+          const activeAdmins = await repository.find('users', { role: 'admin', isActive: true });
+          if (activeAdmins.length <= 1) {
+            const error = new Error('The last administrator cannot be deleted');
+            error.code = 'LAST_ADMIN';
+            throw error;
+          }
+        }
+        const updated = await repository.update('users', id, { isActive: false, deletedAt: at, updatedAt: at });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: actor.id, actorRole: actor.role,
+          action: 'user.soft_delete', targetType: 'user', targetId: id, meta: {}, at
+        });
+        return updated;
+      });
     }
   };
 
@@ -64,10 +110,34 @@ function createDomainRepositories(adapter) {
         archivedAt: null, createdAt: input.createdAt || new Date().toISOString()
       });
     },
-    async archive(id, at = new Date().toISOString()) {
-      const product = await adapter.findById('products', id);
-      if (!product) return null;
-      return adapter.update('products', id, { archivedAt: at });
+    async update(id, changes, actor) {
+      const allowed = ['name', 'category', 'description', 'priceExGstPkr', 'leadDays', 'status', 'featured', 'supplierId'];
+      for (const key of Object.keys(changes)) if (!allowed.includes(key)) throw new TypeError('Unsupported product field: ' + key);
+      if (changes.priceExGstPkr !== undefined) integer(changes.priceExGstPkr, 'priceExGstPkr');
+      if (changes.leadDays !== undefined) integer(changes.leadDays, 'leadDays');
+      return adapter.withTransaction(async ({ repository }) => {
+        const product = await repository.findById('products', id);
+        if (!product) return null;
+        const at = new Date().toISOString();
+        const updated = await repository.update('products', id, { ...changes, updatedAt: at });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: actor.id, actorRole: actor.role,
+          action: 'product.update', targetType: 'product', targetId: id, meta: { fields: Object.keys(changes) }, at
+        });
+        return updated;
+      });
+    },
+    async archive(id, actor, at = new Date().toISOString()) {
+      return adapter.withTransaction(async ({ repository }) => {
+        const product = await repository.findById('products', id);
+        if (!product) return null;
+        const updated = await repository.update('products', id, { archivedAt: at, updatedAt: at });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: actor.id, actorRole: actor.role,
+          action: 'product.archive', targetType: 'product', targetId: id, meta: {}, at
+        });
+        return updated;
+      });
     }
   };
 
