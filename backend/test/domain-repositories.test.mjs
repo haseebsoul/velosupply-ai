@@ -238,6 +238,28 @@ describe('domain repositories and immutable ledgers', () => {
       .rejects.toMatchObject({ code: 'INVALID_TRANSITION' });
   });
 
+  it('snapshots both legacy on-hand and reserved balances before a first adjustment movement', async () => {
+    const { adapter, domain } = await harness({
+      warehouses: [{ id: 'WH-KHI', code: 'KHI', name: 'Karachi Hub', seedOrigin: true }],
+      products: [{
+        id: 'PROD-LEGACY', sku: 'LEGACY-1', name: 'Legacy stock item',
+        priceExGstPkr: 1000, stock: 5, reserved: 2, available: 3,
+        warehouse_hub: 'KHI', status: 'active'
+      }],
+      stock: [{ id: 'LEGACY-1:KHI', sku: 'LEGACY-1', hubCode: 'KHI', onHand: 5, reserved: 2 }]
+    });
+    await domain.stockMovements.adjust({
+      sku: 'LEGACY-1', hubCode: 'KHI', targetOnHand: 6,
+      reason: 'cycle_count', actorId: 'operator-1', actorRole: 'operator'
+    });
+    const movements = await adapter.find('movements', { sku: 'LEGACY-1', hubCode: 'KHI' });
+    expect(movements.map((movement) => movement.type)).toEqual(['RECEIVE', 'RESERVE', 'ADJUST']);
+    expect(await domain.stockMovements.reconcile('LEGACY-1', 'KHI', 6, 2)).toMatchObject({
+      onHand: 6, reserved: 2, available: 4, matches: true, movementCount: 3
+    });
+    expect(await adapter.findById('stock', 'LEGACY-1:KHI')).toMatchObject({ onHand: 6, reserved: 2 });
+  });
+
   it('reconciles on-hand stock from append-only movements', async () => {
     const { adapter, domain } = await harness();
     await domain.stockMovements.append({ sku: 'SKU-1', hubCode: 'WH-1', type: 'RECEIVE', reason: 'opening_balance', qty: 10, refType: 'opening_balance', refId: 'open-1' });
