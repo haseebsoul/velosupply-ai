@@ -321,6 +321,7 @@ describe('collection repository adapters', () => {
     const adapterB = createMongoAdapter({ client: clientB, database });
     await adapterB.initialize({ fallbackState: initial });
     const staleSnapshot = await adapterB.readState();
+    staleSnapshot.logs.push({ id: 'LOG-STALE', message: 'stale writer', timestamp: '2026-11-14T00:00:00.000Z' });
 
     await adapterA.insert('users', {
       id: 'USER-CONCURRENT', email: 'concurrent@example.com',
