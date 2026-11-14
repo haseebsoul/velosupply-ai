@@ -134,9 +134,36 @@ describe('collection-backed order lifecycle, rollback and refund status', () => 
       expect(response.status).toBe(200);
       expect(response.body.order.status).toBe(status);
     }
-    expect((await adapter.findById('orders', orderId)).paymentState).toBe('paid');
+    const deliveredOrder = await adapter.findById('orders', orderId);
+    expect(deliveredOrder.paymentState).toBe('pending_cod');
     expect(await adapter.count('movements', { type: 'SHIP', refId: orderId })).toBe(1);
     expect(await adapter.findById('stock', 'SKU-1:HUB-KHI')).toMatchObject({ onHand: 8, reserved: 0 });
+
+    const blockedRefund = await supertest(server.app).post('/api/orders/' + orderId + '/refunds').set(buyerAuth)
+      .set('Idempotency-Key', 'refund-before-cash-1').send({ reason: 'Cash has not been recorded yet' });
+    expect(blockedRefund.status).toBe(409);
+    expect(blockedRefund.body.error).toBe('REFUND_NOT_ELIGIBLE');
+
+    const wrongAmount = await supertest(server.app).post('/api/orders/' + orderId + '/payment/collection')
+      .set(adminAuth).set('Idempotency-Key', 'cod-wrong-amount-1')
+      .send({ amountMinor: deliveredOrder.totalMinor - 1, receiptReference: 'COD-RECEIPT-001' });
+    expect(wrongAmount.status).toBe(409);
+    expect(wrongAmount.body.error).toBe('PAYMENT_AMOUNT_MISMATCH');
+    expect((await adapter.findById('orders', orderId)).paymentState).toBe('pending_cod');
+
+    const collected = await supertest(server.app).post('/api/orders/' + orderId + '/payment/collection')
+      .set(adminAuth).set('Idempotency-Key', 'cod-collected-1')
+      .send({ amountMinor: deliveredOrder.totalMinor, receiptReference: 'COD-RECEIPT-001' });
+    expect(collected.status).toBe(200);
+    expect(collected.body).toMatchObject({
+      verification: 'operator-attestation',
+      order: { paymentState: 'paid_manual_cod' },
+      paymentCollection: {
+        state: 'collected', method: 'COD', amountMinor: deliveredOrder.totalMinor,
+        currency: 'PKR', receiptReference: 'COD-RECEIPT-001', verification: 'operator-attestation'
+      }
+    });
+    expect(await adapter.count('auditLogs', { action: 'payment.cod_collection_recorded' })).toBe(1);
 
     const request = await supertest(server.app).post('/api/orders/' + orderId + '/refunds').set(buyerAuth)
       .set('Idempotency-Key', 'refund-route-1').send({ reason: 'Warranty return' });
