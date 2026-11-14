@@ -13,7 +13,7 @@ afterEach(async () => {
   directory = null;
 });
 
-async function harness() {
+async function harness(overrides = {}) {
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'velosupply-domain-'));
   const adapter = createFileAdapter({
     filePath: path.join(directory, 'db.json'),
@@ -26,7 +26,8 @@ async function harness() {
         { id: 'FREE-DEL-DEMO-1', code: 'PK-FREE-DELIVERY-THRESHOLD', version: 1, amountPkr: 150000, source: 'demo-estimate' }
       ], logs: [],
       newsletter: [], rewardClaims: [], metrics: {}, telemetry: { tick: 0 },
-      sre: { audit: [], incidents: [], alerts: [], healthChecks: [], loginAttempts: [] }
+      sre: { audit: [], incidents: [], alerts: [], healthChecks: [], loginAttempts: [] },
+      ...overrides
     })
   });
   await adapter.initialize();
@@ -99,6 +100,78 @@ describe('domain repositories and immutable ledgers', () => {
       [{ sku: 'SKU-1', name: 'Server Rack', qty: 1, unitExGstPkr: 150001 }]
     );
     expect(result.order.price.deliveryFeeMinor).toBe(0);
+  });
+
+  it('places a canonical PKR checkout with a reservation, separate order item, invoice and audit entry', async () => {
+    const { adapter, domain } = await harness({
+      warehouses: [{ id: 'HUB-KHI', code: 'HUB-KHI', name: 'Port Qasim Hub', city: 'Karachi', seedOrigin: true }],
+      products: [{
+        id: 'PROD-1', sku: 'SKU-1', name: 'Hybrid Solar Inverter',
+        priceExGstPkr: 1000, price: 1000, stock: 10,
+        warehouse_hub: 'HUB-KHI', status: 'active'
+      }]
+    });
+    const result = await domain.orders.checkout({
+      buyerId: 'buyer-1', buyerEmail: 'buyer@example.com', customerName: 'Buyer',
+      city: 'Karachi', address: 'Street 1, Karachi', paymentMethod: 'COD',
+      items: [{ sku: 'SKU-1', qty: 2 }], idempotencyKey: 'checkout-001'
+    });
+    expect(result.order).toMatchObject({
+      buyerId: 'buyer-1', city: 'Karachi', status: 'PLACED',
+      paymentState: 'pending_cod', splitShipment: false,
+      hubs: ['HUB-KHI'], currency: 'PKR'
+    });
+    expect(result.order.price.totalMinor).toBe(271000);
+    expect(result.items).toHaveLength(1);
+    expect(result.invoice.orderId).toBe(result.order.id);
+    expect(await adapter.count('orderItems', { orderId: result.order.id })).toBe(1);
+    expect(await adapter.count('invoices', { orderId: result.order.id })).toBe(1);
+    expect(await adapter.count('auditLogs', { action: 'order.create' })).toBe(1);
+    const stock = await adapter.find('stock', { sku: 'SKU-1', hubCode: 'HUB-KHI' });
+    expect(stock[0]).toMatchObject({ onHand: 10, reserved: 2 });
+    const movements = await adapter.find('movements', { sku: 'SKU-1', hubCode: 'HUB-KHI' });
+    expect(movements.map((entry) => entry.type)).toEqual(['RECEIVE', 'RESERVE']);
+  });
+
+  it('returns the original checkout response for the same idempotency key and rejects changed payloads', async () => {
+    const { adapter, domain } = await harness({
+      warehouses: [{ id: 'HUB-KHI', code: 'HUB-KHI', name: 'Port Qasim Hub', city: 'Karachi', seedOrigin: true }],
+      products: [{
+        id: 'PROD-1', sku: 'SKU-1', name: 'Hybrid Solar Inverter',
+        priceExGstPkr: 1000, stock: 10, warehouse_hub: 'HUB-KHI', status: 'active'
+      }]
+    });
+    const input = {
+      buyerId: 'buyer-1', city: 'Karachi', address: 'Street 1, Karachi',
+      paymentMethod: 'COD', items: [{ sku: 'SKU-1', qty: 2 }], idempotencyKey: 'checkout-002'
+    };
+    const first = await domain.orders.checkout(input);
+    const repeated = await domain.orders.checkout(input);
+    expect(repeated.order.id).toBe(first.order.id);
+    await expect(domain.orders.checkout({
+      ...input, items: [{ sku: 'SKU-1', qty: 3 }]
+    })).rejects.toMatchObject({ code: 'KEY_REUSED' });
+    expect(await adapter.count('orders')).toBe(1);
+    expect(await adapter.count('movements')).toBe(2);
+  });
+
+  it('rolls back checkout reservation and all records when inventory is insufficient', async () => {
+    const { adapter, domain } = await harness({
+      warehouses: [{ id: 'HUB-KHI', code: 'HUB-KHI', name: 'Port Qasim Hub', city: 'Karachi', seedOrigin: true }],
+      products: [{
+        id: 'PROD-1', sku: 'SKU-1', name: 'Hybrid Solar Inverter',
+        priceExGstPkr: 1000, stock: 1, warehouse_hub: 'HUB-KHI', status: 'active'
+      }]
+    });
+    await expect(domain.orders.checkout({
+      buyerId: 'buyer-1', city: 'Karachi', address: 'Street 1, Karachi',
+      paymentMethod: 'COD', items: [{ sku: 'SKU-1', qty: 2 }], idempotencyKey: 'checkout-003'
+    })).rejects.toMatchObject({ code: 'OUT_OF_STOCK' });
+    expect(await adapter.count('orders')).toBe(0);
+    expect(await adapter.count('orderItems')).toBe(0);
+    expect(await adapter.count('invoices')).toBe(0);
+    expect(await adapter.count('movements')).toBe(0);
+    expect((await adapter.find('stock', { sku: 'SKU-1', hubCode: 'HUB-KHI' }))[0].reserved).toBe(0);
   });
 
   it('reconciles on-hand stock from append-only movements', async () => {
