@@ -1110,7 +1110,131 @@ function createDomainRepositories(adapter) {
     }
   };
 
-  return { users, warehouses, products, orders, stockMovements, auditLogs, tariffRules };
+  const purchaseOrders = {
+    async createDraft(input) {
+      const sku = requiredString(input.sku, 'sku');
+      const hubCode = requiredString(input.hubCode, 'hubCode');
+      const qty = integer(input.qty, 'qty', 1);
+      const actorId = requiredString(input.actorId, 'actorId');
+      return adapter.withTransaction(async ({ repository }) => runIdempotent(repository, input, async () => {
+        const productsFound = await repository.find('products', { sku }, { limit: 1 });
+        const product = productsFound[0];
+        if (!product || product.archivedAt || product.status === 'inactive') {
+          const error = new Error('Product not found or inactive: ' + sku);
+          error.code = 'PRODUCT_UNAVAILABLE';
+          throw error;
+        }
+        const warehousesFound = await repository.find('warehouses', { code: hubCode }, { limit: 1 });
+        if (!warehousesFound.length) {
+          const error = new Error('Purchase order warehouse not found: ' + hubCode);
+          error.code = 'WAREHOUSE_NOT_FOUND';
+          throw error;
+        }
+        const supplier = input.supplierId
+          ? await repository.findById('suppliers', input.supplierId)
+          : await repository.findById('suppliers', product.supplierId);
+        if (!supplier) {
+          const error = new Error('A valid assigned supplier is required to create a purchase order');
+          error.code = 'SUPPLIER_NOT_FOUND';
+          throw error;
+        }
+        const unitExGstPkr = integer(product.priceExGstPkr, 'priceExGstPkr', 1);
+        const totalPkr = unitExGstPkr * qty;
+        if (!Number.isSafeInteger(totalPkr)) throw new TypeError('Purchase order total exceeds safe integer range');
+        const at = new Date().toISOString();
+        const id = 'PO-' + randomUUID();
+        const code = 'PO-' + at.slice(0, 10).replace(/-/g, '') + '-' + randomUUID().slice(0, 6).toUpperCase();
+        const record = await repository.insert('purchaseOrders', {
+          id, code, supplierId: supplier.id, supplierName: supplier.name,
+          lines: [{ sku, qty, unitExGstPkr, totalMinor: totalPkr * 100 }],
+          hubCode, status: 'draft',
+          totalPkr, totalMinor: totalPkr * 100,
+          createdBy: actorId, createdAt: at, updatedAt: at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId, actorRole: input.actorRole || 'operator',
+          action: 'purchase_order.create', targetType: 'purchase_order', targetId: id,
+          meta: { code, sku, qty, supplierId: supplier.id, hubCode, totalPkr }, at
+        });
+        return record;
+      }));
+    },
+
+    async transition(id, nextStatus, actor, idempotencyKey) {
+      const actorId = requiredString(actor.id, 'actor.id');
+      if (!['approved', 'shipped', 'received'].includes(nextStatus)) {
+        throw new TypeError('Unsupported purchase order transition');
+      }
+      return adapter.withTransaction(async ({ repository }) => runIdempotent(repository, {
+        purchaseOrderId: id, nextStatus, actorId, actorRole: actor.role, idempotencyKey
+      }, async () => {
+        const po = await repository.findById('purchaseOrders', id);
+        if (!po) return null;
+        const allowed = {
+          draft: ['approved'],
+          approved: ['shipped'],
+          shipped: ['received']
+        };
+        if (!(allowed[String(po.status).toLowerCase()] || []).includes(nextStatus)) {
+          const error = new Error('Invalid purchase order transition: ' + po.status + ' -> ' + nextStatus);
+          error.code = 'INVALID_TRANSITION';
+          throw error;
+        }
+        if (nextStatus === 'approved' && Number(po.totalPkr || 0) > 2000000 && actor.role !== 'admin') {
+          const error = new Error('Purchase orders above Rs 2,000,000 require administrator approval');
+          error.code = 'ADMIN_APPROVAL_REQUIRED';
+          throw error;
+        }
+        const at = new Date().toISOString();
+        if (nextStatus === 'received') {
+          for (const line of po.lines || []) {
+            const sku = requiredString(line.sku, 'purchase order line sku');
+            const qty = integer(line.qty, 'purchase order line qty', 1);
+            const stockRows = await repository.find('stock', { sku, hubCode: po.hubCode }, { limit: 1 });
+            const stock = stockRows[0] || {
+              id: sku + ':' + po.hubCode, sku, hubCode: po.hubCode,
+              onHand: 0, reserved: 0
+            };
+            await ensureOpeningMovements(repository, stock, at);
+            if (stockRows.length) {
+              await repository.update('stock', stock.id, { ...stock, onHand: stock.onHand + qty });
+            } else {
+              await repository.insert('stock', { ...stock, onHand: qty });
+            }
+            const productsAtHub = await repository.find('products', { sku, warehouse_hub: po.hubCode });
+            for (const product of productsAtHub) {
+              await repository.update('products', product.id, {
+                stock: stock.onHand + qty,
+                reserved: stock.reserved,
+                available: stock.onHand + qty - stock.reserved,
+                updatedAt: at
+              });
+            }
+            await repository.insert('movements', {
+              id: 'MOV-' + randomUUID(), sku, hubCode: po.hubCode,
+              type: 'RECEIVE', qty, reason: 'purchase_order_received',
+              refType: 'purchase_order', refId: po.id, actorId, at
+            });
+          }
+        }
+        const updated = await repository.update('purchaseOrders', id, {
+          status: nextStatus,
+          ...(nextStatus === 'approved' ? { approvedBy: actorId, approvedAt: at } : {}),
+          ...(nextStatus === 'shipped' ? { shippedBy: actorId, shippedAt: at } : {}),
+          ...(nextStatus === 'received' ? { receivedBy: actorId, receivedAt: at } : {}),
+          updatedAt: at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId, actorRole: actor.role || 'operator',
+          action: 'purchase_order.' + nextStatus, targetType: 'purchase_order', targetId: id,
+          meta: { previousStatus: po.status, status: nextStatus }, at
+        });
+        return updated;
+      }));
+    }
+  };
+
+  return { users, warehouses, products, orders, stockMovements, purchaseOrders, auditLogs, tariffRules };
 }
 
 module.exports = { createDomainRepositories, BUYER_ROLES, MOVEMENT_TYPES };
