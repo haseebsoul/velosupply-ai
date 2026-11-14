@@ -478,13 +478,13 @@ The following implementation has been committed after the Phase 1 read-only audi
 - The inventory ledger is a projection of current stock and movement history. A first movement on legacy stock creates an opening-balance snapshot from the current count; it cannot reconstruct events before that timestamp.
 - HTTP checkout uses the Pakistan PKR workflow with source-tagged tariffs. Local `demo-estimate` GST/delivery rules are not official rates. Non-COD methods are stored as selected payment methods only; no actual payment request or custody of funds occurs.
 - User registration/login, role changes and account soft deletion use collection-backed user operations. Login attempts use the TTL-backed collection. Buyer filer state is explicitly `unverified` unless supplied by a trusted owner workflow.
-- Product/catalog/order/warehouse/log/stock-cover reads use current collection reads. Threat calculations use SHIP movement units and the 7/14-day window, days of cover, reorder point and recommendation quantity.
+- Product/catalog/order/warehouse/log/stock-cover reads use current collection reads. Threat calculations use SHIP movement units and the 7/14-day window, days of cover, reorder point and recommendation quantity. The Reports replenishment count uses available (unreserved) units against the reorder threshold.
 - The Pakistan demo seed mirrors SRS 8.1–8.4 and is synthetic only: 6 hubs, 12 specified SKUs, 26 demo role accounts (exactly 1 admin, 4 operators, 21 buyers), 5 fictional suppliers, 60 PKR demo orders over 45 days, 8 purchase orders, 5 incidents, 8 alerts, 150 audit entries and 6 messages. The 60 orders each have a reservation movement and the stock ledger is tested against the final stock/reserved projection. Production bootstrap remains empty.
-- Ancillary routes remain compatibility-state based: newsletter subscriptions, reward claims, scenario simulations and portions of SRE/telemetry. The MongoDB revision guard prevents silent lost updates, but those routes still require collection-specific repository operations and route-level tests. The local file adapter is intentionally single-process.
+- Ancillary routes remain compatibility-state based: newsletter subscriptions, reward claims, scenario simulations and portions of SRE/telemetry. The seeded Messages records are not yet exposed through message CRUD/read-state endpoints; the Messages page remains static demo content. Supplier master CRUD, full product/warehouse CRUD and Settings workflows are incomplete. The MongoDB revision guard prevents silent lost updates, but the remaining state routes still require collection-specific repository operations and route-level tests. The local file adapter is intentionally single-process.
 - Atlas application-driver connectivity, migration against the deployed host, backup restoration, external provider credentials and end-to-end production role acceptance have not been verified. Atlas Network Access needs the real backend egress IP/CIDR; a universal `0.0.0.0/0` rule is not used.
 - Payment, FX, email, FBR tariff ingestion, courier tracking/POD, CNIC verification and cyberattack detection remain owner/provider-dependent or unimplemented. Passing CI does not establish production readiness or completion of the full Pakistan Edition.
 
-## 19. Latest SRE verification
+## SRE verification at the v15 milestone (historical; newer v16 CI results are recorded in Section 21)
 
 The implementation was verified by GitHub Actions run [43523910861](https://github.com/haseebsoul/velosupply-ai/actions/runs/43523910861), on commit `dba575a57902c86678fccf827feffb122fc96c2e`.
 
@@ -534,7 +534,7 @@ No new cluster was created because the existing free cluster already satisfies t
 This direct Atlas inspection confirms the cluster and empty bootstrap record exist; it does not verify the user's local `.env`, GitHub deployment secrets, application IP allowlisting, or a live Express-to-Atlas runtime connection.
 
 
-## Repository Layer Follow-up (v16)
+## Initial repository-layer follow-up (v16; historical snapshot superseded by Section 18)
 
 - Added a collection map for the Section 12.1 domain collections and the extra application collections already present in runtime state.
 - Added a MongoDB adapter with per-collection CRUD, index creation, Atlas sessions/transactions, collection hydration, and differential collection persistence. The old application_state record remains read-only during migration.
@@ -546,11 +546,11 @@ This direct Atlas inspection confirms the cluster and empty bootstrap record exi
 - Added npm run migrate:state and repository tests for file CRUD/rollback, collection metadata separation, stock projection, legacy backup/migration, and fail-closed initialization.
 
 
-## v16 Domain Repository Follow-up
+## Initial v16 domain-repository follow-up (historical snapshot superseded by Section 18)
 
 - Added domain services for buyer soft-deletion, product archival, atomic order plus order-item creation, append-only stock movements in the SRS `movements` collection, stock reconciliation, append-only audit events and versioned tariff rules.
 - Domain order writes snapshot the SRS item fields, round each line to whole PKR, calculate GST per line at the configured/default 18 percent, apply the city delivery-fee table (free only above Rs 150,000 subtotal), and store the nested price breakdown. Buyer creation requires filer/non-filer status.
 - Movement records use the SRS fields: `sku`, `hubCode`, `type`, `qty`, `reason`, `refType`, `refId`, `actorId`, and `at`. The service implements RECEIVE, RESERVE, RELEASE, SHIP, ADJUST, TRANSFER_OUT, TRANSFER_IN and RETURN_IN effects, prevents negative available stock, and performs paired hub transfers in one adapter transaction. Append-only enforcement prevents update/delete/replacement; audit events are also append-only.
-- These services are covered by unit tests but **are not yet wired into the existing HTTP checkout, restock, inventory update, or admin routes**. Production stock behavior must not be described as ledger-backed until that integration is complete.
+- At this initial domain-service checkpoint, the services were not yet wired into HTTP handlers. This statement is historical and is superseded by the later route-integration status in Section 18: checkout, inventory adjustment, hub transfer, PO receipt and order lifecycle now use the append-only ledger.
 - The SRS calls for Zod validation at API/domain boundaries; these new service validations are explicit runtime checks, not yet a complete Zod schema layer for every collection.
 - No live Atlas runtime migration or persistence smoke test has been performed; the known Atlas IP allowlist gap remains.
