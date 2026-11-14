@@ -189,15 +189,27 @@ describe('domain repositories and immutable ledgers', () => {
     await expect(adapter.remove('movements', 'missing')).rejects.toThrow('append-only');
   });
 
-  it('moves stock between hubs with paired movements in one transaction', async () => {
-    const { adapter, domain } = await harness();
+  it('moves stock between hubs with paired movements and synchronized stock rows in one transaction', async () => {
+    const { adapter, domain } = await harness({
+      warehouses: [
+        { id: 'WH-KHI', code: 'KHI', name: 'Karachi Hub', seedOrigin: true },
+        { id: 'WH-LHE', code: 'LHE', name: 'Lahore Hub', seedOrigin: true }
+      ],
+      stock: [
+        { id: 'SKU-2:KHI', sku: 'SKU-2', hubCode: 'KHI', onHand: 8, reserved: 0 },
+        { id: 'SKU-2:LHE', sku: 'SKU-2', hubCode: 'LHE', onHand: 0, reserved: 0 }
+      ]
+    });
     await domain.stockMovements.append({ sku: 'SKU-2', hubCode: 'KHI', type: 'RECEIVE', reason: 'opening_balance', qty: 8, refType: 'opening_balance', refId: 'opening-2' });
     const transfer = await domain.stockMovements.transfer({ sku: 'SKU-2', fromHubCode: 'KHI', toHubCode: 'LHE', qty: 3, reason: 'hub_transfer', actorId: 'operator-1' });
     expect(transfer.transferOut.type).toBe('TRANSFER_OUT');
     expect(transfer.transferIn.type).toBe('TRANSFER_IN');
     expect(await domain.stockMovements.reconcile('SKU-2', 'KHI', 5, 0)).toMatchObject({ matches: true, onHand: 5 });
     expect(await domain.stockMovements.reconcile('SKU-2', 'LHE', 3, 0)).toMatchObject({ matches: true, onHand: 3 });
+    expect(await adapter.findById('stock', 'SKU-2:KHI')).toMatchObject({ onHand: 5 });
+    expect(await adapter.findById('stock', 'SKU-2:LHE')).toMatchObject({ onHand: 3 });
     expect(await adapter.count('movements', { refId: transfer.refId })).toBe(2);
+    expect(await adapter.count('auditLogs', { action: 'inventory.transfer' })).toBe(1);
   });
 
   it('rejects audit log updates and deletes and rejects replacement through writeState', async () => {
