@@ -1000,16 +1000,21 @@ app.patch('/api/orders/:id/status', requireRoles('admin', 'operator'), validate(
 }));
 
 app.post('/api/orders/:id/route', requireRoles('admin', 'operator'), asyncRoute(async (req, res) => {
-  const order = findById(db.orders, req.params.id, 'Order');
-  const hub = db.warehouses.filter((entry) => entry.status === 'online').sort((a, b) => a.latency - b.latency)[0];
-  if (!hub) return res.status(503).json({ error: 'No fulfillment warehouse is currently online' });
-  order.warehouse_hub = hub.id;
-  if (['pending', 'processing'].includes(order.status)) order.status = 'routed';
-  order.updatedAt = new Date().toISOString();
-  const event = publish('ORDER_ROUTED', `Order ${order.id} routed to ${hub.id}.`, 'INFO', { order });
-  sre.audit?.('order.route', req.user, { orderId: order.id, hubCode: hub.id });
-  await persist();
-  res.json({ order, event });
+  try {
+    const result = await domainRepositories.orders.confirmRoute(req.params.id, {
+      id: req.user.id, role: req.user.role
+    });
+    if (!result) return res.status(404).json({ error: 'Order not found' });
+    db = await repository.readState();
+    const order = result.order;
+    const event = publish('ORDER_ROUTED',
+      `Order ${order.code || order.id} fulfillment allocation confirmed for ${result.hubs.join(', ')}.`,
+      'INFO', { order });
+    res.json({ order, hubs: result.hubs, event });
+  } catch (error) {
+    if (error.code === 'ORDER_NOT_ALLOCATED') return res.status(409).json({ error: error.code, message: error.message });
+    throw error;
+  }
 }));
 
 app.post('/api/simulation/trigger', requireRoles('admin', 'operator'), validate(simulationSchema), asyncRoute(async (req, res) => {
