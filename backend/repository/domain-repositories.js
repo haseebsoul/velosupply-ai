@@ -1109,8 +1109,18 @@ function createDomainRepositories(adapter) {
     async receiveReturn(returnId, hubCodeInput, actor) {
       const hubCode = requiredString(hubCodeInput, 'hubCode');
       const actorId = requiredString(actor.id, 'actor.id');
+      const disposition = requiredString(actor.disposition, 'disposition');
+      if (actor.physicalReceiptConfirmed !== true || actor.conditionAssessed !== true ||
+          !['restockable', 'quarantine', 'damaged'].includes(disposition)) {
+        const error = new Error('Physical receipt, condition assessment and a valid stock disposition are required');
+        error.code = 'RECEIPT_ATTESTATION_REQUIRED';
+        throw error;
+      }
       return adapter.withTransaction(async ({ repository }) => runIdempotent(repository, {
-        returnId, hubCode, actorId, actorRole: actor.role, idempotencyKey: actor.idempotencyKey
+        returnId, hubCode, actorId, actorRole: actor.role,
+        physicalReceiptConfirmed: actor.physicalReceiptConfirmed,
+        conditionAssessed: actor.conditionAssessed, disposition,
+        idempotencyKey: actor.idempotencyKey
       }, async () => {
         const record = await repository.findById('returns', returnId);
         if (!record) return null;
@@ -1121,15 +1131,22 @@ function createDomainRepositories(adapter) {
         }
         const order = await repository.findById('orders', record.orderId);
         if (!order) throw new Error('Return order not found');
+        if (order.pilotScope === 'karachi-proposed' && hubCode !== order.pilotSiteCode) {
+          const error = new Error('A proposed Karachi pilot return must be received at the same proposed site code recorded on the order.');
+          error.code = 'WAREHOUSE_NOT_AVAILABLE';
+          throw error;
+        }
         const warehouses = await repository.find('warehouses', { code: hubCode }, { limit: 1 });
-        if (!warehouses.length || warehouses[0].archivedAt) {
-          const error = new Error('Returned stock can only be received into an existing, active warehouse record');
-          error.code = 'WAREHOUSE_NOT_FOUND';
+        const warehouse = warehouses[0];
+        if (!warehouse || warehouse.archivedAt || warehouse.status !== 'online') {
+          const error = new Error('Return receipt requires an existing, non-archived, online warehouse record. This is not independent proof of a physical facility.');
+          error.code = 'WAREHOUSE_NOT_AVAILABLE';
           throw error;
         }
         const orderItems = await repository.find('orderItems', { orderId: order.id });
         const items = orderItems.length ? orderItems : (order.items || []);
         const at = new Date().toISOString();
+        const receivedItems = [];
         for (const item of items) {
           let sku = item.sku;
           if (!sku && item.productId) {
@@ -1138,29 +1155,45 @@ function createDomainRepositories(adapter) {
           }
           if (!sku) throw new Error('Returned order item is missing its SKU');
           const qty = integer(item.qty || item.quantity, 'return quantity', 1);
+          receivedItems.push({ sku, qty, disposition });
+          if (disposition !== 'restockable') continue;
           const stockRows = await repository.find('stock', { sku, hubCode }, { limit: 1 });
           const stock = stockRows[0] || { id: sku + ':' + hubCode, sku, hubCode, onHand: 0, reserved: 0 };
           await ensureOpeningMovements(repository, stock, at);
-          await repository.update('stock', stock.id, { ...stock, onHand: stock.onHand + qty }, { upsert: !stockRows.length });
-          if (!stockRows.length) {
-            const updatedRows = await repository.find('stock', { sku, hubCode }, { limit: 1 });
-            if (!updatedRows.length) await repository.insert('stock', { ...stock, onHand: qty });
+          if (stockRows.length) {
+            await repository.update('stock', stock.id, { ...stock, onHand: stock.onHand + qty });
+          } else {
+            await repository.insert('stock', { ...stock, onHand: qty });
           }
           await repository.insert('movements', {
             id: 'MOV-' + randomUUID(), sku, hubCode, type: 'RETURN_IN', qty,
-            reason: 'customer_return', refType: 'return', refId: returnId, actorId, at
+            reason: 'customer_return_inspected_restockable', refType: 'return', refId: returnId, actorId, at
           });
           const products = await repository.find('products', { sku, warehouse_hub: hubCode });
           for (const product of products) {
             await repository.update('products', product.id, { stock: stock.onHand + qty, reserved: stock.reserved, available: stock.onHand + qty - stock.reserved, updatedAt: at });
           }
         }
+        const receiptEvidence = {
+          source: 'operator_report',
+          status: 'not_independently_verified',
+          physicalReceiptConfirmed: true,
+          conditionAssessed: true,
+          disposition,
+          providerVerified: false,
+          independentlyVerified: false,
+          recordedBy: actorId,
+          reportedAt: at
+        };
         const updatedReturn = await repository.update('returns', returnId, {
-          status: 'received', receivedAt: at, receivedBy: actorId, hubCode, updatedAt: at
+          status: 'received', receivedAt: at, receivedBy: actorId, hubCode,
+          stockDisposition: disposition, receiptEvidence, receivedItems, updatedAt: at
         });
+        const timelineNote = 'An operator reported physical receipt and condition assessment at ' + hubCode +
+          '; not independently verified. Disposition: ' + disposition + '.';
         const updatedOrder = await repository.update('orders', order.id, {
           status: 'RETURNED',
-          timeline: [...(order.timeline || []), { status: 'RETURNED', at, actorId, note: 'Return received at ' + hubCode }],
+          timeline: [...(order.timeline || []), { status: 'RETURNED', at, actorId, note: timelineNote }],
           updatedAt: at
         });
         const existingRefunds = await repository.find('refunds', { returnId }, { limit: 1 });
@@ -1180,7 +1213,7 @@ function createDomainRepositories(adapter) {
               ? 'Payment is not recorded as captured; reconcile payment before refunding.'
               : refundStatus === 'manual_review_required'
                 ? 'The historical order has no verified PKR minor-unit total; calculate the refund manually.'
-                : 'Complete the refund outside VeloSupply, then record the external reference.',
+                : 'Complete the refund outside VeloSupply, then record the external reference. No payment provider was called or verified.',
             createdAt: at, updatedAt: at
           });
           await repository.insert('auditLogs', {
@@ -1192,7 +1225,7 @@ function createDomainRepositories(adapter) {
         await repository.insert('auditLogs', {
           id: 'AUD-' + randomUUID(), actorId, actorRole: actor.role || 'operator',
           action: 'return.receive', targetType: 'return', targetId: returnId,
-          meta: { orderId: order.id, hubCode }, at
+          meta: { orderId: order.id, hubCode, disposition, receivedItems, receiptEvidence }, at
         });
         return { return: updatedReturn, order: updatedOrder, refund };
       }));

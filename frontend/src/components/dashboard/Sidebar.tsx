@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import {
   Activity, Bell, ChevronDown, ChevronLeft, ChevronRight, Menu, X,
   CircleGauge, FileText, Gift, LayoutDashboard, LogOut, Network,
-  Package, Shield, ShieldCheck, Store, Users
+  Package, RotateCcw, Shield, ShieldCheck, Store, Users
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
@@ -15,6 +15,7 @@ const groups: Array<{ title: string; items: NavItem[] }> = [
     { to: '/dashboard', label: 'Overview', icon: LayoutDashboard },
     { to: '/dashboard/activity', label: 'Activity', icon: Activity },
     { to: '/dashboard/orders', label: 'Orders', icon: Package },
+    { to: '/dashboard/returns', label: 'Returns', icon: RotateCcw, operationsOnly: true },
     { to: '/dashboard/reliability', label: 'Reliability', icon: ShieldCheck, operationsOnly: true },
     { to: '/dashboard/messages', label: 'Messages', icon: Bell }
   ] },
