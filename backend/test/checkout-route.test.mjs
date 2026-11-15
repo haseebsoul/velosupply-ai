@@ -467,6 +467,61 @@ describe('Pakistan checkout HTTP route', () => {
     expect(buyerDetail.body.order.deliveryEvidence.independentlyVerified).toBe(false);
     expect(buyerDetail.body.order.paymentEvidence.independentlyVerified).toBe(false);
     expect(await adapter.count('payments', { orderId })).toBe(1);
+
+    const returnRequest = await supertest(serverModule.app)
+      .post('/api/orders/' + orderId + '/return')
+      .set(buyerAuth)
+      .send({ reason: 'Synthetic end-to-end return test' });
+    expect(returnRequest.status).toBe(201);
+    const returnId = returnRequest.body.return.id;
+    const buyerReturns = await supertest(serverModule.app).get('/api/returns').set(buyerAuth);
+    expect(buyerReturns.status).toBe(200);
+    expect(buyerReturns.body.map((record) => record.id)).toContain(returnId);
+
+    const approved = await supertest(serverModule.app)
+      .post('/api/returns/' + returnId + '/decision').set(operatorAuth).send({ decision: 'approved' });
+    expect(approved.status).toBe(200);
+    expect(approved.body.return.status).toBe('approved');
+
+    const unknownWarehouse = await supertest(serverModule.app)
+      .post('/api/returns/' + returnId + '/receive')
+      .set(operatorAuth).set('Idempotency-Key', 'return-invalid-site-001')
+      .send({ hubCode: 'UNREGISTERED-TEST-SITE' });
+    expect(unknownWarehouse.status).toBe(409);
+    expect(unknownWarehouse.body.error).toBe('WAREHOUSE_NOT_FOUND');
+    expect(await adapter.count('movements', { type: 'RETURN_IN', refId: returnId })).toBe(0);
+
+    const received = await supertest(serverModule.app)
+      .post('/api/returns/' + returnId + '/receive')
+      .set(operatorAuth).set('Idempotency-Key', 'return-receive-001')
+      .send({ hubCode: 'HUB-KHI' });
+    expect(received.status).toBe(200);
+    expect(received.body.return.status).toBe('received');
+    expect(received.body.refund).toMatchObject({
+      status: 'manual_pending', executionMode: 'manual', providerVerified: false
+    });
+    expect(await adapter.count('movements', { type: 'RETURN_IN', refId: returnId })).toBe(1);
+
+    const operatorRefunds = await supertest(serverModule.app).get('/api/refunds').set(operatorAuth);
+    expect(operatorRefunds.status).toBe(200);
+    expect(operatorRefunds.body.map((refund) => refund.id)).toContain(received.body.refund.id);
+
+    const adminLogin = await supertest(serverModule.app).post('/api/auth/login')
+      .send({ email: 'admin@example.com', password: 'AdminPassword123' });
+    expect(adminLogin.status).toBe(200);
+    const adminAuth = { Authorization: 'Bearer ' + adminLogin.body.token };
+    const recordedRefund = await supertest(serverModule.app)
+      .post('/api/refunds/' + received.body.refund.id + '/record')
+      .set(adminAuth)
+      .send({ amountMinor, externalReference: 'SYNTHETIC-REFUND-REFERENCE-001', method: 'bank_transfer' });
+    expect(recordedRefund.status).toBe(200);
+    expect(recordedRefund.body).toMatchObject({
+      providerVerified: false,
+      refund: { status: 'manual_recorded', providerVerified: false, externalReference: 'SYNTHETIC-REFUND-REFERENCE-001' }
+    });
+    const buyerRefunds = await supertest(serverModule.app).get('/api/refunds').set(buyerAuth);
+    expect(buyerRefunds.status).toBe(200);
+    expect(buyerRefunds.body.map((refund) => refund.id)).toContain(received.body.refund.id);
   });
 
   it('blocks production checkout until pilot enablement and site/owner evidence gates are configured', async () => {
