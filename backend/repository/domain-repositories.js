@@ -584,7 +584,7 @@ function createDomainRepositories(adapter) {
             const error = new Error('The controlled pilot allows one order per buyer per Pakistan-local day');
             error.code = 'PILOT_BUYER_DAILY_LIMIT'; throw error;
           }
-          const exposure = todaysOrders.reduce((sum, order) => {
+          const exposure = allOrders.reduce((sum, order) => {
             if (order.paymentMethod !== 'COD' || order.paymentState !== 'pending_cod' || order.status === 'CANCELLED') return sum;
             const amount = order.totalMinor ?? order.price?.totalMinor;
             return Number.isSafeInteger(amount) && amount > 0 ? sum + amount : sum;
@@ -654,11 +654,13 @@ function createDomainRepositories(adapter) {
           paymentMethod,
           paymentState,
           paymentSimulated: paymentMethod !== 'COD',
+          paymentEvidence: paymentMethod === 'COD'
+            ? { mode: 'manual_cod', status: 'not_recorded', providerVerified: false, independentlyVerified: false }
+            : { mode: 'simulated', status: 'not_provider_verified', providerVerified: false, independentlyVerified: false },
+          deliveryStatus: 'not_dispatched',
+          deliveryEvidence: { status: 'not_delivered', providerVerified: false, independentlyVerified: false },
           ...(input.pilotPolicy ? {
-            pilotScope: 'karachi-proposed', pilotSiteCode: input.pilotPolicy.siteCode,
-            paymentEvidence: { mode: 'manual_cod', status: 'not_recorded', providerVerified: false, independentlyVerified: false },
-            deliveryStatus: 'not_delivered',
-            deliveryEvidence: { status: 'not_delivered', providerVerified: false, independentlyVerified: false }
+            pilotScope: 'karachi-proposed', pilotSiteCode: input.pilotPolicy.siteCode
           } : {}),
           hubs,
           splitShipment,
