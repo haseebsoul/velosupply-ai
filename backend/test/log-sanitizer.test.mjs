@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const require = createRequire(import.meta.url);
 const { createSRE } = require('../sre.js');
+const serverModule = require('../server.js');
 const { REDACTED, redactText, sanitizeLogValue } = require('../log-sanitizer.js');
 
 function createSreState() {
@@ -168,4 +169,42 @@ describe('structured log sanitization', () => {
       sre.stop();
     }
   });
+
+  it('sanitizes legacy application logs before persisting them', () => {
+    const state = {
+      orders: [], warehouses: [], products: [], logs: [],
+      metrics: { packetsPerSec: 0, threatsBlocked: 0, detectionTimeMs: 0, efficiencyScore: 0 },
+      telemetry: { tick: 0, updatedAt: new Date().toISOString() }
+    };
+    serverModule.configureForTests(state, {});
+    serverModule.addLog(
+      'Database failed at mongodb+srv://legacy-user:legacy-secret@cluster.example.mongodb.net/app buyer@example.com',
+      'ERROR',
+      'LEGACY_TEST',
+      { email: 'buyer@example.com', context: { apiKey: 'private-api-key', detail: 'safe description' } }
+    );
+    expect(state.logs).toHaveLength(1);
+    expect(state.logs[0].message).toContain('[REDACTED_MONGODB_URI]');
+    expect(state.logs[0].message).toContain('[REDACTED_EMAIL]');
+    expect(JSON.stringify(state.logs[0].metadata)).not.toContain('buyer@example.com');
+    expect(JSON.stringify(state.logs[0].metadata)).not.toContain('private-api-key');
+    expect(state.logs[0].metadata.context.detail).toBe('safe description');
+  });
+
+  it('sanitizes new append-only SRE audit metadata without rewriting historic entries', () => {
+    const state = createSreState();
+    const historic = { id: 'historic', meta: { note: 'legacy@example.com' } };
+    state.sre.audit.push(historic);
+    const sre = createSRE({ getDb: () => state, persist: async () => {} });
+    sre.audit('pilot.site.reviewed', { id: 'OPS-1', role: 'operator' }, {
+      email: 'buyer@example.com',
+      receipt: 'password=private-value',
+      detail: 'physical stock count signed'
+    });
+    expect(state.sre.audit[0]).toBe(historic);
+    expect(state.sre.audit[1].meta.email).toBe(REDACTED);
+    expect(state.sre.audit[1].meta.receipt).toBe('password=[REDACTED]');
+    expect(state.sre.audit[1].meta.detail).toBe('physical stock count signed');
+  });
+
 });

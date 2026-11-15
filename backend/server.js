@@ -15,6 +15,7 @@ const helmet = require('helmet');
 const { createSRE } = require('./sre');
 const { createRepository } = require('./repository');
 const { createDomainRepositories } = require('./repository/domain-repositories');
+const { redactText, sanitizeLogValue } = require('./log-sanitizer');
 
 
 const envFilePath = path.join(__dirname, '.env');
@@ -156,13 +157,15 @@ function safeUser(user) {
 }
 
 function addLog(message, level = 'INFO', type = 'SYSTEM', metadata = {}) {
+  const safeMessage = redactText(message);
+  const safeMetadata = sanitizeLogValue(metadata);
   db.logs.unshift({
     id: randomUUID(),
     type,
     level,
-    message,
+    message: safeMessage,
     timestamp: new Date().toISOString(),
-    metadata
+    metadata: safeMetadata
   });
   db.logs = db.logs.slice(0, 500);
 }
@@ -1268,7 +1271,7 @@ app.use((error, req, res, next) => {
   if (error.code === 'WRITE_CONFLICT' && repository) {
     repository.readState().then((freshState) => {
       db = freshState;
-      process.stdout.write(JSON.stringify({
+      process.stdout.write(JSON.stringify(sanitizeLogValue({
         ts: new Date().toISOString(),
         level: 'WARN',
         msg: 'Concurrent write rejected; repository state refreshed for safe retry.',
@@ -1276,7 +1279,7 @@ app.use((error, req, res, next) => {
         status: 409,
         userId: req.user?.id || null,
         reqId: req.requestId || null
-      }) + '\n');
+      })) + '\n');
       res.status(409).json({
         error: 'WRITE_CONFLICT',
         message: 'Another application instance changed this record. The latest state has been refreshed; retry with the same Idempotency-Key.'
@@ -1287,7 +1290,7 @@ app.use((error, req, res, next) => {
   const status = error instanceof SyntaxError && error.status === 400
     ? 400
     : Number.isInteger(error.status) && error.status >= 400 && error.status < 600 ? error.status : 500;
-  process.stdout.write(JSON.stringify({
+  process.stdout.write(JSON.stringify(sanitizeLogValue({
     ts: new Date().toISOString(),
     level: status >= 500 ? 'ERROR' : 'WARN',
     msg: 'API request failed',
@@ -1295,12 +1298,11 @@ app.use((error, req, res, next) => {
     status,
     userId: req.user?.id || null,
     reqId: req.requestId || null,
-    error: status === 500 ? undefined : error.message,
-    ...(status === 500 && process.env.NODE_ENV !== 'production' ? { details: error.message } : {})
-  }) + '\n');
+    error
+  })) + '\n');
   res.status(status).json({
-    error: status === 500 ? 'Internal server error' : error.message,
-    ...(status === 500 && process.env.NODE_ENV !== 'production' ? { details: error.message } : {})
+    error: status === 500 ? 'Internal server error' : redactText(error.message || 'Request failed'),
+    ...(req.requestId ? { requestId: req.requestId } : {})
   });
 });
 
@@ -1319,7 +1321,9 @@ function tickTelemetry() {
     message: `Network heartbeat ${db.telemetry.tick}: ${db.warehouses.filter((hub) => hub.status === 'online').length} fulfillment nodes online.`
   });
   broadcast(event);
-  persist().catch((error) => console.error('[persistence-error]', error));
+  persist().catch((error) => process.stderr.write(JSON.stringify(sanitizeLogValue({
+    ts: new Date().toISOString(), level: 'ERROR', msg: 'Persistence failed', error
+  })) + '\\n'));
 }
 
 server.on('upgrade', (request, socket, head) => {
@@ -1353,7 +1357,7 @@ async function start() {
   if (!Array.isArray(db.rewardClaims)) db.rewardClaims = [];
   refreshMetrics();
   server.listen(PORT, () => {
-    console.log(`VeloSupply API listening on http://localhost:${PORT}`);
+    process.stdout.write(JSON.stringify({ ts: new Date().toISOString(), level: 'INFO', msg: 'VeloSupply API started', port: PORT }) + '\\n');
     sre.start();
   });
   const timer = setInterval(tickTelemetry, 2000);
@@ -1362,7 +1366,9 @@ async function start() {
 
 if (require.main === module) {
   start().catch((error) => {
-    console.error('Unable to start VeloSupply API:', error);
+    process.stderr.write(JSON.stringify(sanitizeLogValue({
+      ts: new Date().toISOString(), level: 'ERROR', msg: 'Unable to start VeloSupply API', error
+    })) + '\\n');
     process.exitCode = 1;
   });
 }
@@ -1377,4 +1383,4 @@ function configureForTests(state, storageRepository) {
   refreshMetrics();
 }
 
-module.exports = { app, server, start, loadDatabaseState, refreshMetrics, configureForTests, sre };
+module.exports = { app, server, start, loadDatabaseState, refreshMetrics, configureForTests, sre, addLog };
