@@ -420,7 +420,10 @@ const returnDecisionSchema = z.object({
   decision: z.enum(['approved', 'rejected'])
 }).strict();
 const returnReceiveSchema = z.object({
-  hubCode: z.string().trim().min(1).max(32)
+  hubCode: z.string().trim().min(1).max(32),
+  physicalReceiptConfirmed: z.literal(true),
+  conditionAssessed: z.literal(true),
+  disposition: z.enum(['restockable', 'quarantine', 'damaged'])
 }).strict();
 const purchaseOrderStatusSchema = z.object({
   status: z.enum(['approved', 'shipped', 'received'])
@@ -1320,15 +1323,27 @@ app.post('/api/returns/:id/receive', requireRoles('admin', 'operator'), validate
   if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for return inventory receipt' });
   try {
     const result = await domainRepositories.orders.receiveReturn(req.params.id, req.body.hubCode, {
-      id: req.user.id, role: req.user.role, idempotencyKey
+      id: req.user.id, role: req.user.role,
+      physicalReceiptConfirmed: req.body.physicalReceiptConfirmed,
+      conditionAssessed: req.body.conditionAssessed,
+      disposition: req.body.disposition,
+      idempotencyKey
     });
     if (!result) return res.status(404).json({ error: 'Return not found' });
     db = await repository.readState();
-    publish('STOCK_CHANGED', `Returned inventory received into ${req.body.hubCode}.`, 'INFO');
+    if (result.return.stockDisposition === 'restockable') {
+      publish('STOCK_CHANGED', `Inspected return from order ${result.order.code || result.order.id} was recorded as restockable at ${req.body.hubCode}.`, 'INFO');
+    }
     await persist();
-    res.json(result);
+    res.json({
+      ...result,
+      providerVerified: false,
+      message: 'Physical receipt and condition assessment are operator-reported, not independently verified. Only restockable items enter saleable stock. Any refund remains manual; no payment provider was called.'
+    });
   } catch (error) {
-    if (['INVALID_TRANSITION', 'WAREHOUSE_NOT_FOUND'].includes(error.code)) return res.status(409).json({ error: error.code, message: error.message });
+    if (['INVALID_TRANSITION', 'WAREHOUSE_NOT_FOUND', 'WAREHOUSE_NOT_AVAILABLE', 'RECEIPT_ATTESTATION_REQUIRED'].includes(error.code)) {
+      return res.status(409).json({ error: error.code, message: error.message });
+    }
     throw error;
   }
 }));
