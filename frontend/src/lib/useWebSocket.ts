@@ -27,8 +27,8 @@ export function useWebSocket() {
           } as TelemetryEvent
           setLatest(event)
           setEvents((current) => [...current.slice(-499), event])
-        }).catch((error: unknown) => {
-          console.error('Unable to resync telemetry snapshot', error)
+        }).catch(() => {
+          console.warn('Telemetry snapshot resync failed; it will retry after the next connection.')
         })
       }
       socket.onmessage = (message) => {
@@ -36,8 +36,8 @@ export function useWebSocket() {
           const event = JSON.parse(message.data) as TelemetryEvent
           setLatest(event)
           setEvents((current) => [...current.slice(-499), event])
-        } catch (error) {
-          console.error('Unable to decode telemetry event', error)
+        } catch {
+          console.warn('Telemetry event could not be decoded; the message was discarded.')
         }
       }
       socket.onclose = () => {
