@@ -63,6 +63,7 @@ export interface Order {
   userId?: string
   city?: string
   address?: string
+  deliveryArea?: string
   paymentMethod?: string
   paymentState?: string
   paymentVerificationStatus?: string

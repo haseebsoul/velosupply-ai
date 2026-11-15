@@ -471,7 +471,7 @@ describe('Pakistan checkout HTTP route', () => {
 
   it('blocks production checkout until pilot enablement and site/owner evidence gates are configured', async () => {
     const keys = ['VELOSUPPLY_PILOT_ENABLED', 'VELOSUPPLY_PILOT_SITE_VERIFIED',
-      'VELOSUPPLY_PILOT_SITE_EVIDENCE_REF', 'VELOSUPPLY_PILOT_OWNER_APPROVAL_REF'];
+      'VELOSUPPLY_PILOT_SITE_EVIDENCE_REF', 'VELOSUPPLY_PILOT_OWNER_APPROVAL_REF', 'VELOSUPPLY_PILOT_ALLOWED_SKUS', 'VELOSUPPLY_PILOT_ALLOWED_AREAS'];
     const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
     keys.forEach((key) => delete process.env[key]);
     try {
@@ -500,12 +500,14 @@ describe('Pakistan checkout HTTP route', () => {
 
   it('rejects production pilot orders above five total units before persisting an order', async () => {
     const keys = ['VELOSUPPLY_PILOT_ENABLED', 'VELOSUPPLY_PILOT_SITE_VERIFIED',
-      'VELOSUPPLY_PILOT_SITE_EVIDENCE_REF', 'VELOSUPPLY_PILOT_OWNER_APPROVAL_REF'];
+      'VELOSUPPLY_PILOT_SITE_EVIDENCE_REF', 'VELOSUPPLY_PILOT_OWNER_APPROVAL_REF', 'VELOSUPPLY_PILOT_ALLOWED_SKUS', 'VELOSUPPLY_PILOT_ALLOWED_AREAS'];
     const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
     process.env.VELOSUPPLY_PILOT_ENABLED = 'true';
     process.env.VELOSUPPLY_PILOT_SITE_VERIFIED = 'true';
     process.env.VELOSUPPLY_PILOT_SITE_EVIDENCE_REF = 'test-only-site-evidence';
     process.env.VELOSUPPLY_PILOT_OWNER_APPROVAL_REF = 'test-only-owner-approval';
+    process.env.VELOSUPPLY_PILOT_ALLOWED_SKUS = 'SKU-1';
+    process.env.VELOSUPPLY_PILOT_ALLOWED_AREAS = 'Synthetic Test Area';
     try {
       const { adapter } = await setup('production');
       const registered = await supertest(serverModule.app).post('/api/auth/register')
@@ -514,7 +516,7 @@ describe('Pakistan checkout HTTP route', () => {
         .set('Authorization', 'Bearer ' + registered.body.token)
         .set('Idempotency-Key', 'pilot-unit-limit-001')
         .send({ customerName: 'Limit Test Buyer', customerEmail: 'limit-buyer@example.com',
-          city: 'Karachi', address: 'Synthetic test address, Karachi', paymentMethod: 'COD',
+          city: 'Karachi', deliveryArea: 'Synthetic Test Area', address: 'Synthetic test address, Karachi', paymentMethod: 'COD',
           items: [{ sku: 'SKU-1', qty: 6 }] });
       expect(response.status).toBe(409);
       expect(response.body.error).toBe('PILOT_UNIT_LIMIT');

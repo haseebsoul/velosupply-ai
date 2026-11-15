@@ -11,7 +11,8 @@ import { useCartStore } from '../../store/useCartStore'
 const checkoutSchema = z.object({
   customerName: z.string().min(2, 'Enter your name'),
   customerEmail: z.string().email('Enter a valid email'),
-  city: z.enum(['Karachi', 'Lahore', 'Islamabad', 'Rawalpindi', 'Faisalabad', 'Multan', 'Peshawar', 'Quetta']),
+  city: z.literal('Karachi'),
+  deliveryArea: z.string().trim().min(2, 'Enter your delivery area'),
   address: z.string().min(5, 'Enter your delivery address'),
   paymentMethod: z.literal('COD'),
 })
@@ -24,7 +25,7 @@ export function CartDrawer() {
   const idempotencyRef = useRef<{ signature: string; key: string } | null>(null)
   const { register, handleSubmit, formState: { errors, isSubmitting }, reset } = useForm<CheckoutFields>({
     resolver: zodResolver(checkoutSchema),
-    defaultValues: { city: 'Karachi', paymentMethod: 'COD' },
+    defaultValues: { city: 'Karachi', deliveryArea: '', paymentMethod: 'COD' },
   })
   const money = new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 })
   const total = lines.reduce((sum, line) => sum + (line.product.priceExGstPkr ?? 0) * line.quantity, 0)
@@ -82,7 +83,8 @@ export function CartDrawer() {
                 <label>Name<input className="field" {...register('customerName')} />{errors.customerName && <small className="danger-text">{errors.customerName.message}</small>}</label>
                 <label>Email<input className="field" type="email" {...register('customerEmail')} />{errors.customerEmail && <small className="danger-text">{errors.customerEmail.message}</small>}</label>
                 <label>Proposed pilot city<select className="field" {...register('city')}><option>Karachi</option></select>{errors.city && <small className="danger-text">{errors.city.message}</small>}</label>
-                <label>Delivery address<input className="field" {...register('address')} />{errors.address && <small className="danger-text">{errors.address.message}</small>}</label>
+                <label>Delivery area<input className="field" {...register('deliveryArea')} placeholder="Owner-approved area only" />{errors.deliveryArea && <small className="danger-text">{errors.deliveryArea.message}</small>}</label>
+                 <label>Delivery address<input className="field" {...register('address')} />{errors.address && <small className="danger-text">{errors.address.message}</small>}</label>
                 <label>Payment method<select className="field" {...register('paymentMethod')}><option value="COD">Manual cash on delivery (not independently verified)</option></select>{errors.paymentMethod && <small className="danger-text">{errors.paymentMethod.message}</small>}</label><p className="muted">COD is an operator-entered receipt record, not payment-provider confirmation. Delivery is operator-reported unless trusted courier proof-of-delivery is connected.</p><p className="muted">Proposed limits: Karachi only, five total units per order. HUB-KHI remains a proposed candidate.</p>
                 {checkoutError && <p role="alert" className="danger-text">{checkoutError}</p>}
                 <button className="button button-dark" disabled={isSubmitting || hasUnpricedItem || totalUnits > 5}>{isSubmitting ? 'Securing stock…' : 'Place order'}</button>

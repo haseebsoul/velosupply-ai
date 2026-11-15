@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 const require = createRequire(import.meta.url);
-const { PILOT_POLICY, getPilotAuthorization, getPilotPublicStatus, getPakistanDayKey } = require('../pilot-policy.js');
+const { PILOT_POLICY, getPilotAuthorization, getPilotPublicStatus, getPilotAllowedSkus, getPilotAllowedAreas, getPakistanDayKey } = require('../pilot-policy.js');
 
 describe('controlled Karachi pilot policy', () => {
   it('fails closed by default and keeps HUB-KHI proposed', () => {
@@ -16,11 +16,16 @@ describe('controlled Karachi pilot policy', () => {
   it('requires all four explicit gates and never exposes their reference values', () => {
     const env = { VELOSUPPLY_PILOT_ENABLED: 'true', VELOSUPPLY_PILOT_SITE_VERIFIED: 'true',
       VELOSUPPLY_PILOT_SITE_EVIDENCE_REF: 'test-only-site-evidence',
-      VELOSUPPLY_PILOT_OWNER_APPROVAL_REF: 'test-only-owner-approval' };
+      VELOSUPPLY_PILOT_OWNER_APPROVAL_REF: 'test-only-owner-approval',
+      VELOSUPPLY_PILOT_ALLOWED_SKUS: 'sku-1, SKU-2',
+      VELOSUPPLY_PILOT_ALLOWED_AREAS: 'Clifton, DHA Phase 6' };
     expect(getPilotAuthorization(env).enabled).toBe(true);
     for (const key of Object.keys(env)) expect(getPilotAuthorization({ ...env, [key]: '' }).enabled).toBe(false);
     const safe = getPilotPublicStatus(env);
     expect(safe.authorized).toBe(true);
+    expect(safe.prerequisites).toMatchObject({ allowedSkusConfigured: true, allowedAreasConfigured: true });
+    expect(getPilotAllowedSkus(env)).toEqual(['SKU-1', 'SKU-2']);
+    expect(getPilotAllowedAreas(env)).toEqual(['clifton', 'dha phase 6']);
     expect(JSON.stringify(safe)).not.toContain('test-only');
   });
   it('defines low proposed caps and uses Pakistan-local calendar days', () => {

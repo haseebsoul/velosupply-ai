@@ -15,7 +15,7 @@ const helmet = require('helmet');
 const { createSRE } = require('./sre');
 const { createRepository } = require('./repository');
 const { createDomainRepositories } = require('./repository/domain-repositories');
-const { PILOT_POLICY, getPilotAuthorization, getPilotPublicStatus } = require('./pilot-policy');
+const { PILOT_POLICY, getPilotAuthorization, getPilotPublicStatus, getPilotAllowedSkus, getPilotAllowedAreas } = require('./pilot-policy');
 
 
 const envFilePath = path.join(__dirname, '.env');
@@ -377,6 +377,7 @@ const checkoutSchema = z.object({
   customerEmail: z.string().trim().email().max(254).optional(),
   shippingRegion: z.string().trim().min(2).max(100).optional(),
   city: z.string().trim().min(2).max(80).optional(),
+  deliveryArea: z.string().trim().min(2).max(100).optional(),
   address: z.string().trim().min(5).max(300).optional(),
   paymentMethod: z.enum(['COD', 'JAZZCASH', 'EASYPAISA', 'RAAST', 'CARD', 'BANK_TRANSFER']).default('COD'),
   items: z.array(z.union([
@@ -667,6 +668,18 @@ const checkoutHandler = asyncRoute(async (req, res) => {
     const product = findById(db.products, item.productId, 'Product');
     return { sku: product.sku, qty: item.quantity };
   });
+  const deliveryArea = typeof req.body.deliveryArea === 'string' ? req.body.deliveryArea.trim() : '';
+  if (pilotPolicy) {
+    const allowedSkus = getPilotAllowedSkus();
+    const allowedAreas = getPilotAllowedAreas();
+    if (!deliveryArea || !allowedAreas.includes(deliveryArea.toLocaleLowerCase('en'))) {
+      return res.status(409).json({ error: 'PILOT_AREA_NOT_ALLOWED', message: 'The delivery area is not on the owner-approved pilot area allowlist.' });
+    }
+    if (items.some((item) => !allowedSkus.includes(String(item.sku).toUpperCase()))) {
+      return res.status(409).json({ error: 'PILOT_SKU_NOT_ALLOWED', message: 'One or more requested SKUs are not on the owner-approved pilot SKU allowlist.' });
+    }
+    pilotPolicy = { ...pilotPolicy, allowedSkus, allowedAreas };
+  }
   const buyerId = req.user?.id || 'GUEST-' + createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 24);
   const address = req.body.address || req.body.shippingRegion;
   let result;
@@ -677,6 +690,7 @@ const checkoutHandler = asyncRoute(async (req, res) => {
       customerName: req.body.customerName || req.user?.name,
       city,
       address,
+      deliveryArea,
       paymentMethod: req.body.paymentMethod || 'COD',
       items,
       idempotencyKey,
@@ -688,7 +702,8 @@ const checkoutHandler = asyncRoute(async (req, res) => {
     if (error.code === 'KEY_REUSED') return res.status(422).json({ error: error.code, message: error.message });
     if (['OUT_OF_STOCK', 'PRODUCT_UNAVAILABLE', 'PRICE_UNAVAILABLE', 'TARIFF_UNAVAILABLE',
       'PILOT_UNIT_LIMIT', 'PILOT_ORDER_AMOUNT_LIMIT', 'PILOT_DAILY_ORDER_LIMIT',
-      'PILOT_BUYER_DAILY_LIMIT', 'PILOT_COD_EXPOSURE_LIMIT', 'PILOT_SITE_STOCK_UNAVAILABLE'].includes(error.code)) {
+      'PILOT_BUYER_DAILY_LIMIT', 'PILOT_COD_EXPOSURE_LIMIT', 'PILOT_SITE_STOCK_UNAVAILABLE',
+      'PILOT_AREA_NOT_ALLOWED', 'PILOT_SKU_NOT_ALLOWED'].includes(error.code)) {
       return res.status(409).json({ error: error.code, message: error.message });
     }
     throw error;

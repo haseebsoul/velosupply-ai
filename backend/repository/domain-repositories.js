@@ -422,6 +422,7 @@ function createDomainRepositories(adapter) {
       const buyerId = requiredString(input.buyerId, 'buyerId');
       const city = requiredString(input.city, 'city');
       const address = requiredString(input.address, 'address');
+      const deliveryArea = input.deliveryArea ? requiredString(input.deliveryArea, 'deliveryArea') : '';
       const paymentMethod = requiredString(input.paymentMethod, 'paymentMethod').toUpperCase();
       const idempotencyKey = requiredString(input.idempotencyKey, 'Idempotency-Key');
       if (!['COD', 'JAZZCASH', 'EASYPAISA', 'RAAST', 'CARD', 'BANK_TRANSFER'].includes(paymentMethod)) {
@@ -447,9 +448,18 @@ function createDomainRepositories(adapter) {
           const error = new Error('The controlled pilot order limit is five total units');
           error.code = 'PILOT_UNIT_LIMIT'; throw error;
         }
+        if (!deliveryArea || !input.pilotPolicy.allowedAreas?.includes(deliveryArea.toLocaleLowerCase('en'))) {
+          const error = new Error('The delivery area is not approved for the controlled pilot');
+          error.code = 'PILOT_AREA_NOT_ALLOWED'; throw error;
+        }
+        if (normalizedItems.some((item) => !input.pilotPolicy.allowedSkus?.includes(item.sku.toUpperCase()))) {
+          const error = new Error('The requested SKU is not approved for the controlled pilot');
+          error.code = 'PILOT_SKU_NOT_ALLOWED'; throw error;
+        }
       }
       const requestBody = {
         buyerId, city, address, paymentMethod,
+        ...(deliveryArea ? { deliveryArea } : {}),
         items: normalizedItems
       };
       const requestHash = createHash('sha256').update(JSON.stringify(requestBody)).digest('hex');
@@ -636,6 +646,7 @@ function createDomainRepositories(adapter) {
           city,
           shippingRegion: city,
           address,
+          ...(deliveryArea ? { deliveryArea } : {}),
           customerName: input.customerName || 'Buyer',
           customerEmail: input.buyerEmail || '',
           warehouse_hub: hubs[0] || null,

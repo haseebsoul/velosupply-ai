@@ -9,6 +9,8 @@ Production ordering stays disabled unless all four runtime settings are configur
 - `VELOSUPPLY_PILOT_SITE_VERIFIED=true`
 - `VELOSUPPLY_PILOT_SITE_EVIDENCE_REF` is non-empty
 - `VELOSUPPLY_PILOT_OWNER_APPROVAL_REF` is non-empty
+- `VELOSUPPLY_PILOT_ALLOWED_SKUS` contains owner-approved SKU codes
+- `VELOSUPPLY_PILOT_ALLOWED_AREAS` contains owner-approved Karachi customer areas
 
 These reference values only signal that an owner has supplied evidence/approval references. Software cannot authenticate their truth or sufficiency. They must not be enabled until a human verifies the site, authority to use it, stock count, operators, support coverage, business limits and stop authority.
 
@@ -22,6 +24,7 @@ These reference values only signal that an owner has supplied evidence/approval 
 | Maximum order value | PKR 25,000 |
 | Outstanding manual COD exposure | PKR 50,000 |
 | City / site candidate | Karachi / HUB-KHI only |
+| SKU and customer-area scope | Exact owner-configured allowlists; empty by default |
 | Payment | Manual COD only |
 
 Caps are checked inside the order transaction. Cancelled orders still count toward the daily cap to prevent repeated place/cancel cycles. Pending COD exposure falls only when a manual collection record is entered, which is still not independently verified.
@@ -36,4 +39,4 @@ A buyer signs in, submits a Karachi COD order, and sees only their own order his
 
 ## External blockers
 
-Physical site inspection and authorization, signed opening stock count, named operations/support staffing, approved customer area and SKUs, owner-approved limits/stop rules, provider and courier accounts (if required), Atlas staging access and fixture authorization, recovery rehearsal and reviewer approvals remain outside this code change.
+Physical site inspection and authorization, signed opening stock count, named operations/support staffing, approved customer-area and SKU allowlists, owner-approved limits/stop rules, provider and courier accounts (if required), Atlas staging access and fixture authorization, recovery rehearsal and reviewer approvals remain outside this code change.

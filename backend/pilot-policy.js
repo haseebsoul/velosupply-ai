@@ -15,13 +15,22 @@ const PILOT_POLICY = Object.freeze({
 });
 const hasValue = (value) => typeof value === 'string' && value.trim().length > 0;
 
+function parseList(value, normalize = (item) => item) {
+  if (typeof value !== 'string') return [];
+  return [...new Set(value.split(',').map((item) => normalize(item.trim())).filter(Boolean))];
+}
+function getPilotAllowedSkus(env = process.env) { return parseList(env.VELOSUPPLY_PILOT_ALLOWED_SKUS, (item) => item.toUpperCase()); }
+function getPilotAllowedAreas(env = process.env) { return parseList(env.VELOSUPPLY_PILOT_ALLOWED_AREAS, (item) => item.toLocaleLowerCase('en')); }
+
 function getPilotAuthorization(env = process.env) {
   const pilotEnabled = env.VELOSUPPLY_PILOT_ENABLED === 'true';
   const siteVerified = env.VELOSUPPLY_PILOT_SITE_VERIFIED === 'true';
   const siteEvidenceConfigured = hasValue(env.VELOSUPPLY_PILOT_SITE_EVIDENCE_REF);
   const ownerApprovalConfigured = hasValue(env.VELOSUPPLY_PILOT_OWNER_APPROVAL_REF);
-  return { enabled: pilotEnabled && siteVerified && siteEvidenceConfigured && ownerApprovalConfigured,
-    pilotEnabled, siteVerified, siteEvidenceConfigured, ownerApprovalConfigured };
+  const allowedSkusConfigured = getPilotAllowedSkus(env).length > 0;
+  const allowedAreasConfigured = getPilotAllowedAreas(env).length > 0;
+  return { enabled: pilotEnabled && siteVerified && siteEvidenceConfigured && ownerApprovalConfigured && allowedSkusConfigured && allowedAreasConfigured,
+    pilotEnabled, siteVerified, siteEvidenceConfigured, ownerApprovalConfigured, allowedSkusConfigured, allowedAreasConfigured };
 }
 
 function getPilotPublicStatus(env = process.env) {
@@ -36,7 +45,9 @@ function getPilotPublicStatus(env = process.env) {
     limits: { ...PILOT_POLICY.limits, currency: 'PKR', amountUnits: 'minor units (paisa)' },
     prerequisites: { pilotEnabled: authorization.pilotEnabled,
       siteEvidenceConfigured: authorization.siteEvidenceConfigured,
-      ownerApprovalConfigured: authorization.ownerApprovalConfigured }
+      ownerApprovalConfigured: authorization.ownerApprovalConfigured,
+      allowedSkusConfigured: authorization.allowedSkusConfigured,
+      allowedAreasConfigured: authorization.allowedAreasConfigured }
   };
 }
 
@@ -48,4 +59,4 @@ function getPakistanDayKey(value) {
   const part = (type) => parts.find((entry) => entry.type === type)?.value || '';
   return part('year') + '-' + part('month') + '-' + part('day');
 }
-module.exports = { PILOT_POLICY, getPilotAuthorization, getPilotPublicStatus, getPakistanDayKey };
+module.exports = { PILOT_POLICY, getPilotAuthorization, getPilotPublicStatus, getPilotAllowedSkus, getPilotAllowedAreas, getPakistanDayKey };
