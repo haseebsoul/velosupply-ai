@@ -7,6 +7,7 @@ const { DB_PATH, seedDatabase } = require('./seed');
 const { createEmptyProductionState } = require('./production-state');
 const { createRepository } = require('./repository');
 const { recordsForState } = require('./repository/collection-map');
+const { sanitizeLogValue } = require('./log-sanitizer');
 
 function loadEnvFile() {
   const envFilePath = path.join(__dirname, '.env');
@@ -58,13 +59,13 @@ async function migrateFileState() {
     orders: state.orders.length,
     logs: state.logs.length
   };
-  process.stdout.write(JSON.stringify({
+  process.stdout.write(JSON.stringify(sanitizeLogValue({
     adapter: 'file',
     status: 'validated',
     note: 'The local adapter intentionally retains the single db.json file format; no MongoDB collections were created.',
     backupPath,
     counts
-  }, null, 2) + '\n');
+  }), null, 2) + '\n');
 }
 
 async function migrateMongoState() {
@@ -96,7 +97,7 @@ async function migrateMongoState() {
       backupVerified = Boolean(backup && legacySource);
       if (!backupVerified) throw new Error('Legacy source or migration backup is missing after migration.');
     }
-    process.stdout.write(JSON.stringify({
+    process.stdout.write(JSON.stringify(sanitizeLogValue({
       adapter: 'mongodb',
       status: adapter.migration?.status || 'already-initialized',
       migration: adapter.migration || null,
@@ -105,7 +106,7 @@ async function migrateMongoState() {
       countVerification: 'passed',
       expectedCounts,
       counts
-    }, null, 2) + '\n');
+    }), null, 2) + '\n');
   } finally {
     await client.close();
   }
@@ -119,7 +120,9 @@ async function main() {
 
 if (require.main === module) {
   main().catch((error) => {
-    process.stderr.write('State migration failed: ' + error.message + '\n');
+    process.stderr.write(JSON.stringify(sanitizeLogValue({
+      ts: new Date().toISOString(), level: 'ERROR', msg: 'State migration failed', error
+    })) + '\n');
     process.exitCode = 1;
   });
 }

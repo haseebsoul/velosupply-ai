@@ -2,6 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const bcrypt = require('bcryptjs');
+const { sanitizeLogValue } = require('./log-sanitizer');
 
 const DB_PATH = path.join(__dirname, 'db.json');
 const DB_SCHEMA_VERSION = 2;
@@ -737,9 +738,13 @@ async function seedDatabase(options = {}) {
 
 if (require.main === module) {
   seedDatabase({ force: process.argv.includes('--force') })
-    .then(() => console.log(`Seeded database at ${DB_PATH}`))
+    .then(() => process.stdout.write(JSON.stringify({
+      ts: new Date().toISOString(), level: 'INFO', msg: 'Demo seed operation completed'
+    }) + '\n'))
     .catch((error) => {
-      console.error('Unable to seed database:', error);
+      process.stderr.write(JSON.stringify(sanitizeLogValue({
+        ts: new Date().toISOString(), level: 'ERROR', msg: 'Unable to seed database', error
+      })) + '\n');
       process.exitCode = 1;
     });
 }
