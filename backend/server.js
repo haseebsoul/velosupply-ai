@@ -15,6 +15,7 @@ const helmet = require('helmet');
 const { createSRE } = require('./sre');
 const { createRepository } = require('./repository');
 const { createDomainRepositories } = require('./repository/domain-repositories');
+const { PILOT_POLICY, getPilotAuthorization, getPilotPublicStatus } = require('./pilot-policy');
 
 
 const envFilePath = path.join(__dirname, '.env');
@@ -493,6 +494,8 @@ const simulationSchema = z.object({
   }).strict().optional().default({})
 }).strict();
 
+app.get('/api/pilot/status', (_req, res) => res.json(getPilotPublicStatus()));
+
 app.get('/api/health', (_req, res) => {
   const summary = sre.healthSummary();
   res.json({
@@ -642,6 +645,20 @@ const checkoutHandler = asyncRoute(async (req, res) => {
   if (db.dataMode === 'production' && req.user.role !== 'buyer') {
     return res.status(403).json({ error: 'Only buyer accounts can place production orders' });
   }
+  const city = req.body.city || req.body.shippingRegion;
+  const paymentMethod = req.body.paymentMethod || 'COD';
+  let pilotPolicy = null;
+  if (db.dataMode === 'production') {
+    if (!getPilotAuthorization().enabled) {
+      return res.status(503).json({ error: 'PILOT_NOT_AUTHORIZED',
+        message: 'Production ordering is disabled until proposed site evidence and business-owner approval are configured.' });
+    }
+    if (city !== PILOT_POLICY.city || paymentMethod !== PILOT_POLICY.payment.method) {
+      return res.status(409).json({ error: 'PILOT_SCOPE_RESTRICTED',
+        message: 'The controlled pilot accepts Karachi orders and manual cash on delivery only.' });
+    }
+    pilotPolicy = PILOT_POLICY;
+  }
   const idempotencyKey = req.get('Idempotency-Key') || req.body.idempotencyKey;
   if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required' });
 
@@ -651,7 +668,6 @@ const checkoutHandler = asyncRoute(async (req, res) => {
     return { sku: product.sku, qty: item.quantity };
   });
   const buyerId = req.user?.id || 'GUEST-' + createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 24);
-  const city = req.body.city || req.body.shippingRegion;
   const address = req.body.address || req.body.shippingRegion;
   let result;
   try {
@@ -665,12 +681,14 @@ const checkoutHandler = asyncRoute(async (req, res) => {
       items,
       idempotencyKey,
       actorId: req.user?.id || buyerId,
-      actorRole: req.user?.role || 'buyer'
+      actorRole: req.user?.role || 'buyer',
+      ...(pilotPolicy ? { pilotPolicy } : {})
     });
   } catch (error) {
     if (error.code === 'KEY_REUSED') return res.status(422).json({ error: error.code, message: error.message });
-    if (error.code === 'OUT_OF_STOCK' || error.code === 'PRODUCT_UNAVAILABLE' ||
-        error.code === 'PRICE_UNAVAILABLE' || error.code === 'TARIFF_UNAVAILABLE') {
+    if (['OUT_OF_STOCK', 'PRODUCT_UNAVAILABLE', 'PRICE_UNAVAILABLE', 'TARIFF_UNAVAILABLE',
+      'PILOT_UNIT_LIMIT', 'PILOT_ORDER_AMOUNT_LIMIT', 'PILOT_DAILY_ORDER_LIMIT',
+      'PILOT_BUYER_DAILY_LIMIT', 'PILOT_COD_EXPOSURE_LIMIT', 'PILOT_SITE_STOCK_UNAVAILABLE'].includes(error.code)) {
       return res.status(409).json({ error: error.code, message: error.message });
     }
     throw error;

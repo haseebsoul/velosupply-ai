@@ -412,4 +412,119 @@ describe('Pakistan checkout HTTP route', () => {
     expect(await adapter.count('movements')).toBe(0);
     expect((await adapter.find('stock', { sku: 'SKU-1', hubCode: 'HUB-KHI' }))[0].reserved).toBe(0);
   });
+
+  it('completes buyer checkout, operator fulfillment and manual COD without claiming independent verification', async () => {
+    const { adapter } = await setup();
+    const registered = await supertest(serverModule.app).post('/api/auth/register')
+      .send({ name: 'Journey Buyer', email: 'journey-buyer@example.com', password: 'BuyerPassword123' });
+    expect(registered.status).toBe(201);
+    const buyerAuth = { Authorization: 'Bearer ' + registered.body.token };
+    const checkout = await supertest(serverModule.app).post('/api/checkout')
+      .set('Authorization', buyerAuth.Authorization).set('Idempotency-Key', 'journey-checkout-001')
+      .send({ customerName: 'Journey Buyer', customerEmail: 'journey-buyer@example.com',
+        city: 'Karachi', address: 'Synthetic test address, Karachi', paymentMethod: 'COD',
+        items: [{ sku: 'SKU-1', qty: 1 }] });
+    expect(checkout.status).toBe(201);
+    const orderId = checkout.body.order.id;
+    expect(checkout.body.order).toMatchObject({ status: 'PLACED', paymentState: 'pending_cod',
+      paymentEvidence: { mode: 'manual_cod', providerVerified: false, independentlyVerified: false } });
+    const buyerOrders = await supertest(serverModule.app).get('/api/me/orders').set(buyerAuth);
+    expect(buyerOrders.status).toBe(200);
+    expect(buyerOrders.body.map((order) => order.id)).toContain(orderId);
+
+    const operatorLogin = await supertest(serverModule.app).post('/api/auth/login')
+      .send({ email: 'operator@example.com', password: 'Operator123' });
+    expect(operatorLogin.status).toBe(200);
+    const operatorAuth = { Authorization: 'Bearer ' + operatorLogin.body.token };
+    const staffOrders = await supertest(serverModule.app).get('/api/orders').set(operatorAuth);
+    expect(staffOrders.body.map((order) => order.id)).toContain(orderId);
+    for (const status of ['CONFIRMED', 'PICKING', 'PACKED']) {
+      const response = await supertest(serverModule.app).patch('/api/orders/' + orderId + '/status')
+        .set(operatorAuth).send({ status });
+      expect(response.status).toBe(200);
+    }
+    const dispatched = await supertest(serverModule.app).patch('/api/orders/' + orderId + '/status')
+      .set(operatorAuth).set('Idempotency-Key', 'journey-dispatch-001').send({ status: 'DISPATCHED' });
+    expect(dispatched.status).toBe(200);
+    const delivered = await supertest(serverModule.app).patch('/api/orders/' + orderId + '/status')
+      .set(operatorAuth).send({ status: 'DELIVERED' });
+    expect(delivered.status).toBe(200);
+    expect(delivered.body.order).toMatchObject({ deliveryStatus: 'operator_reported',
+      deliveryEvidence: { source: 'operator_report', status: 'not_independently_verified',
+        providerVerified: false, independentlyVerified: false } });
+
+    const amountMinor = checkout.body.order.price.totalMinor;
+    const cod = await supertest(serverModule.app).post('/api/orders/' + orderId + '/payment/record-cod')
+      .set(operatorAuth).send({ amountMinor, externalReference: 'SYNTHETIC-COD-RECEIPT-001' });
+    expect(cod.status).toBe(200);
+    expect(cod.body).toMatchObject({ providerVerified: false,
+      payment: { executionMode: 'manual', providerVerified: false, status: 'manual_recorded' },
+      order: { paymentState: 'paid_manual',
+        paymentVerificationStatus: 'manual_recorded_not_independently_verified',
+        paymentEvidence: { providerVerified: false, independentlyVerified: false } } });
+    const buyerDetail = await supertest(serverModule.app).get('/api/me/orders/' + orderId).set(buyerAuth);
+    expect(buyerDetail.status).toBe(200);
+    expect(buyerDetail.body.order.deliveryEvidence.independentlyVerified).toBe(false);
+    expect(buyerDetail.body.order.paymentEvidence.independentlyVerified).toBe(false);
+    expect(await adapter.count('payments', { orderId })).toBe(1);
+  });
+
+  it('blocks production checkout until pilot enablement and site/owner evidence gates are configured', async () => {
+    const keys = ['VELOSUPPLY_PILOT_ENABLED', 'VELOSUPPLY_PILOT_SITE_VERIFIED',
+      'VELOSUPPLY_PILOT_SITE_EVIDENCE_REF', 'VELOSUPPLY_PILOT_OWNER_APPROVAL_REF'];
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    keys.forEach((key) => delete process.env[key]);
+    try {
+      const { adapter } = await setup('production');
+      const registered = await supertest(serverModule.app).post('/api/auth/register')
+        .send({ name: 'Production Test Buyer', email: 'production-buyer@example.com', password: 'BuyerPassword123' });
+      expect(registered.status).toBe(201);
+      const response = await supertest(serverModule.app).post('/api/checkout')
+        .set('Authorization', 'Bearer ' + registered.body.token)
+        .set('Idempotency-Key', 'production-pilot-disabled-001')
+        .send({ customerName: 'Production Test Buyer', customerEmail: 'production-buyer@example.com',
+          city: 'Karachi', address: 'Synthetic test address, Karachi', paymentMethod: 'COD',
+          items: [{ sku: 'SKU-1', qty: 1 }] });
+      expect(response.status).toBe(503);
+      expect(response.body.error).toBe('PILOT_NOT_AUTHORIZED');
+      expect(await adapter.count('orders')).toBe(0);
+      const status = await supertest(serverModule.app).get('/api/pilot/status');
+      expect(status.body).toMatchObject({ authorized: false, site: { status: 'proposed' } });
+    } finally {
+      for (const key of keys) {
+        if (previous[key] === undefined) delete process.env[key];
+        else process.env[key] = previous[key];
+      }
+    }
+  });
+
+  it('rejects production pilot orders above five total units before persisting an order', async () => {
+    const keys = ['VELOSUPPLY_PILOT_ENABLED', 'VELOSUPPLY_PILOT_SITE_VERIFIED',
+      'VELOSUPPLY_PILOT_SITE_EVIDENCE_REF', 'VELOSUPPLY_PILOT_OWNER_APPROVAL_REF'];
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    process.env.VELOSUPPLY_PILOT_ENABLED = 'true';
+    process.env.VELOSUPPLY_PILOT_SITE_VERIFIED = 'true';
+    process.env.VELOSUPPLY_PILOT_SITE_EVIDENCE_REF = 'test-only-site-evidence';
+    process.env.VELOSUPPLY_PILOT_OWNER_APPROVAL_REF = 'test-only-owner-approval';
+    try {
+      const { adapter } = await setup('production');
+      const registered = await supertest(serverModule.app).post('/api/auth/register')
+        .send({ name: 'Limit Test Buyer', email: 'limit-buyer@example.com', password: 'BuyerPassword123' });
+      const response = await supertest(serverModule.app).post('/api/checkout')
+        .set('Authorization', 'Bearer ' + registered.body.token)
+        .set('Idempotency-Key', 'pilot-unit-limit-001')
+        .send({ customerName: 'Limit Test Buyer', customerEmail: 'limit-buyer@example.com',
+          city: 'Karachi', address: 'Synthetic test address, Karachi', paymentMethod: 'COD',
+          items: [{ sku: 'SKU-1', qty: 6 }] });
+      expect(response.status).toBe(409);
+      expect(response.body.error).toBe('PILOT_UNIT_LIMIT');
+      expect(await adapter.count('orders')).toBe(0);
+    } finally {
+      for (const key of keys) {
+        if (previous[key] === undefined) delete process.env[key];
+        else process.env[key] = previous[key];
+      }
+    }
+  });
+
 });

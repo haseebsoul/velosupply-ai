@@ -1,0 +1,32 @@
+import { createRequire } from 'node:module';
+import { describe, expect, it } from 'vitest';
+const require = createRequire(import.meta.url);
+const { PILOT_POLICY, getPilotAuthorization, getPilotPublicStatus, getPakistanDayKey } = require('../pilot-policy.js');
+
+describe('controlled Karachi pilot policy', () => {
+  it('fails closed by default and keeps HUB-KHI proposed', () => {
+    const status = getPilotPublicStatus({});
+    expect(status).toMatchObject({ status: 'proposed_not_authorized', authorized: false,
+      site: { code: 'HUB-KHI', city: 'Karachi', status: 'proposed' },
+      payment: { method: 'COD', providerVerified: false, independentlyVerified: false },
+      delivery: { mode: 'operator_reported', providerVerified: false, independentlyVerified: false } });
+    expect(status).not.toHaveProperty('siteEvidenceRef');
+    expect(status).not.toHaveProperty('ownerApprovalRef');
+  });
+  it('requires all four explicit gates and never exposes their reference values', () => {
+    const env = { VELOSUPPLY_PILOT_ENABLED: 'true', VELOSUPPLY_PILOT_SITE_VERIFIED: 'true',
+      VELOSUPPLY_PILOT_SITE_EVIDENCE_REF: 'test-only-site-evidence',
+      VELOSUPPLY_PILOT_OWNER_APPROVAL_REF: 'test-only-owner-approval' };
+    expect(getPilotAuthorization(env).enabled).toBe(true);
+    for (const key of Object.keys(env)) expect(getPilotAuthorization({ ...env, [key]: '' }).enabled).toBe(false);
+    const safe = getPilotPublicStatus(env);
+    expect(safe.authorized).toBe(true);
+    expect(JSON.stringify(safe)).not.toContain('test-only');
+  });
+  it('defines low proposed caps and uses Pakistan-local calendar days', () => {
+    expect(PILOT_POLICY.limits).toEqual({ maxOrdersPerPakistanDay: 5,
+      maxOrdersPerBuyerPerPakistanDay: 1, maxUnitsPerOrder: 5,
+      maxOrderAmountMinor: 2500000, maxOutstandingCodMinor: 5000000 });
+    expect(getPakistanDayKey('2026-11-14T19:30:00.000Z')).toBe('2026-11-15');
+  });
+});

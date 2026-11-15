@@ -14,6 +14,7 @@ const groups: Array<{ title: string; items: NavItem[] }> = [
   { title: 'Workspace', items: [
     { to: '/dashboard', label: 'Overview', icon: LayoutDashboard },
     { to: '/dashboard/activity', label: 'Activity', icon: Activity },
+    { to: '/dashboard/orders', label: 'Orders', icon: Package },
     { to: '/dashboard/reliability', label: 'Reliability', icon: ShieldCheck, operationsOnly: true },
     { to: '/dashboard/messages', label: 'Messages', icon: Bell }
   ] },
