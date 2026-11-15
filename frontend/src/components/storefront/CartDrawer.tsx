@@ -7,6 +7,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { Link } from 'react-router-dom'
 import { api, errorMessage } from '../../lib/apiClient'
 import { useCartStore } from '../../store/useCartStore'
+import { useAppStore } from '../../store/useAppStore'
 
 const checkoutSchema = z.object({
   customerName: z.string().min(2, 'Enter your name'),
@@ -19,6 +20,7 @@ type CheckoutFields = z.infer<typeof checkoutSchema>
 
 export function CartDrawer() {
   const { lines, open, setOpen, setQuantity, clear } = useCartStore()
+  const user = useAppStore((state) => state.user)
   const [receipt, setReceipt] = useState('')
   const [checkoutError, setCheckoutError] = useState('')
   const idempotencyRef = useRef<{ signature: string; key: string } | null>(null)
@@ -68,7 +70,9 @@ export function CartDrawer() {
         <motion.button className="drawer-backdrop" aria-label="Close cart" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={close} />
         <motion.aside className="cart-drawer" initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 30, stiffness: 280 }} aria-label="Shopping cart">
           <div className="drawer-head"><div><span className="eyebrow">Live inventory</span><h2 style={{ margin: '5px 0' }}>{receipt ? 'Order confirmed' : 'Your cart'}</h2></div><button className="small-button" aria-label="Close cart" onClick={close}><X size={18} /></button></div>
-          {receipt ? <div className="card-light" style={{ marginTop: 28 }}><span className="success-text">Inventory reserved successfully</span><h3>Thank you for your order.</h3><div className="mono-label">ORDER REFERENCE</div><div className="mono" style={{ margin: '9px 0 20px' }}>{receipt}</div><p className="muted">Your order is assigned to an optimized fulfillment hub.</p><Link className="button button-dark" to="/dashboard" onClick={close}>Watch fulfillment route</Link></div> :
+          {receipt ? <div className="card-light" style={{ marginTop: 28 }}><span className="success-text">Inventory reserved successfully</span><h3>Thank you for your order.</h3><div className="mono-label">ORDER REFERENCE</div><div className="mono" style={{ margin: '9px 0 20px' }}>{receipt}</div><p className="muted">Your order is assigned to an optimized fulfillment hub.</p>{user?.role === 'buyer' || user?.role === 'user'
+              ? <Link className="button button-dark" to="/store/orders" onClick={close}>Track your order</Link>
+              : <Link className="button button-dark" to={user ? "/dashboard" : "/store"} onClick={close}>{user ? "Open workspace" : "Continue shopping"}</Link>}</div> :
           lines.length === 0 ? <div style={{ textAlign: 'center', padding: '60px 10px' }}><ShoppingCart size={32} /><p className="muted">Your cart is waiting for hardware.</p><Link className="button button-dark" to="/store" onClick={close}>Explore catalog</Link></div> :
             <>
               {lines.map(({ product, quantity }) => <div className="cart-line" key={product.id}>

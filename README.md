@@ -34,7 +34,7 @@ Open the Vite URL printed in the frontend terminal (normally `http://localhost:5
 
 ## Demo accounts
 
-All seeded local-development demo accounts use password `Velo@12345`. Production startup intentionally does not seed these demo users. Create Administrator and Operations team accounts using the private `ADMIN_REGISTRATION_KEY` and `OPERATOR_REGISTRATION_KEY` invitation keys. Public self-registration is limited to Buyers.
+Seeded local-development demo accounts use password `Velo@12345`; production startup does not seed these users. Buyers can self-register. An existing Administrator issues time-limited Administrator or Operations team invitations from **Dashboard → Invitation keys**. Invitation secrets are shown once, stored as SHA-256 hashes, expire, and can be revoked before redemption.
 
 | Email | Role |
 | --- | --- |
@@ -42,28 +42,31 @@ All seeded local-development demo accounts use password `Velo@12345`. Production
 | `operator@velosupply.ai` | Operator |
 | `buyer@velosupply.ai` | Buyer |
 
-Copy `backend/.env.example` to `backend/.env` and set `MONGODB_URI`, `MONGODB_DB_NAME=velosupply`, and a long random `JWT_SECRET`. The Atlas database user must have `readWrite` access to the `velosupply` database. On startup, Atlas creates indexes for the named collections. If the legacy `application_state` document exists and the new collections are empty, the repository backs it up into `migrationBackups` before migrating its data. If neither old state nor new collection data exists, the adapter creates an empty production state. Existing populated new collections without `application_meta` cause startup to fail closed rather than being overwritten. Sample catalog, demo users and demo orders are only loaded into Atlas when `SEED_DEMO_DATA=true` is explicitly set in a non-production environment. Local JSON mode continues to seed demo data for development. Set `ADMIN_REGISTRATION_KEY` to a private invitation key before creating an Administrator account; never commit `.env` or real credentials. Production deployments must also set `CORS_ORIGIN` to the deployed frontend origin and terminate TLS at a trusted proxy. The `MONGODB_STATE_COLLECTION` variable identifies the legacy source collection to read during migration; new application writes do not go back into that collection.
+Copy `backend/.env.example` to `backend/.env` and set `MONGODB_URI`, `MONGODB_DB_NAME=velosupply`, and a long random `JWT_SECRET`. The Atlas database user must have `readWrite` access to the `velosupply` database. On startup, Atlas creates indexes for the named collections. If the legacy `application_state` document exists and the new collections are empty, the repository backs it up into `migrationBackups` before migrating its data. If neither old state nor new collection data exists, the adapter creates an empty production state. Existing populated new collections without `application_meta` cause startup to fail closed rather than being overwritten. Sample catalog, demo users and demo orders are only loaded into Atlas when `SEED_DEMO_DATA=true` is explicitly set in a non-production environment. Local JSON mode continues to seed demo data for development. Invitation keys are stored in the `invitations` collection with a unique hash index and are managed from **Dashboard → Invitation keys**. For a fresh production database only, set a strong, one-time `ADMIN_BOOTSTRAP_KEY` in the deployment secret store; when there is no active Administrator the API records a single-use, seven-day invitation from its hash. Redeem it during `/register`, then remove the bootstrap secret. Never commit `.env` or real credentials. Production deployments must also set `CORS_ORIGIN` to the deployed frontend origin and terminate TLS at a trusted proxy. The `MONGODB_STATE_COLLECTION` variable identifies the legacy source collection to read during migration; new application writes do not go back into that collection.
 
 ## Routes
 
 - `/` — editorial landing page, network telemetry preview, ROI estimator, and pricing.
 - `/store` — searchable, filterable hardware catalog and checkout drawer.
-- `/login` — authenticated operations entry point; the demo admin button fills the seeded local-development admin credentials.
-- `/register` — stakeholder registration for Administrator (invitation key required), Operations team, or Buyer.
-- `/dashboard` — live metrics and orders.
+- `/store/orders` — authenticated Buyer order tracking, scoped to the signed-in buyer.
+- `/store/account` — Buyer identity and session controls.
+- `/login` — role-aware sign-in; demo account fill is available only in local development.
+- `/register` — Buyer self-registration or Administrator / Operations team registration with a matching active invitation key.
+- `/dashboard` — role-aware operations overview and recorded order metrics.
 - `/dashboard/topology` — warehouse network and scenario simulations.
 - `/dashboard/threats` — stock-cover alerts with available units, days of cover, supplier reliability and recommended draft purchase orders.
 - `/dashboard/activity` — telemetry event stream and throughput chart.
-- `/dashboard/messages` — priority support notice and workspace updates.
+- `/dashboard/messages` — Administrator-only priority support notice and workspace updates.
 - `/dashboard/manage` — inventory controls, operating simulation parameters and purchase-order approval/shipment/receipt workflow.
-- `/dashboard/rewards` — efficiency score and program status.
+- `/dashboard/rewards` — Administrator-only efficiency score and program status.
 - `/dashboard/reports` — SLA summary and downloadable CSV audit report.
-- `/dashboard/account` — backend health check and session controls.
+- `/dashboard/account` — Administrator-only backend health and session controls.
 - `/dashboard/admin` — administrator-only user and role management.
+- `/dashboard/access` — administrator-only invitation key generation, listing and revocation.
 
 ## API overview
 
-Public endpoints include `GET /api/health`, `GET /api/products`, `POST /api/auth/login`, and `POST /api/auth/register`. Authenticated routes provide profile, buyer-owned orders/invoices, checkout, metrics, warehouses, stock-cover threats, inventory updates, purchase orders and simulations. Purchase orders move through draft → approved → shipped → received; the receive transition alone increases stock. Admin user-management endpoints require an admin bearer token. Live telemetry is broadcast over `/ws/telemetry`.
+Public endpoints include `GET /api/health`, `GET /api/products`, `POST /api/auth/login`, and `POST /api/auth/register`. Authenticated routes provide profile, buyer-owned orders/invoices, checkout, metrics, warehouses, stock-cover threats, inventory updates, purchase orders and simulations. Purchase orders move through draft → approved → shipped → received; the receive transition alone increases stock. Admin user-management and invitation-key endpoints require an admin bearer token. Invitation secrets are returned only at creation, SHA-256 hashed at rest, and expire or can be revoked before redemption. Live telemetry is broadcast over `/ws/telemetry`.
 
 
 ## Design notes

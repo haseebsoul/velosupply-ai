@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { Boxes, Copy, Download, RefreshCw, ShieldCheck, Truck } from 'lucide-react'
+import { Boxes, Copy, Download, RefreshCw, ShieldCheck, Truck, Search, Filter, Database } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { useLocation } from 'react-router-dom'
 import { api, errorMessage } from '../../lib/apiClient'
 import { useWebSocket } from '../../lib/useWebSocket'
@@ -11,8 +12,23 @@ import { ThreatRow } from '../../components/dashboard/ThreatRow'
 import { TerminalPanel } from '../../components/dashboard/TerminalPanel'
 import { TopologyCanvas } from '../../components/dashboard/TopologyCanvas'
 
-const palette = ['var(--navy-700)', 'var(--ink-soft)', 'var(--ink-muted)', 'var(--navy-50)', 'var(--white)']
+const palette = ['var(--hex-c84b11)', 'var(--hex-a93d0b)', 'var(--hex-78716c)', 'var(--hex-d6d0c4)', 'var(--hex-f3efe6)']
 const initialMetrics: Metrics = { gmv24h: 0, activeOrders: 0, fulfillmentHealth: 0, packetsPerSec: 0, avgLatencyMs: 0, threatsBlocked: 0, detectionTimeMs: 0, efficiencyScore: 0, hubCapacities: [] }
+
+function orderStatusClass(status: string) {
+  const value = status.toUpperCase()
+  if (['DELIVERED', 'CONFIRMED'].includes(value)) return 'status-pill status-positive'
+  if (['DISPATCHED', 'PICKING', 'PACKED'].includes(value)) return 'status-pill status-warning'
+  if (value === 'PLACED') return 'status-pill status-info'
+  if (['CANCELLED', 'RETURNED'].includes(value)) return 'status-pill status-critical'
+  return 'status-pill status-muted'
+}
+function purchaseStatusClass(status: PurchaseOrder['status']) {
+  return status === 'received' ? 'status-pill status-positive'
+    : status === 'shipped' ? 'status-pill status-warning'
+      : status === 'approved' ? 'status-pill status-info'
+        : 'status-pill status-muted'
+}
 
 export function CommandPages() {
   const { pathname } = useLocation()
@@ -33,6 +49,9 @@ export function CommandPages() {
   const [priorityMessageDismissed, setPriorityMessageDismissed] = useState(false)
   const [simulation, setSimulation] = useState({ safetyBuffer: 20, surgeMultiplier: 2, maxLatency: 50 })
   const [search, setSearch] = useState('')
+  const [threatFilter, setThreatFilter] = useState<'ALL' | 'CRITICAL' | 'HIGH' | 'MEDIUM'>('ALL')
+  const [inventoryQuery, setInventoryQuery] = useState('')
+  const [inventoryHub, setInventoryHub] = useState('ALL')
   const refresh = useCallback(async () => {
     try {
       const [m, p, o, h] = await Promise.all([api.get<Metrics>('/metrics'), api.get<Product[]>('/products'), api.get<Order[]>('/orders'), api.get<Warehouse[]>('/warehouses')])
@@ -97,7 +116,15 @@ export function CommandPages() {
       Number.isFinite(product.reorder_threshold) &&
       available <= product.reorder_threshold
   }), [products])
-  const history = events.slice(-20).map((event, index) => ({ name: index.toString(), orders: event.metrics?.activeOrders ?? Math.max(0, metrics.activeOrders + (index % 5) - 2), throughput: event.metrics?.packetsPerSec ?? metrics.packetsPerSec }))
+  const history = events.slice(-24).filter((event) => Boolean(event.timestamp)).map((event) => ({ name: new Date(event.timestamp!).toLocaleTimeString('en-PK', { hour: '2-digit', minute: '2-digit' }), orders: Number(event.metrics?.activeOrders ?? 0), throughput: Number(event.metrics?.packetsPerSec ?? 0) }))
+  const capacityPercent = (value: number) => Math.min(100, Math.max(0, Number.isFinite(value) ? value / 100 : 0))
+  const networkUtilization = warehouses.length ? Math.round(warehouses.reduce((sum, hub) => sum + capacityPercent(hub.capacity), 0) / warehouses.length) : 0
+  const threatSeverity = (threat: InventoryThreat) => (threat.severity || (threat.level === 'WARN' ? 'medium' : threat.level)).toUpperCase()
+  const threatCounts = { CRITICAL: threats.filter((item) => threatSeverity(item) === 'CRITICAL').length, HIGH: threats.filter((item) => threatSeverity(item) === 'HIGH').length, MEDIUM: threats.filter((item) => threatSeverity(item) === 'MEDIUM').length }
+  const visibleThreats = threats.filter((item) => threatFilter === 'ALL' || threatSeverity(item) === threatFilter)
+  const inventoryProducts = products.filter((product) => (inventoryHub === 'ALL' || product.warehouse_hub === inventoryHub) && `${product.sku} ${product.name} ${product.warehouse_hub}`.toLowerCase().includes(inventoryQuery.trim().toLowerCase()))
+  const categories = ['Power', 'Networking', 'Security', 'Infrastructure', 'Retail', 'Computing'].map((category) => ({ category, units: products.filter((product) => product.category === category).reduce((sum, product) => sum + Number(product.stock || 0), 0) }))
+  const maxCategoryUnits = Math.max(1, ...categories.map((item) => item.units))
   const request = async (operation: () => Promise<unknown>, success: string, then?: () => void) => {
     try { await operation(); setNotice(success); setError(''); then?.(); await refresh() }
     catch (reason) { setError(errorMessage(reason)) }
@@ -116,17 +143,34 @@ export function CommandPages() {
     {notice && <div role="status" className="success-text" style={{ marginBottom: 15 }}>{notice}</div>}
 
     {pathname === '/dashboard' && <>
-      <div className="drawer-head"><div><h1 className="ops-heading">Good morning, {user?.name ?? 'Operator'}.</h1><p className="ops-copy">Your Pakistan fulfillment network is in view.</p></div><span className="mono-label"><i className="live-dot" /> {connected ? 'TELEMETRY SYNC ACTIVE' : 'RECONNECTING'}</span></div>
-      <div className="dash-grid"><StatCard title="24H GROSS MERCHANDISE VALUE" value={metrics.gmv24h} prefix="Rs " note="PKR demo/order value" /><StatCard title="ACTIVE ORDERS IN TRANSIT" value={metrics.activeOrders} note="Across all fulfillment nodes" /><StatCard title="PAKISTAN FULFILLMENT HEALTH" value={metrics.fulfillmentHealth} suffix="%" note="Network-wide SLA performance" /></div>
-      <div className="dash-two"><section className="card-ops dash-card capacity-card">
-          <div className="capacity-card-heading"><div><span className="mono-label">WAREHOUSE CAPACITY</span><h3>Network utilization</h3></div><strong className="capacity-total">{Math.round(warehouses.reduce((sum, hub) => sum + hub.capacity, 0) / Math.max(warehouses.length, 1))}%</strong></div>
-          <div className="capacity-meter-list">{warehouses.map((hub) => <div className="capacity-meter-row" key={hub.id}>
-            <div className="capacity-meter-meta"><span>{hub.name}</span><span className="mono">{hub.capacity}%</span></div>
-            <div className="capacity-meter-track"><span style={{ width: `${hub.capacity}%` }} /></div>
-          </div>)}</div>
-          <p className="ops-copy capacity-footnote">Live allocation across {warehouses.length} fulfillment nodes.</p>
+      <div className="page-intro">
+        <div><span className="mono-label">PAKISTAN EDITION / OVERVIEW</span><h1 className="ops-heading">Welcome back, {user?.name ?? 'Operator'}.</h1><p className="ops-copy">A concise view of the orders, inventory and hubs recorded in this workspace.</p></div>
+        <span className={`telemetry-state ${connected ? 'connected' : 'disconnected'}`}><i className="live-dot" /> {connected ? 'TELEMETRY CONNECTED' : 'TELEMETRY OFFLINE'}</span>
+      </div>
+      <div className="dash-grid">
+        <StatCard title="24H GROSS MERCHANDISE VALUE" value={metrics.gmv24h} prefix="Rs " note="Recorded order value · trailing 24 hours" />
+        <StatCard title="ACTIVE ORDERS" value={metrics.activeOrders} note="Orders not yet closed" />
+        <StatCard title="FULFILLMENT HEALTH" value={metrics.fulfillmentHealth} suffix="%" note="Share of hubs reporting online" />
+      </div>
+      <div className="dash-two">
+        <section className="card-ops dash-card capacity-card">
+          <div className="capacity-card-heading"><div><span className="mono-label">HUB CAPACITY</span><h3>Network utilization</h3></div><strong className="capacity-total">{networkUtilization}%</strong></div>
+          <div className="capacity-meter-list">{warehouses.map((hub) => {
+            const percent = capacityPercent(hub.capacity)
+            return <div className="capacity-meter-row" key={hub.id}>
+              <div className="capacity-meter-meta"><span>{hub.name}</span><span className="mono">{percent.toFixed(0)}%</span></div>
+              <div className="capacity-meter-track"><span style={{ width: `${percent}%` }} /></div>
+            </div>
+          })}</div>
+          <p className="ops-copy capacity-footnote">Capacity values normalized from the source hub records; hub availability is shown separately.</p>
         </section>
-        <section className="card-ops dash-card"><span className="mono-label">LIVE ORDER &amp; FULFILLMENT VELOCITY</span><div style={{ height: 270 }}><ResponsiveContainer><AreaChart data={history}><defs><linearGradient id="velocityFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--accent-ops-lime)" stopOpacity={.3} /><stop offset="95%" stopColor="var(--accent-ops-lime)" stopOpacity={0} /></linearGradient></defs><CartesianGrid stroke="var(--border-ops)" vertical={false} /><XAxis dataKey="name" hide /><YAxis stroke="var(--text-ops-muted)" /><Tooltip contentStyle={{ background: 'var(--bg-ops-card)', border: '1px solid var(--border-ops)' }} /><Area type="monotone" dataKey="orders" stroke="var(--accent-ops-lime)" fill="url(#velocityFill)" /></AreaChart></ResponsiveContainer></div></section></div>
+        <section className="card-ops dash-card">
+          <div className="drawer-head"><div><span className="mono-label">RECORDED EVENT TELEMETRY</span><h3>Order activity</h3></div><span className="mono-label">{history.length} samples</span></div>
+          {history.length > 0
+            ? <div style={{ height: 270 }}><ResponsiveContainer><AreaChart data={history}><defs><linearGradient id="velocityFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--hex-c84b11)" stopOpacity={.22} /><stop offset="95%" stopColor="var(--hex-c84b11)" stopOpacity={0} /></linearGradient></defs><CartesianGrid stroke="rgba(17,24,39,.08)" strokeDasharray="3 4" vertical={false} /><XAxis dataKey="name" stroke="var(--hex-78716c)" tick={{ fontSize: 10 }} minTickGap={20} /><YAxis stroke="var(--hex-78716c)" tick={{ fontSize: 10 }} allowDecimals={false} /><Tooltip contentStyle={{ background: 'var(--hex-ffffff)', border: '1px solid var(--hex-e6e1d8)', borderRadius: 10, color: 'var(--hex-111827)' }} /><Area type="monotone" dataKey="orders" name="Active orders" stroke="var(--hex-c84b11)" strokeWidth={2} fill="url(#velocityFill)" /></AreaChart></ResponsiveContainer></div>
+            : <div className="chart-empty-state">Chart samples will appear here when timestamped telemetry events are received.</div>}
+        </section>
+      </div>
       <section className="card-ops dash-card"><div className="drawer-head"><div><span className="mono-label">RECENT ACTIVITY</span><h3>Live orders &amp; SKU routing</h3></div><button className="small-button" onClick={() => void refresh()}><RefreshCw size={14} /> Refresh</button></div><OrdersTable orders={orders.slice(0, 8)} routeOrder={(id) => request(() => api.post(`/orders/${id}/route`), 'Order route optimized.')} /></section>
     </>}
 
@@ -134,22 +178,29 @@ export function CommandPages() {
       <h1 className="ops-heading">Global network topology</h1><p className="ops-copy">Inspect node health and simulate supply chain conditions.</p>
       <div className="inline-actions" style={{ margin: '18px 0' }}>{[['port_congestion', 'Simulate port congestion'], ['demand_spike', 'Simulate demand spike'], ['auto_rebalance', 'AI auto-rebalance']].map(([scenario, label]) => <button key={scenario} className="small-button" onClick={() => request(() => api.post('/simulation/trigger', { scenario, params: simulation }), `${label} simulation started.`)}>{label}</button>)}</div>
       <div className="card-ops dash-card"><TopologyCanvas warehouses={warehouses} onSelect={setSelectedHub} /></div>
-      {selectedHub && <div className="card-ops dash-card" style={{ marginTop: 12 }}><div className="drawer-head"><h3>{selectedHub.name}</h3><button className="small-button" onClick={() => setSelectedHub(null)}>Close</button></div><p className="ops-copy">{selectedHub.id} · {selectedHub.status} · {selectedHub.capacity}% capacity · {selectedHub.latency}ms latency</p></div>}
+      {selectedHub && <div className="card-ops dash-card hub-inspector" style={{ marginTop: 12 }}><div className="drawer-head"><div><span className="mono-label">SELECTED HUB</span><h3>{selectedHub.name}</h3></div><button className="small-button" onClick={() => setSelectedHub(null)}>Close</button></div><p className="ops-copy">{selectedHub.id} · {selectedHub.status} · {capacityPercent(selectedHub.capacity).toFixed(0)}% capacity · {selectedHub.latency}ms recorded latency</p></div>}
       <div className="dash-grid"><StatCard title="PACKETS / SEC" value={metrics.packetsPerSec} /><StatCard title="AVG LATENCY" value={metrics.avgLatencyMs} suffix="ms" /><StatCard title="THREATS BLOCKED" value={metrics.threatsBlocked} /></div>
     </>}
 
     {pathname === '/dashboard/threats' && <>
-      <h1 className="ops-heading">Inventory threats</h1><p className="ops-copy">Days of cover, reorder recommendations and supplier reliability from the stock movement ledger.</p>
+      <div className="page-intro"><div><span className="mono-label">STOCK / EXCEPTIONS</span><h1 className="ops-heading">Inventory threats</h1><p className="ops-copy">Review reorder risk and warehouse signals calculated from the stock movement ledger.</p></div><span className="status-pill">{threats.length} recorded alerts</span></div>
+      <div className="dash-grid">
+        <StatCard title="EFFICIENCY SCORE" value={metrics.efficiencyScore} suffix=" pts" note="Workspace metric from API" />
+        <StatCard title="DETECTION TIME" value={metrics.detectionTimeMs} suffix="ms" note="Recorded SRE metric" />
+        <StatCard title="THREATS BLOCKED" value={metrics.threatsBlocked} note="Recorded counter" />
+      </div>
+      <div className="threat-filter-bar" role="group" aria-label="Filter inventory threats">
+        {([{ value: 'ALL', label: `All (${threats.length})` }, { value: 'CRITICAL', label: `Critical (${threatCounts.CRITICAL})` }, { value: 'HIGH', label: `High (${threatCounts.HIGH})` }, { value: 'MEDIUM', label: `Medium (${threatCounts.MEDIUM})` }] as const).map((tab) => <button key={tab.value} type="button" className={`threat-filter-tab ${threatFilter === tab.value ? 'active' : ''}`} aria-pressed={threatFilter === tab.value} onClick={() => setThreatFilter(tab.value)}>{tab.label}</button>)}
+      </div>
       {!['admin', 'operator'].includes(user?.role ?? '') ? <div className="card-ops dash-card danger-text">Administrator or operator access is required to view inventory threats.</div>
-        : threats.length === 0 ? <div className="card-ops dash-card success-text">No inventory or warehouse threats currently meet the SRS thresholds.</div>
-        : threats.map((threat) => <ThreatRow key={threat.id} threat={threat} onResolve={() => threat.product && request(
+        : visibleThreats.length === 0 ? <div className="card-ops dash-card threat-empty-state">No {threatFilter === 'ALL' ? '' : threatFilter.toLowerCase() + ' '}inventory or warehouse threats currently meet the source thresholds.</div>
+        : <div className="threat-list">{visibleThreats.map((threat) => <ThreatRow key={threat.id} threat={threat} onResolve={() => threat.product && request(
           () => api.post(`/inventory/restock/${threat.product!.id}`, { quantity: threat.recommendQty }, {
             headers: { 'Idempotency-Key': crypto.randomUUID() }
           }),
           `Draft purchase order requested for ${threat.product!.sku}.`,
           () => { void refreshThreats() }
-        )} />)}
-      <div className="dash-grid"><StatCard title="AI EFFICIENCY SCORE" value={metrics.efficiencyScore} suffix=" pts" /><StatCard title="DETECTION TIME" value={metrics.detectionTimeMs} suffix="ms" /><StatCard title="THREATS BLOCKED" value={metrics.threatsBlocked} /></div>
+        )} />)}</div>}
     </>}
 
     {pathname === '/dashboard/messages' && <>
@@ -170,14 +221,27 @@ export function CommandPages() {
     </>}
 
     {pathname === '/dashboard/activity' && <>
-      <h1 className="ops-heading">Live system activity</h1><p className="ops-copy">Event stream and regional throughput update as telemetry arrives.</p>
-      <div className="dash-two"><section className="card-ops dash-card"><span className="mono-label">NETWORK THROUGHPUT · PACKETS / SEC</span><div style={{ height: 360 }}><ResponsiveContainer><AreaChart data={history}><CartesianGrid stroke="var(--border-ops)" /><XAxis dataKey="name" hide /><YAxis stroke="var(--text-ops-muted)" /><Tooltip /><Area dataKey="throughput" stroke="var(--accent-ops-lime)" fill="var(--accent-ops-lime)" fillOpacity={.1} /></AreaChart></ResponsiveContainer></div></section><TerminalPanel events={events} /></div>
+      <div className="page-intro"><div><span className="mono-label">OBSERVABILITY / EVENTS</span><h1 className="ops-heading">Live system activity</h1><p className="ops-copy">Timestamped network and order events received by this browser session.</p></div><span className={`telemetry-state ${connected ? 'connected' : 'disconnected'}`}><i className="live-dot" /> {connected ? 'STREAM CONNECTED' : 'STREAM OFFLINE'}</span></div>
+      <div className="dash-two">
+        <section className="card-ops dash-card activity-chart-card">
+          <div className="drawer-head"><div><span className="mono-label">NETWORK THROUGHPUT</span><h3>Packets per second</h3></div><strong className="activity-current-metric">{metrics.packetsPerSec.toLocaleString()}</strong></div>
+          {history.length > 0
+            ? <div style={{ height: 315 }}><ResponsiveContainer><AreaChart data={history}><defs><linearGradient id="activityThroughputFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--hex-c84b11)" stopOpacity={.2} /><stop offset="100%" stopColor="var(--hex-c84b11)" stopOpacity={0} /></linearGradient></defs><CartesianGrid stroke="rgba(17,24,39,.08)" strokeDasharray="3 4" vertical={false} /><XAxis dataKey="name" stroke="var(--hex-78716c)" tick={{ fontSize: 10 }} minTickGap={22} /><YAxis stroke="var(--hex-78716c)" tick={{ fontSize: 10 }} allowDecimals={false} /><Tooltip contentStyle={{ background: 'var(--hex-ffffff)', border: '1px solid var(--hex-e6e1d8)', borderRadius: 10, color: 'var(--hex-111827)' }} /><Area type="monotone" dataKey="throughput" name="Packets / sec" stroke="var(--hex-c84b11)" strokeWidth={2} fill="url(#activityThroughputFill)" /></AreaChart></ResponsiveContainer></div>
+            : <div className="chart-empty-state">Waiting for timestamped telemetry samples. The graph will populate from received events.</div>}
+        </section>
+        <TerminalPanel events={events} />
+      </div>
     </>}
 
     {pathname === '/dashboard/manage' && <>
-      <h1 className="ops-heading">Inventory management</h1><p className="ops-copy">Tune simulation guardrails and manage live SKU availability.</p>
-      <div className="dash-grid">{[['Safety stock buffer %', 'safetyBuffer', 5, 80], ['Order surge multiplier', 'surgeMultiplier', 1, 10], ['Max carrier latency SLA', 'maxLatency', 10, 200]].map(([label, key, min, max]) => <div className="card-ops dash-card" key={key}><span className="mono-label">{label}</span><div className="ops-form-row" style={{ marginTop: 12 }}><input className="field" type="range" min={Number(min)} max={Number(max)} value={simulation[key as keyof typeof simulation]} onChange={(event) => setSimulation((current) => ({ ...current, [key]: Number(event.target.value) }))} /><span className="mono">{simulation[key as keyof typeof simulation]}</span></div></div>)}</div>
-      <div className="card-ops dash-card table-wrap"><table className="dash-table"><thead><tr><th>SKU / Item</th><th>Stock</th><th>Price</th><th>Warehouse</th><th>Adjustment reason</th><th>Actions</th></tr></thead><tbody>{products.map((product) => <tr key={product.id}><td>{product.sku}<div className="ops-muted">{product.name}</div></td><td><input aria-label={`Stock for ${product.sku}`} className="field" type="number" min="0" defaultValue={product.stock} style={{ width: 90, padding: 8 }} id={`stock-${product.id}`} /></td><td><input aria-label={`Price for ${product.sku}`} className="field" type="number" min="0" step="1" defaultValue={product.priceExGstPkr ?? product.price} style={{ width: 100, padding: 8 }} id={`price-${product.id}`} /></td><td>{product.warehouse_hub}</td><td><input aria-label={`Adjustment reason for ${product.sku}`} className="field" type="text" defaultValue="cycle_count" id={`reason-${product.id}`} style={{ width: 130, padding: 8 }} /></td><td><button className="small-button" onClick={() => { const stock = Number((document.getElementById(`stock-${product.id}`) as HTMLInputElement).value); const price = Number((document.getElementById(`price-${product.id}`) as HTMLInputElement).value); const reason = (document.getElementById(`reason-${product.id}`) as HTMLInputElement).value; const idempotencyKey = crypto.randomUUID(); void request(() => api.patch(`/inventory/${product.id}`, { stock, price, reason }, { headers: { 'Idempotency-Key': idempotencyKey } }), `${product.sku} inventory updated.`) }}>Save</button></td></tr>)}</tbody></table></div>
+      <div className="page-intro"><div><span className="mono-label">STOCK / REPLENISHMENT</span><h1 className="ops-heading">Inventory management</h1><p className="ops-copy">Manage the product records and replenishment orders available to this workspace.</p></div><button className="button button-dark" onClick={() => request(() => api.post('/simulation/trigger', { scenario: 'auto_rebalance', params: simulation }), 'AI rebalance simulation requested.')}><RefreshCw size={14} /> Run AI auto-rebalance</button></div>
+      <div className="dash-grid">{[['Safety stock buffer %', 'safetyBuffer', 5, 80], ['Order surge multiplier', 'surgeMultiplier', 1, 10], ['Max carrier latency SLA', 'maxLatency', 10, 200]].map(([label, key, min, max]) => <div className="card-ops dash-card" key={key}><span className="mono-label">{label}</span><div className="guardrail-readout"><strong>{simulation[key as keyof typeof simulation]}{key === 'safetyBuffer' ? '%' : key === 'surgeMultiplier' ? 'x' : ' ms'}</strong></div><input className="field guardrail-slider" type="range" min={Number(min)} max={Number(max)} value={simulation[key as keyof typeof simulation]} onChange={(event) => setSimulation((current) => ({ ...current, [key]: Number(event.target.value) }))} /></div>)}</div>
+      <div className="inventory-toolbar">
+        <label className="inventory-search"><Search size={15} /><input className="field" placeholder="Filter by SKU, item, or hub…" value={inventoryQuery} onChange={(event) => setInventoryQuery(event.target.value)} /></label>
+        <label className="inventory-hub-filter"><Filter size={14} /><select className="field" value={inventoryHub} onChange={(event) => setInventoryHub(event.target.value)}><option value="ALL">All hubs</option>{warehouses.map((hub) => <option key={hub.id} value={hub.code || hub.id}>{hub.code || hub.id}</option>)}</select></label>
+        <span className="mono-label">{inventoryProducts.length} / {products.length} SKUs</span>
+      </div>
+      <div className="card-ops dash-card table-wrap"><table className="dash-table inventory-table"><thead><tr><th>SKU / ITEM</th><th>STOCK</th><th>PRICE · PKR</th><th>WAREHOUSE</th><th>ADJUSTMENT REASON</th><th>ACTIONS</th></tr></thead><tbody>{inventoryProducts.map((product) => <tr key={product.id}><td><code className="sku-code">{product.sku}</code><div className="inventory-product-name">{product.name}</div></td><td><input aria-label={`Stock for ${product.sku}`} className="field inventory-cell-input" type="number" min="0" defaultValue={product.stock} id={`stock-${product.id}`} /></td><td><input aria-label={`Price for ${product.sku}`} className="field inventory-cell-input price-cell" type="number" min="0" step="1" defaultValue={product.priceExGstPkr ?? product.price} id={`price-${product.id}`} /></td><td><span className="hub-code-pill">{product.warehouse_hub}</span></td><td><select aria-label={`Adjustment reason for ${product.sku}`} className="field inventory-cell-input reason-select" defaultValue="cycle_count" id={`reason-${product.id}`}><option value="cycle_count">cycle_count</option><option value="damaged_stock">damaged_stock</option><option value="restock_receipt">restock_receipt</option><option value="audit_correction">audit_correction</option></select></td><td><button className="small-button" onClick={() => { const stock = Number((document.getElementById(`stock-${product.id}`) as HTMLInputElement).value); const price = Number((document.getElementById(`price-${product.id}`) as HTMLInputElement).value); const reason = (document.getElementById(`reason-${product.id}`) as HTMLSelectElement).value; const idempotencyKey = crypto.randomUUID(); void request(() => api.patch(`/inventory/${product.id}`, { stock, price, reason }, { headers: { 'Idempotency-Key': idempotencyKey } }), `${product.sku} inventory updated.`) }}>Save</button></td></tr>)}</tbody></table>{inventoryProducts.length === 0 && <p className="ops-copy inventory-empty">No SKU records match this search and hub filter.</p>}</div>
       <section style={{ marginTop: 28 }}>
         <div className="drawer-head"><div><h2 className="ops-heading" style={{ fontSize: 19 }}>Purchase orders</h2><p className="ops-copy">Draft, approve, ship and receive replenishment orders. Inventory changes only on receipt.</p></div><span className="status-pill">{purchaseOrders.length} records</span></div>
         <div className="card-ops dash-card table-wrap" style={{ marginTop: 12 }}>
@@ -190,7 +254,7 @@ export function CommandPages() {
                 <td>{po.lines.map((line) => `${line.sku} × ${line.qty}`).join(', ')}</td>
                 <td>{po.hubCode}</td>
                 <td className="mono">{new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 }).format(po.totalPkr)}</td>
-                <td><span className="status-pill">{po.status}</span></td>
+                <td><span className={purchaseStatusClass(po.status)}>{po.status.toUpperCase()}</span></td>
                 <td>{nextStatus ? <button className="small-button" disabled={adminApprovalNeeded} title={adminApprovalNeeded ? 'Administrator approval is required above Rs 2,000,000' : undefined} onClick={() => void request(
                   () => api.patch(`/purchase-orders/${po.id}/status`, { status: nextStatus }, { headers: { 'Idempotency-Key': crypto.randomUUID() } }),
                   nextStatus === 'received' ? `${po.code} received; stock ledger updated.` : `${po.code} marked ${nextStatus}.`,
@@ -202,7 +266,6 @@ export function CommandPages() {
           {purchaseOrders.length === 0 && <p className="ops-muted">No purchase orders yet. Create a draft from an inventory threat recommendation.</p>}
         </div>
       </section>
-      <div style={{ marginTop: 15 }}><button className="small-button" onClick={() => request(() => api.post('/simulation/trigger', { scenario: 'auto_rebalance', params: simulation }), 'AI network rebalance started.')}>Run AI auto-rebalance</button></div>
     </>}
 
     {pathname === '/dashboard/rewards' && <>
@@ -242,9 +305,12 @@ export function CommandPages() {
     </>}
 
     {pathname === '/dashboard/reports' && <>
-      <div className="drawer-head"><div><h1 className="ops-heading">Operations reports</h1><p className="ops-copy">Executive view of network SLAs and inventory allocation.</p></div><button className="small-button" onClick={exportCsv}><Download size={14} /> Export CSV audit report</button></div>
-      <div className="dash-grid"><StatCard title="FULFILLMENT HEALTH" value={metrics.fulfillmentHealth} suffix="%" /><StatCard title="AVERAGE ROUTING LATENCY" value={metrics.avgLatencyMs} suffix="ms" /><StatCard title="ACTIVE ORDERS" value={metrics.activeOrders} /></div>
-      <div className="dash-two"><div className="card-ops dash-card"><span className="mono-label">CATEGORY INVENTORY CAPACITY</span>{['Power', 'Networking', 'Security', 'Infrastructure', 'Retail', 'Computing'].map((category, index) => { const count = products.filter((product) => product.category === category).reduce((sum, product) => sum + product.stock, 0); const percent = Math.min(100, count / 10); return <div key={category} style={{ marginTop: 18 }}><div className="drawer-head"><span>{category}</span><span className="mono">{count} units</span></div><div style={{ height: 6, marginTop: 8, background: 'var(--border-ops)', borderRadius: 9 }}><div style={{ width: `${percent}%`, height: '100%', borderRadius: 9, background: palette[index] }} /></div></div> })}</div><div className="card-ops dash-card"><span className="mono-label">EXECUTIVE SUMMARY</span><h3>Distributed by design.</h3><p className="ops-copy">VeloSupply currently tracks {products.length} demo SKUs across {warehouses.length} Pakistan demonstration hubs. {productsAtRisk.length} items require replenishment attention, while network fulfillment health is {metrics.fulfillmentHealth}%.</p><div className="ops-copy"><Truck size={15} /> Orders include both historical and live commerce data.</div></div></div>
+      <div className="drawer-head"><div><span className="mono-label">ANALYTICS / SUMMARY</span><h1 className="ops-heading">Operations reports</h1><p className="ops-copy">A summary of recorded fulfillment, routing and inventory data.</p></div><button className="button button-outline" onClick={exportCsv}><Download size={14} /> Export CSV audit report</button></div>
+      <div className="dash-grid"><StatCard title="FULFILLMENT HEALTH" value={metrics.fulfillmentHealth} suffix="%" note="Current API metric" /><StatCard title="AVERAGE ROUTING LATENCY" value={metrics.avgLatencyMs} suffix="ms" note="Recorded hub latency" /><StatCard title="ACTIVE ORDERS" value={metrics.activeOrders} note="Orders not yet closed" /></div>
+      <div className="dash-two">
+        <div className="card-ops dash-card"><span className="mono-label">CATEGORY INVENTORY CAPACITY</span>{categories.map(({ category, units }, index) => { const percent = Math.round((units / maxCategoryUnits) * 100); return <div key={category} className="report-capacity-row"><div className="drawer-head"><span>{category}</span><span className="mono">{units.toLocaleString()} units</span></div><div className="report-capacity-track"><span style={{ width: `${percent}%`, background: palette[index % palette.length] }} /></div></div> })}</div>
+        <div className="card-ops dash-card executive-summary-card"><div><span className="mono-label">EXECUTIVE SUMMARY</span><h3>Distributed by design.</h3><p className="ops-copy">The current workspace catalogue contains {products.length} product records across {warehouses.length} hub records. {productsAtRisk.length} products currently meet the inventory attention thresholds. Fulfillment health is {metrics.fulfillmentHealth}% from the backend health metric.</p></div><div className="executive-summary-footer"><Database size={15} /><span>Source: stored product, hub and order records</span></div></div>
+      </div>
     </>}
 
     {pathname === '/dashboard/account' && <AccountPanel />}
@@ -257,7 +323,7 @@ export function CommandPages() {
 }
 
 function OrdersTable({ orders, routeOrder }: { orders: Order[]; routeOrder: (id: string) => void }) {
-  return <div className="table-wrap"><table className="dash-table"><thead><tr><th>Order</th><th>Customer</th><th>Fulfillment</th><th>Status</th><th>Total</th><th>Action</th></tr></thead><tbody>{orders.map((order) => <tr key={order.id}><td className="mono">{order.id}</td><td>{order.customerName}<div className="ops-muted">{order.shippingRegion}</div></td><td>{order.warehouse_hub ?? 'Routing'}</td><td><span className="status-pill">{order.status}</span></td><td className="mono">{new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 }).format(order.total ?? order.price?.totalPkr ?? 0)}</td><td><button className="small-button" onClick={() => routeOrder(order.id)}>Auto-route</button></td></tr>)}</tbody></table>{orders.length === 0 && <p className="ops-copy">No orders are available.</p>}</div>
+  return <div className="table-wrap"><table className="dash-table"><thead><tr><th>Order</th><th>Customer</th><th>Fulfillment</th><th>Status</th><th>Total</th><th>Action</th></tr></thead><tbody>{orders.map((order) => <tr key={order.id}><td className="mono">{order.id}</td><td>{order.customerName}<div className="ops-muted">{order.shippingRegion}</div></td><td>{order.warehouse_hub ?? 'Routing'}</td><td><span className={orderStatusClass(order.status)}>{order.status}</span></td><td className="mono">{new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 }).format(order.total ?? order.price?.totalPkr ?? 0)}</td><td><button className="small-button" onClick={() => routeOrder(order.id)}>Auto-route</button></td></tr>)}</tbody></table>{orders.length === 0 && <p className="ops-copy">No orders are available.</p>}</div>
 }
 
 function UserRow({ account, isSelf, onRole, onDelete }: { account: User; isSelf: boolean; onRole: (role: UserRole) => void; onDelete: () => void }) {
@@ -270,18 +336,46 @@ function AccountPanel() {
   const [test, setTest] = useState('')
   const [testing, setTesting] = useState(false)
   const token = useAppStore((state) => state.token)
+  const user = useAppStore((state) => state.user)
+  const endpoint = `${window.location.origin}/api`
   const testConnection = async () => {
     setTesting(true)
     const start = performance.now()
     try {
-      await api.get('/health')
-      setTest(`Backend healthy · ${Math.round(performance.now() - start)}ms round trip`)
-    } catch (error) { setTest(errorMessage(error)) }
-    finally { setTesting(false) }
+      const response = await api.get('/health')
+      const elapsed = Math.round(performance.now() - start)
+      setTest(`${response.status} OK · ${elapsed}ms`)
+    } catch (reason) {
+      setTest(errorMessage(reason))
+    } finally {
+      setTesting(false)
+    }
+  }
+  const copyEndpoint = async () => {
+    try {
+      await navigator.clipboard.writeText(endpoint)
+      setCopied(true)
+    } catch (reason) {
+      setTest(errorMessage(reason))
+    }
   }
   return <>
-    <h1 className="ops-heading">Account &amp; system</h1><p className="ops-copy">Connection configuration and session controls.</p>
-    <div className="dash-two"><section className="card-ops dash-card"><span className="mono-label">API ENDPOINT</span><div className="ops-form-row" style={{ marginTop: 15 }}><input className="field mono" readOnly value={`${location.origin}/api`} /><button className="small-button" onClick={() => navigator.clipboard.writeText(`${location.origin}/api`).then(() => setCopied(true)).catch((error: unknown) => setTest(errorMessage(error)))}><Copy size={14} /> {copied ? 'Copied' : 'Copy'}</button></div><button className="small-button" style={{ marginTop: 16 }} disabled={testing} onClick={() => void testConnection()}>{testing ? 'Testing…' : 'Test backend & WS connection'}</button>{test && <p className="ops-copy">{test}</p>}</section>
-      <section className="card-ops dash-card"><span className="mono-label">ACTIVE SESSION</span><p className="ops-copy">Authenticated session token is {token ? 'present' : 'not available'}. Your operations access is protected by a signed bearer token.</p><button className="small-button" onClick={() => { useAppStore.getState().logout(); window.location.assign('/login') }}>Sign out of all activity</button></section></div>
+    <div className="page-intro"><div><span className="mono-label">WORKSPACE / SETTINGS</span><h1 className="ops-heading">Account &amp; system</h1><p className="ops-copy">Connection configuration, operator identity and session controls.</p></div></div>
+    <div className="dash-two">
+      <section className="card-ops dash-card account-panel-card">
+        <div className="drawer-head"><span className="mono-label">API ENDPOINT</span><span className="status-pill">LOCAL API</span></div>
+        <div className="ops-form-row account-endpoint-group"><input className="field mono account-endpoint-input" readOnly value={endpoint} /><button className="small-button" onClick={() => void copyEndpoint()}><Copy size={14} /> {copied ? 'Copied ✓' : 'Copy'}</button></div>
+        <button className="button button-outline account-test-button" disabled={testing} onClick={() => void testConnection()}>{testing ? 'Testing…' : 'Test backend connection'}</button>
+        {test && <p className={`account-test-result ${test.includes('OK') ? 'success-text' : 'danger-text'}`} role="status">{test}</p>}
+      </section>
+      <section className="card-ops dash-card account-panel-card">
+        <div className="drawer-head"><span className="mono-label">ACTIVE SESSION</span><span className="mono-label">SIGNED BEARER TOKEN</span></div>
+        <div className="account-session-strip"><span className="account-session-avatar">{(user?.name || 'VS').split(/\s+/).slice(0,2).map((part) => part[0]).join('').toUpperCase()}</span><span><strong>{user?.name || 'Workspace user'}</strong><small>{user?.role === 'admin' ? 'Administrator' : 'Operations team'} · VeloSupply workspace</small></span><span className="status-pill status-positive">ACTIVE</span></div>
+        <p className="ops-copy account-session-copy">Your session is authenticated with a signed bearer token. API requests use the current account role for server-side authorization.</p>
+        {user?.role === 'admin' && <Link className="account-invitation-link" to="/dashboard/access"><ShieldCheck size={15} /> Manage invitation keys <span>Open</span></Link>}
+        <button className="button button-outline account-signout" onClick={() => { useAppStore.getState().logout(); window.location.assign('/login') }}>Sign out of all activity</button>
+        <p className="ops-muted account-session-token-note">{token ? 'Session token present in this browser.' : 'No active session token.'}</p>
+      </section>
+    </div>
   </>
 }

@@ -2,7 +2,7 @@ const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
-const { randomUUID, randomBytes, timingSafeEqual, createHash } = require('node:crypto');
+const { randomUUID, randomBytes, createHash } = require('node:crypto');
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
@@ -54,8 +54,8 @@ if (Object.keys(generatedDefaults).length) {
   process.stdout.write(JSON.stringify({
     ts: new Date().toISOString(),
     level: 'WARN',
-    msg: 'Generated development defaults. Save these values in backend/.env to keep sessions stable across restarts.',
-    defaults: generatedDefaults
+    msg: 'Generated development defaults. Set the documented values in backend/.env to keep sessions stable across restarts.',
+    generated: Object.keys(generatedDefaults)
   }) + '\n');
 }
 
@@ -370,7 +370,12 @@ const registerSchema = z.object({
   email: z.string().trim().email().transform((value) => value.toLowerCase()),
   password: z.string().min(8).max(128).regex(/[A-Z]/, 'Password must contain an uppercase letter').regex(/[0-9]/, 'Password must contain a number'),
   role: z.enum(['admin', 'operator', 'user', 'buyer']).default('user'),
-  registrationInviteCode: z.string().max(200).optional()
+  registrationInviteCode: z.string().trim().min(1).max(200).optional()
+}).strict();
+const invitationCreateSchema = z.object({
+  role: z.enum(['admin', 'operator']),
+  maxUses: z.number().int().min(1).max(50).default(1),
+  expiresInDays: z.number().int().min(1).max(90).default(7)
 }).strict();
 const checkoutSchema = z.object({
   customerName: z.string().trim().min(2).max(100).optional(),
@@ -562,42 +567,36 @@ app.post('/api/auth/login', sre.rateLimit({ limit: 10, windowMs: 60_000, name: '
 }));
 
 async function register(req, res) {
-  if (req.body.role === 'admin' || req.body.role === 'operator') {
-    const roleName = req.body.role;
-    const keyName = roleName === 'admin' ? 'ADMIN_REGISTRATION_KEY' : 'OPERATOR_REGISTRATION_KEY';
-    const expectedCode = process.env[keyName] || '';
-    const suppliedCode = req.body.registrationInviteCode || '';
-    const expectedBuffer = Buffer.from(expectedCode);
-    const suppliedBuffer = Buffer.from(suppliedCode);
-    const validCode = expectedBuffer.length > 0 &&
-      expectedBuffer.length === suppliedBuffer.length &&
-      timingSafeEqual(expectedBuffer, suppliedBuffer);
-    if (!validCode) {
-      return res.status(403).json({ error: roleName === 'admin'
-        ? 'Administrator registration requires a valid invitation key'
-        : 'Operations registration requires a valid invitation key' });
-    }
-  }
-
-  const passwordHash = await bcrypt.hash(req.body.password, 12);
-  const userId = 'USER-' + randomUUID();
   const requestedRole = req.body.role === 'user' ? 'buyer' : req.body.role;
+  const userId = 'USER-' + randomUUID();
+  const passwordHash = await bcrypt.hash(req.body.password, 12);
+  const input = {
+    id: userId,
+    name: req.body.name,
+    email: req.body.email,
+    role: requestedRole,
+    ...(requestedRole === 'buyer' ? { filerStatus: 'unverified' } : {}),
+    passwordHash,
+    isActive: true,
+    deletedAt: null,
+    actorId: userId,
+    actorRole: requestedRole
+  };
   let user;
   try {
-    user = await domainRepositories.users.create({
-      id: userId,
-      name: req.body.name,
-      email: req.body.email,
-      role: requestedRole,
-      ...(requestedRole === 'buyer' ? { filerStatus: 'unverified' } : {}),
-      passwordHash,
-      isActive: true,
-      deletedAt: null,
-      actorId: userId,
-      actorRole: requestedRole
-    });
+    if (requestedRole === 'admin' || requestedRole === 'operator') {
+      if (!req.body.registrationInviteCode) {
+        return res.status(403).json({ error: 'An active invitation key is required for this role' });
+      }
+      const codeHash = createHash('sha256').update(req.body.registrationInviteCode).digest('hex');
+      user = await domainRepositories.users.createFromInvitation(input, codeHash);
+    } else {
+      user = await domainRepositories.users.create(input);
+    }
   } catch (error) {
-    if (error.code === 'ADMIN_EXISTS') return res.status(409).json({ error: 'ADMIN_EXISTS' });
+    if (error.code === 'INVALID_INVITATION') {
+      return res.status(403).json({ error: 'Invalid, expired, revoked, exhausted, or role-mismatched invitation key' });
+    }
     if (error.code === 'EMAIL_EXISTS' || error.code === 11000 || error.code === 'DUPLICATE_KEY') {
       return res.status(409).json({ error: 'Email already registered' });
     }
@@ -686,6 +685,54 @@ app.get('/api/admin/backup', requireRoles('admin'), (req, res) => {
 
 app.get('/api/auth/me', (req, res) => res.json({ user: safeUser(req.user) }));
 app.post('/api/auth/logout', (_req, res) => res.json({ success: true }));
+
+app.post('/api/invitations', requireRoles('admin'), validate(invitationCreateSchema), asyncRoute(async (req, res) => {
+  const prefix = req.body.role === 'admin' ? 'ADM' : 'OPS';
+  const code = 'VELO-' + prefix + '-' + randomBytes(24).toString('hex').toUpperCase();
+  const at = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + req.body.expiresInDays * 86400000).toISOString();
+  const codeHash = createHash('sha256').update(code).digest('hex');
+  const invitation = await domainRepositories.invitationKeys.create({
+    id: 'INV-' + randomUUID(),
+    codeHash,
+    codeHint: code.slice(-4),
+    role: req.body.role,
+    createdBy: req.user.id,
+    maxUses: req.body.maxUses,
+    usedCount: 0,
+    expiresAt,
+    status: 'active',
+    createdAt: at,
+    updatedAt: at
+  }, { id: req.user.id, role: req.user.role });
+  db = await repository.readState();
+  res.status(201).json({ invitation: {
+    id: invitation.id, role: invitation.role, code,
+    maxUses: invitation.maxUses, usedCount: invitation.usedCount,
+    expiresAt: invitation.expiresAt, status: invitation.status, createdAt: invitation.createdAt
+  } });
+}));
+app.get('/api/invitations', requireRoles('admin'), asyncRoute(async (_req, res) => {
+  const invitations = await domainRepositories.invitationKeys.list();
+  res.json(invitations.map(({ codeHash, ...invitation }) => invitation));
+}));
+app.patch('/api/invitations/:id/revoke', requireRoles('admin'), asyncRoute(async (req, res) => {
+  try {
+    const invitation = await domainRepositories.invitationKeys.revoke(
+      req.params.id, { id: req.user.id, role: req.user.role }
+    );
+    if (!invitation) return res.status(404).json({ error: 'Invitation key not found' });
+    db = await repository.readState();
+    res.json({ invitation: {
+      id: invitation.id, role: invitation.role, codeHint: invitation.codeHint,
+      maxUses: invitation.maxUses, usedCount: invitation.usedCount,
+      expiresAt: invitation.expiresAt, status: invitation.status, createdAt: invitation.createdAt
+    } });
+  } catch (error) {
+    if (error.code === 'INVITATION_NOT_ACTIVE') return res.status(409).json({ error: error.message });
+    throw error;
+  }
+}));
 
 app.get('/api/warehouses', asyncRoute(async (_req, res) => {
   res.json(repository ? await repository.find('warehouses', {}) : db.warehouses);
@@ -1348,8 +1395,37 @@ websocketServer.on('connection', (websocket) => {
   })));
 });
 
+async function ensureBootstrapInvitation() {
+  const bootstrapKey = String(process.env.ADMIN_BOOTSTRAP_KEY || '').trim();
+  if (!bootstrapKey) return;
+  if (bootstrapKey.length < 32) {
+    throw new Error('ADMIN_BOOTSTRAP_KEY must contain at least 32 characters');
+  }
+  const activeAdmins = await repository.find('users', { role: 'admin', isActive: true });
+  if (activeAdmins.length > 0) return;
+  const codeHash = createHash('sha256').update(bootstrapKey).digest('hex');
+  const existing = await repository.find('invitations', { codeHash }, { limit: 1 });
+  if (existing.length) return;
+  const at = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
+  await domainRepositories.invitationKeys.create({
+    id: 'INV-BOOTSTRAP-' + randomUUID(),
+    codeHash,
+    codeHint: bootstrapKey.slice(-4),
+    role: 'admin',
+    createdBy: 'system:bootstrap',
+    maxUses: 1,
+    usedCount: 0,
+    expiresAt,
+    status: 'active',
+    createdAt: at,
+    updatedAt: at
+  }, { id: 'system:bootstrap', role: 'system' });
+}
+
 async function start() {
   db = await loadDatabaseState();
+  await ensureBootstrapInvitation();
   if (!Array.isArray(db.newsletter)) db.newsletter = [];
   if (!Array.isArray(db.rewardClaims)) db.rewardClaims = [];
   refreshMetrics();

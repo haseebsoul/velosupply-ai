@@ -31,6 +31,7 @@ export interface Product {
 
 export interface Warehouse {
   id: string
+  code?: string
   name: string
   coords: [number, number]
   capacity: number

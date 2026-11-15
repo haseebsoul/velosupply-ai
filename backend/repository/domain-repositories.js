@@ -89,14 +89,6 @@ function createDomainRepositories(adapter) {
           error.code = 'EMAIL_EXISTS';
           throw error;
         }
-        if (role === 'admin') {
-          const activeAdmins = await repository.find('users', { role: 'admin', isActive: true });
-          if (activeAdmins.length) {
-            const error = new Error('ADMIN_EXISTS');
-            error.code = 'ADMIN_EXISTS';
-            throw error;
-          }
-        }
         const userId = input.id || 'USER-' + randomUUID();
         const at = input.createdAt || new Date().toISOString();
         const user = await repository.insert('users', {
@@ -118,6 +110,62 @@ function createDomainRepositories(adapter) {
         return user;
       });
     },
+    async createFromInvitation(input, suppliedHash) {
+      const email = requiredString(input.email, 'email').toLowerCase();
+      const role = input.role === 'user' ? 'buyer' : requiredString(input.role, 'role');
+      if (!['admin', 'operator'].includes(role)) {
+        throw new TypeError('Invitation registration is only available for Administrator and Operations roles');
+      }
+      const codeHash = requiredString(suppliedHash, 'invitation code hash');
+      return adapter.withTransaction(async ({ repository }) => {
+        const rows = await repository.find('invitations', { codeHash }, { limit: 1 });
+        const invitation = rows[0];
+        const now = Date.now();
+        const expiresAt = Date.parse(invitation?.expiresAt || '');
+        const maxUses = Number(invitation?.maxUses);
+        const usedCount = Number(invitation?.usedCount);
+        if (!invitation || invitation.role !== role || invitation.status !== 'active' ||
+            !Number.isSafeInteger(maxUses) || maxUses < 1 ||
+            !Number.isSafeInteger(usedCount) || usedCount < 0 || usedCount >= maxUses ||
+            !Number.isFinite(expiresAt) || expiresAt <= now) {
+          const error = new Error('Invalid, expired, revoked, exhausted, or role-mismatched invitation key');
+          error.code = 'INVALID_INVITATION';
+          throw error;
+        }
+        const existingEmail = await repository.find('users', { email }, { limit: 1 });
+        if (existingEmail.length) {
+          const error = new Error('Email already registered');
+          error.code = 'EMAIL_EXISTS';
+          throw error;
+        }
+        const at = new Date(now).toISOString();
+        const userId = input.id || 'USER-' + randomUUID();
+        const user = await repository.insert('users', {
+          ...input, id: userId, email, role,
+          isActive: input.isActive !== false, deletedAt: null,
+          createdAt: input.createdAt || at, updatedAt: at
+        });
+        const nextUsedCount = usedCount + 1;
+        await repository.update('invitations', invitation.id, {
+          usedCount: nextUsedCount,
+          status: nextUsedCount >= maxUses ? 'used' : 'active',
+          lastUsedAt: at,
+          updatedAt: at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: input.actorId || userId,
+          actorRole: input.actorRole || role, action: 'user.register',
+          targetType: 'user', targetId: userId,
+          meta: { role, invitationId: invitation.id }, at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: userId, actorRole: role,
+          action: 'invitation.redeem', targetType: 'invitation', targetId: invitation.id,
+          meta: { role }, at
+        });
+        return user;
+      });
+    },
     async changeRole(id, role, actor) {
       role = role === 'user' ? 'buyer' : role;
       if (!BUYER_ROLES.has(role)) throw new TypeError('Unsupported user role');
@@ -125,11 +173,6 @@ function createDomainRepositories(adapter) {
         const user = await repository.findById('users', id);
         if (!user) return null;
         const activeAdmins = await repository.find('users', { role: 'admin', isActive: true });
-        if (role === 'admin' && user.role !== 'admin' && activeAdmins.length) {
-          const error = new Error('ADMIN_EXISTS');
-          error.code = 'ADMIN_EXISTS';
-          throw error;
-        }
         if (user.role === 'admin' && role !== 'admin' && activeAdmins.length <= 1) {
           const error = new Error('The last administrator cannot be demoted');
           error.code = 'LAST_ADMIN';
@@ -1237,7 +1280,67 @@ function createDomainRepositories(adapter) {
     }
   };
 
-  return { users, warehouses, products, orders, stockMovements, purchaseOrders, auditLogs, tariffRules };
+  const invitationKeys = {
+    async create(input, actor) {
+      const role = requiredString(input.role, 'role');
+      if (!['admin', 'operator'].includes(role)) throw new TypeError('Invitation role must be admin or operator');
+      const codeHash = requiredString(input.codeHash, 'codeHash');
+      const createdBy = requiredString(input.createdBy, 'createdBy');
+      const maxUses = Number(input.maxUses ?? 1);
+      const expiresAt = Date.parse(input.expiresAt || '');
+      if (!Number.isSafeInteger(maxUses) || maxUses < 1 || maxUses > 50) {
+        throw new TypeError('maxUses must be an integer between 1 and 50');
+      }
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        throw new TypeError('expiresAt must be a future date');
+      }
+      return adapter.withTransaction(async ({ repository }) => {
+        const existing = await repository.find('invitations', { codeHash }, { limit: 1 });
+        if (existing.length) {
+          const error = new Error('Invitation key already exists');
+          error.code = 'DUPLICATE_INVITATION';
+          throw error;
+        }
+        const invitation = await repository.insert('invitations', {
+          ...input, role, codeHash, createdBy, maxUses, usedCount: 0,
+          status: 'active', createdAt: input.createdAt || new Date().toISOString(),
+          updatedAt: input.updatedAt || new Date().toISOString()
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: actor.id, actorRole: actor.role,
+          action: 'invitation.create', targetType: 'invitation', targetId: invitation.id,
+          meta: { role, maxUses, expiresAt: invitation.expiresAt }, at: invitation.createdAt
+        });
+        return invitation;
+      });
+    },
+    list() {
+      return adapter.find('invitations', {}, { sort: { createdAt: -1 } });
+    },
+    async revoke(id, actor) {
+      return adapter.withTransaction(async ({ repository }) => {
+        const invitation = await repository.findById('invitations', id);
+        if (!invitation) return null;
+        if (invitation.status !== 'active') {
+          const error = new Error('Only active invitation keys can be revoked');
+          error.code = 'INVITATION_NOT_ACTIVE';
+          throw error;
+        }
+        const at = new Date().toISOString();
+        const updated = await repository.update('invitations', id, {
+          status: 'revoked', revokedAt: at, updatedAt: at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: actor.id, actorRole: actor.role,
+          action: 'invitation.revoke', targetType: 'invitation', targetId: id,
+          meta: { role: invitation.role }, at
+        });
+        return updated;
+      });
+    }
+  };
+
+  return { users, invitationKeys, warehouses, products, orders, stockMovements, purchaseOrders, auditLogs, tariffRules };
 }
 
 module.exports = { createDomainRepositories, BUYER_ROLES, MOVEMENT_TYPES };

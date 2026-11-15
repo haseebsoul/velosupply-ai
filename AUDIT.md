@@ -145,10 +145,9 @@ Variables read by backend source or declared by backend/.env.example:
 | MONGODB_URI | Selects Atlas; production throws if absent |
 | MONGODB_DB_NAME | Atlas database; defaults to velosupply |
 | MONGODB_STATE_COLLECTION | Atlas collection; defaults to application_state |
-| ADMIN_REGISTRATION_KEY | Invitation key for current admin registration |
-| OPERATOR_REGISTRATION_KEY | Invitation key for current operator registration |
+| ADMIN_BOOTSTRAP_KEY | Optional one-time first-administrator invitation secret; remove after redemption |
 
-The example file also documents the MongoDB URI and the two invitation keys. The current backend does not generate and print safe development defaults when values are missing. Invitation keys are not intentionally logged. MONGODB_STATE_COLLECTION is an additional variable not listed in the required retained-variable list.
+Administrator and Operations invitation keys are stored as SHA-256 hashes in the `invitations` collection. The full secret is returned only once at creation and is omitted from list responses. An initial bootstrap key is accepted only when no active Administrator exists. MONGODB_STATE_COLLECTION remains the legacy source collection used during migration.
 
 ## 5. Backend architecture and persistence
 
@@ -278,9 +277,9 @@ The seed contains three users:
 
 Seed password hashes use bcrypt cost 10. Registration uses bcrypt cost 12. The README incorrectly lists ops@velosupply.ai for the operator; the actual seed email is operator@velosupply.ai.
 
-The registration schema allows role admin, operator or user, defaults to user, and validates password length 8–128. It does not require uppercase or numeric characters. Admin and operator registration compare invitation keys with timingSafeEqual. There is no admin bootstrap endpoint or ADMIN_EXISTS response. Multiple admin accounts can be registered.
+The registration schema allows admin, operator, user and buyer roles. Buyer registration is open. Administrator and Operator registration validates a matching, active, unexpired invitation record and consumes it in the same repository transaction as account creation. Invitation codes are SHA-256 hashed at rest. Multiple invited Administrators are allowed; the last active Administrator cannot be demoted or deleted.
 
-Admin user management can promote another user to admin or demote an admin. It prevents deleting one's own account and deleting the last admin, but it does not enforce exactly one admin atomically.
+Admin user management can promote or demote users. The repository permits multiple administrators and transactionally prevents demoting or deleting the last active administrator.
 
 ### Login
 
@@ -436,7 +435,7 @@ Replace README-derived current-state claims in Sections 2.1 and 2.2 with the fol
 - Frontend: React 18, TypeScript 5.7, Vite 6, React Router 6, Zustand 5, TanStack Query 5, Recharts 2, Framer Motion 11, React Hook Form 7, Zod 3, Axios and Tailwind 3.
 - Accounts: admin@velosupply.ai / Haseeb Khan / admin; operator@velosupply.ai / Sarah Chen / operator; buyer@velosupply.ai / Marcus Vance / user. All seeded with password 1234.
 - Buyer role: stored as user and displayed as Buyer. The target buyer role key requires an explicit migration; do not silently assume the existing records already use buyer.
-- Registration: public role defaults to user; admin/operator require invitation keys. Multiple admins are currently possible. No bootstrap endpoint or ADMIN_EXISTS behavior exists.
+- Registration: Buyer self-registration is open; admin/operator require matching, active, unexpired invitation keys. Redemption and account creation run in one repository transaction. Admin-only endpoints generate, list and revoke invitation keys.
 - Routes: public /, /store, /login, /register; authenticated dashboard paths /dashboard, /dashboard/topology, /dashboard/threats, /dashboard/activity, /dashboard/messages, /dashboard/manage, /dashboard/rewards, /dashboard/reports, /dashboard/account and /dashboard/admin. Product detail and tracking paths are absent.
 - API paths: use the exact inventory in Section 7 above. Checkout is currently POST /api/orders/checkout. Add the target /api/checkout as an alias if it is required, while retaining the existing route.
 - WebSocket: /ws/telemetry sends CONNECTED and HEARTBEAT messages with type, level, message, timestamp, metrics and warehouses; some events include order. All sockets receive the same broadcasts.

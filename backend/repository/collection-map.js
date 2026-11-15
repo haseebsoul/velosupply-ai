@@ -4,6 +4,7 @@ const { createHash } = require('node:crypto');
 
 const STATE_PATHS = {
   users: ['users'],
+  invitations: ['invitations'],
   products: ['products'],
   warehouses: ['warehouses'],
   suppliers: ['suppliers'],
@@ -49,6 +50,24 @@ const COLLECTION_VALIDATORS = {
       { properties: { role: { enum: ['buyer'] } }, required: ['filerStatus'] },
       { properties: { role: { enum: ['operator', 'admin'] } } }
     ]
+  } },
+  invitations: { $jsonSchema: {
+    bsonType: 'object',
+    required: ['codeHash', 'role', 'createdBy', 'maxUses', 'usedCount', 'expiresAt', 'status', 'createdAt'],
+    properties: {
+      codeHash: { bsonType: 'string' },
+      codeHint: { bsonType: 'string' },
+      role: { enum: ['admin', 'operator'] },
+      createdBy: { bsonType: 'string' },
+      maxUses: { bsonType: ['int', 'long'] },
+      usedCount: { bsonType: ['int', 'long'] },
+      expiresAt: { bsonType: 'string' },
+      status: { enum: ['active', 'used', 'revoked'] },
+      createdAt: { bsonType: 'string' },
+      updatedAt: { bsonType: 'string' },
+      lastUsedAt: { bsonType: 'string' },
+      revokedAt: { bsonType: 'string' }
+    }
   } },
   products: { $jsonSchema: {
     bsonType: 'object', required: ['sku', 'originWarehouseId'],
@@ -101,6 +120,10 @@ const COLLECTION_VALIDATORS = {
 };
 
 const INDEXES = {
+  invitations: [
+    { key: { codeHash: 1 }, unique: true, name: 'invitations_code_hash_unique' },
+    { key: { role: 1, status: 1, expiresAt: 1 }, name: 'invitations_role_status_expiry' }
+  ],
   users: [
     { key: { email: 1 }, unique: true, name: 'users_email_unique' }
   ],

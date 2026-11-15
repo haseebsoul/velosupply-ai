@@ -7,6 +7,7 @@ function createEmptyProductionState(now = new Date().toISOString()) {
     schemaVersion: DB_SCHEMA_VERSION,
     dataMode: 'production',
     users: [],
+    invitations: [],
     warehouses: [],
     products: [],
     orders: [],
