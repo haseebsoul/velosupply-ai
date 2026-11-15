@@ -58,7 +58,7 @@ export function Sidebar() {
 
       <div className="sidebar-workspace">
         <span className="workspace-mark">VS</span>
-        <span className="workspace-copy"><strong>Global workspace</strong><small>Production environment</small></span>
+        <span className="workspace-copy"><strong>Proposed Karachi pilot</strong><small>Synthetic demo data · not verified</small></span>
         <ChevronDown size={14} className="workspace-chevron" />
       </div>
 
