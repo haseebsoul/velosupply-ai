@@ -11,11 +11,6 @@ import { api, errorMessage } from '../lib/apiClient'
 import type { Metrics, Product, TelemetryEvent } from '../types'
 
 const newsletterSchema = z.string().email('Enter a valid email address')
-const steps = [
-  ['01', 'Connect product and stock records', 'Bring catalog, inventory and warehouse records into one workspace.'],
-  ['02', 'Coordinate fulfillment workflows', 'Review hub status, orders and operational events from a shared console.'],
-  ['03', 'Plan replenishment with context', 'Use stock movement history and reorder signals to prepare purchase orders.']
-]
 const capabilities = [
   { title: 'Catalog & inventory', copy: 'Search the available product records, stock levels and hub assignments.', icon: Boxes },
   { title: 'Warehouse network', copy: 'Review the warehouse records and their reported status and capacity.', icon: Network },
