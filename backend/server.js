@@ -1323,7 +1323,7 @@ function tickTelemetry() {
   broadcast(event);
   persist().catch((error) => process.stderr.write(JSON.stringify(sanitizeLogValue({
     ts: new Date().toISOString(), level: 'ERROR', msg: 'Persistence failed', error
-  })) + '\\n'));
+  })) + '\n'));
 }
 
 server.on('upgrade', (request, socket, head) => {
@@ -1357,7 +1357,7 @@ async function start() {
   if (!Array.isArray(db.rewardClaims)) db.rewardClaims = [];
   refreshMetrics();
   server.listen(PORT, () => {
-    process.stdout.write(JSON.stringify({ ts: new Date().toISOString(), level: 'INFO', msg: 'VeloSupply API started', port: PORT }) + '\\n');
+    process.stdout.write(JSON.stringify({ ts: new Date().toISOString(), level: 'INFO', msg: 'VeloSupply API started', port: PORT }) + '\n');
     sre.start();
   });
   const timer = setInterval(tickTelemetry, 2000);
@@ -1368,7 +1368,7 @@ if (require.main === module) {
   start().catch((error) => {
     process.stderr.write(JSON.stringify(sanitizeLogValue({
       ts: new Date().toISOString(), level: 'ERROR', msg: 'Unable to start VeloSupply API', error
-    })) + '\\n');
+    })) + '\n');
     process.exitCode = 1;
   });
 }

@@ -101,7 +101,7 @@ function createSRE(deps) {
     try {
       const db = getDb();
       const safeMeta = sanitizeLogValue(meta);
-      db.sre.audit.push({ id: randomUUID(), actorId: actor?.id || 'system', actorRole: actor?.role || 'system', action: redactText(action), meta: safeMeta, at: new Date().toISOString() });
+      db.sre.audit.push({ id: randomUUID(), actorId: actor?.id || 'system', actorRole: actor?.role || 'system', action: sanitizeLogValue(action), meta: safeMeta, at: new Date().toISOString() });
       Promise.resolve(deps.persist?.()).catch((error) => log('ERROR', 'SRE audit persistence failed', { error: error.message }));
     } catch (error) { log('ERROR', 'SRE audit write failed', { error: error.message }); }
   }
