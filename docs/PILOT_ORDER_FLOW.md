@@ -4,7 +4,7 @@
 
 The code contains one **proposed** Karachi candidate, `HUB-KHI`. The repository seed is synthetic; it does not prove that a facility exists, is authorized for use, staffed, or holds physical stock. Pilot policy does not create a warehouse, inventory, staff or customer records.
 
-Production ordering stays disabled unless all four runtime settings are configured:
+Production ordering stays disabled unless every pilot switch, evidence reference and scope allowlist below is configured:
 - `VELOSUPPLY_PILOT_ENABLED=true`
 - `VELOSUPPLY_PILOT_SITE_VERIFIED=true`
 - `VELOSUPPLY_PILOT_SITE_EVIDENCE_REF` is non-empty
@@ -42,3 +42,14 @@ A buyer signs in, submits a Karachi COD order, and sees only their own order his
 ## External blockers
 
 Physical site inspection and authorization, signed opening stock count, named operations/support staffing, approved customer-area and SKU allowlists, owner-approved limits/stop rules, provider and courier accounts (if required), Atlas staging access and fixture authorization, recovery rehearsal and reviewer approvals remain outside this code change.
+
+
+## Returns: receiving and condition control
+
+An approved return cannot be received against an arbitrary hub code. The target must match an existing, non-archived warehouse record marked online; for an order tagged to the proposed Karachi pilot, the return destination must match that order's recorded proposed site. A warehouse record is application data, not proof of a real physical facility.
+
+An operator must explicitly attest that the goods were physically received and their condition assessed, then choose one disposition:
+- `restockable`: only this disposition increases saleable stock and writes a `RETURN_IN` movement.
+- `quarantine` or `damaged`: the receipt and disposition are recorded, but saleable stock is not increased and no `RETURN_IN` movement is written.
+
+Receipt evidence is stored as an operator report with `providerVerified=false` and `independentlyVerified=false`. It does not replace a signed receiving document, physical inspection, or approved site evidence. Any refund remains a manual workflow; no payment provider is called.
