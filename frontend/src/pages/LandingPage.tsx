@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react'
-import { ArrowRight, ArrowUpRight, Boxes, CircleDot, Network, ShieldCheck } from 'lucide-react'
+import { ArrowRight, ArrowUpRight, Boxes, Network, ShieldCheck } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { z } from 'zod'
 import { EditorialNavbar } from '../components/storefront/EditorialNavbar'
