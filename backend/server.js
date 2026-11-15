@@ -1328,7 +1328,7 @@ app.post('/api/returns/:id/receive', requireRoles('admin', 'operator'), validate
     await persist();
     res.json(result);
   } catch (error) {
-    if (error.code === 'INVALID_TRANSITION') return res.status(409).json({ error: error.code, message: error.message });
+    if (['INVALID_TRANSITION', 'WAREHOUSE_NOT_FOUND'].includes(error.code)) return res.status(409).json({ error: error.code, message: error.message });
     throw error;
   }
 }));

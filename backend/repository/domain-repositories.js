@@ -1113,6 +1113,12 @@ function createDomainRepositories(adapter) {
         }
         const order = await repository.findById('orders', record.orderId);
         if (!order) throw new Error('Return order not found');
+        const warehouses = await repository.find('warehouses', { code: hubCode }, { limit: 1 });
+        if (!warehouses.length || warehouses[0].archivedAt) {
+          const error = new Error('Returned stock can only be received into an existing, active warehouse record');
+          error.code = 'WAREHOUSE_NOT_FOUND';
+          throw error;
+        }
         const orderItems = await repository.find('orderItems', { orderId: order.id });
         const items = orderItems.length ? orderItems : (order.items || []);
         const at = new Date().toISOString();
