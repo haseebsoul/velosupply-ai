@@ -71,6 +71,7 @@ export function OrdersPage() {
             <h3 style={{ margin: '4px 0' }}>{order.customerName || 'Buyer'} · {money.format(Number.isSafeInteger(amountMinor) ? Number(amountMinor) / 100 : 0)}</h3>
             <p className="ops-copy">{order.city || order.shippingRegion || '—'} · {units} units · {order.warehouse_hub || 'unassigned'}</p></div>
             <span className="status-pill">{order.status}</span></div>
+          <p className="ops-copy">Inventory: application stock ledger reservation only — physical stock count is not independently verified.</p>
           <p className="ops-copy">Payment: {cod ? (codPending ? 'COD pending' : 'manual record entered') : (order.paymentState || 'not recorded')}</p>
           {cod && order.paymentState === 'paid_manual' && <p className="ops-copy">Manual COD reference recorded — not independently verified; no payment-provider confirmation.</p>}
           {operatorDelivery ? <p className="danger-text">Delivery reported by an operator — not independently verified and not courier proof of delivery.</p>

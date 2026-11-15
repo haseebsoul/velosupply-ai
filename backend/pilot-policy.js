@@ -29,8 +29,10 @@ function getPilotAuthorization(env = process.env) {
   const ownerApprovalConfigured = hasValue(env.VELOSUPPLY_PILOT_OWNER_APPROVAL_REF);
   const allowedSkusConfigured = getPilotAllowedSkus(env).length > 0;
   const allowedAreasConfigured = getPilotAllowedAreas(env).length > 0;
-  return { enabled: pilotEnabled && siteVerified && siteEvidenceConfigured && ownerApprovalConfigured && allowedSkusConfigured && allowedAreasConfigured,
-    pilotEnabled, siteVerified, siteEvidenceConfigured, ownerApprovalConfigured, allowedSkusConfigured, allowedAreasConfigured };
+  const openingStockVerified = env.VELOSUPPLY_PILOT_OPENING_STOCK_VERIFIED === 'true';
+  const openingStockEvidenceConfigured = hasValue(env.VELOSUPPLY_PILOT_OPENING_STOCK_EVIDENCE_REF);
+  return { enabled: pilotEnabled && siteVerified && siteEvidenceConfigured && ownerApprovalConfigured && allowedSkusConfigured && allowedAreasConfigured && openingStockVerified && openingStockEvidenceConfigured,
+    pilotEnabled, siteVerified, siteEvidenceConfigured, ownerApprovalConfigured, allowedSkusConfigured, allowedAreasConfigured, openingStockVerified, openingStockEvidenceConfigured };
 }
 
 function getPilotPublicStatus(env = process.env) {
@@ -42,12 +44,15 @@ function getPilotPublicStatus(env = process.env) {
       status: authorization.siteVerified && authorization.siteEvidenceConfigured ? 'evidence_configured' : 'proposed' },
     payment: { method: 'COD', executionMode: 'manual', providerVerified: false, independentlyVerified: false },
     delivery: { mode: 'operator_reported', providerVerified: false, independentlyVerified: false },
+    inventory: { status: authorization.openingStockVerified && authorization.openingStockEvidenceConfigured ? 'owner_evidence_configured' : 'not_verified', physicalCountVerified: false, independentlyVerified: false },
     limits: { ...PILOT_POLICY.limits, currency: 'PKR', amountUnits: 'minor units (paisa)' },
     prerequisites: { pilotEnabled: authorization.pilotEnabled,
       siteEvidenceConfigured: authorization.siteEvidenceConfigured,
       ownerApprovalConfigured: authorization.ownerApprovalConfigured,
       allowedSkusConfigured: authorization.allowedSkusConfigured,
-      allowedAreasConfigured: authorization.allowedAreasConfigured }
+      allowedAreasConfigured: authorization.allowedAreasConfigured,
+      openingStockVerified: authorization.openingStockVerified,
+      openingStockEvidenceConfigured: authorization.openingStockEvidenceConfigured }
   };
 }
 

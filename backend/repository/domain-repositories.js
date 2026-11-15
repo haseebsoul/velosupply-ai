@@ -503,6 +503,13 @@ function createDomainRepositories(adapter) {
 
         const rankedHubs = input.pilotPolicy ? [input.pilotPolicy.siteCode] : HUB_RANKING[city];
         if (!rankedHubs) throw new TypeError('Unsupported delivery city: ' + city);
+        if (input.pilotPolicy) {
+          const siteRows = await repository.find('warehouses', { code: input.pilotPolicy.siteCode }, { limit: 1 });
+          if (!siteRows.length || siteRows[0].archivedAt) {
+            const error = new Error('The proposed pilot site has no existing active warehouse record; no site or stock record will be created.');
+            error.code = 'PILOT_SITE_NOT_REGISTERED'; throw error;
+          }
+        }
         const lines = [];
         for (const item of normalizedItems) {
           const productsFound = await repository.find('products', { sku: item.sku }, { limit: 1 });
@@ -668,6 +675,7 @@ function createDomainRepositories(adapter) {
           paymentEvidence: paymentMethod === 'COD'
             ? { mode: 'manual_cod', status: 'not_recorded', providerVerified: false, independentlyVerified: false }
             : { mode: 'simulated', status: 'not_provider_verified', providerVerified: false, independentlyVerified: false },
+          inventoryEvidence: { source: 'application_stock_ledger', status: 'reservation_recorded', physicalCountVerified: false, independentlyVerified: false },
           deliveryStatus: 'not_dispatched',
           deliveryEvidence: { status: 'not_delivered', providerVerified: false, independentlyVerified: false },
           ...(input.pilotPolicy ? {

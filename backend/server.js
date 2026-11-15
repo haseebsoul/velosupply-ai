@@ -703,7 +703,7 @@ const checkoutHandler = asyncRoute(async (req, res) => {
     if (['OUT_OF_STOCK', 'PRODUCT_UNAVAILABLE', 'PRICE_UNAVAILABLE', 'TARIFF_UNAVAILABLE',
       'PILOT_UNIT_LIMIT', 'PILOT_ORDER_AMOUNT_LIMIT', 'PILOT_DAILY_ORDER_LIMIT',
       'PILOT_BUYER_DAILY_LIMIT', 'PILOT_COD_EXPOSURE_LIMIT', 'PILOT_SITE_STOCK_UNAVAILABLE',
-      'PILOT_AREA_NOT_ALLOWED', 'PILOT_SKU_NOT_ALLOWED'].includes(error.code)) {
+      'PILOT_AREA_NOT_ALLOWED', 'PILOT_SKU_NOT_ALLOWED', 'PILOT_SITE_NOT_REGISTERED'].includes(error.code)) {
       return res.status(409).json({ error: error.code, message: error.message });
     }
     throw error;

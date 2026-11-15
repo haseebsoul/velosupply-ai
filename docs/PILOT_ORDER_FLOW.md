@@ -11,6 +11,8 @@ Production ordering stays disabled unless all four runtime settings are configur
 - `VELOSUPPLY_PILOT_OWNER_APPROVAL_REF` is non-empty
 - `VELOSUPPLY_PILOT_ALLOWED_SKUS` contains owner-approved SKU codes
 - `VELOSUPPLY_PILOT_ALLOWED_AREAS` contains owner-approved Karachi customer areas
+- `VELOSUPPLY_PILOT_OPENING_STOCK_VERIFIED=true`
+- `VELOSUPPLY_PILOT_OPENING_STOCK_EVIDENCE_REF` points to the owner-signed opening stock count/reconciliation
 
 These reference values only signal that an owner has supplied evidence/approval references. Software cannot authenticate their truth or sufficiency. They must not be enabled until a human verifies the site, authority to use it, stock count, operators, support coverage, business limits and stop authority.
 
@@ -31,7 +33,7 @@ Caps are checked inside the order transaction. Cancelled orders still count towa
 
 ## Verification boundaries
 
-COD references are operator-entered manual records (`providerVerified=false`, `independentlyVerified=false`). The `DELIVERED` transition is an operator report, not courier proof of delivery. No payment or courier provider is called. The UI labels synthetic catalogue availability, proposed HUB-KHI, manual COD and operator-reported delivery.
+Stock reservation is an application-ledger write only: every order carries `physicalCountVerified=false` and `independentlyVerified=false`. The production gate additionally requires owner-supplied signed opening-stock evidence and an existing active warehouse record; the software does not independently verify a physical count. COD references are operator-entered manual records (`providerVerified=false`, `independentlyVerified=false`). The `DELIVERED` transition is an operator report, not courier proof of delivery. No payment or courier provider is called. The UI labels synthetic catalogue availability, proposed HUB-KHI, manual COD and operator-reported delivery.
 
 ## Buyer / operator workflow
 

@@ -427,7 +427,8 @@ describe('Pakistan checkout HTTP route', () => {
     expect(checkout.status).toBe(201);
     const orderId = checkout.body.order.id;
     expect(checkout.body.order).toMatchObject({ status: 'PLACED', paymentState: 'pending_cod',
-      paymentEvidence: { mode: 'manual_cod', providerVerified: false, independentlyVerified: false } });
+      paymentEvidence: { mode: 'manual_cod', providerVerified: false, independentlyVerified: false },
+      inventoryEvidence: { source: 'application_stock_ledger', status: 'reservation_recorded', physicalCountVerified: false, independentlyVerified: false } });
     const buyerOrders = await supertest(serverModule.app).get('/api/me/orders').set(buyerAuth);
     expect(buyerOrders.status).toBe(200);
     expect(buyerOrders.body.map((order) => order.id)).toContain(orderId);
@@ -526,7 +527,7 @@ describe('Pakistan checkout HTTP route', () => {
 
   it('blocks production checkout until pilot enablement and site/owner evidence gates are configured', async () => {
     const keys = ['VELOSUPPLY_PILOT_ENABLED', 'VELOSUPPLY_PILOT_SITE_VERIFIED',
-      'VELOSUPPLY_PILOT_SITE_EVIDENCE_REF', 'VELOSUPPLY_PILOT_OWNER_APPROVAL_REF', 'VELOSUPPLY_PILOT_ALLOWED_SKUS', 'VELOSUPPLY_PILOT_ALLOWED_AREAS'];
+      'VELOSUPPLY_PILOT_SITE_EVIDENCE_REF', 'VELOSUPPLY_PILOT_OWNER_APPROVAL_REF', 'VELOSUPPLY_PILOT_ALLOWED_SKUS', 'VELOSUPPLY_PILOT_ALLOWED_AREAS', 'VELOSUPPLY_PILOT_OPENING_STOCK_VERIFIED', 'VELOSUPPLY_PILOT_OPENING_STOCK_EVIDENCE_REF'];
     const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
     keys.forEach((key) => delete process.env[key]);
     try {
@@ -555,7 +556,7 @@ describe('Pakistan checkout HTTP route', () => {
 
   it('rejects production pilot orders above five total units before persisting an order', async () => {
     const keys = ['VELOSUPPLY_PILOT_ENABLED', 'VELOSUPPLY_PILOT_SITE_VERIFIED',
-      'VELOSUPPLY_PILOT_SITE_EVIDENCE_REF', 'VELOSUPPLY_PILOT_OWNER_APPROVAL_REF', 'VELOSUPPLY_PILOT_ALLOWED_SKUS', 'VELOSUPPLY_PILOT_ALLOWED_AREAS'];
+      'VELOSUPPLY_PILOT_SITE_EVIDENCE_REF', 'VELOSUPPLY_PILOT_OWNER_APPROVAL_REF', 'VELOSUPPLY_PILOT_ALLOWED_SKUS', 'VELOSUPPLY_PILOT_ALLOWED_AREAS', 'VELOSUPPLY_PILOT_OPENING_STOCK_VERIFIED', 'VELOSUPPLY_PILOT_OPENING_STOCK_EVIDENCE_REF'];
     const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
     process.env.VELOSUPPLY_PILOT_ENABLED = 'true';
     process.env.VELOSUPPLY_PILOT_SITE_VERIFIED = 'true';
@@ -563,6 +564,8 @@ describe('Pakistan checkout HTTP route', () => {
     process.env.VELOSUPPLY_PILOT_OWNER_APPROVAL_REF = 'test-only-owner-approval';
     process.env.VELOSUPPLY_PILOT_ALLOWED_SKUS = 'SKU-1';
     process.env.VELOSUPPLY_PILOT_ALLOWED_AREAS = 'Synthetic Test Area';
+    process.env.VELOSUPPLY_PILOT_OPENING_STOCK_VERIFIED = 'true';
+    process.env.VELOSUPPLY_PILOT_OPENING_STOCK_EVIDENCE_REF = 'test-only-stock-count';
     try {
       const { adapter } = await setup('production');
       const registered = await supertest(serverModule.app).post('/api/auth/register')
