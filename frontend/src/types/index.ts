@@ -51,6 +51,7 @@ export interface OrderItem {
 
 export interface Order {
   id: string
+  code?: string
   customerName: string
   customerEmail: string
   shippingRegion: string
