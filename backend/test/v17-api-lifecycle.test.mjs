@@ -53,6 +53,35 @@ async function adminToken() {
   return response.body.token;
 }
 
+async function createApprovedReturn(auth, prefix) {
+  const checkout = await supertest(server.app).post('/api/checkout')
+    .set('Idempotency-Key', prefix + '-checkout')
+    .send({
+      customerName: 'Synthetic Return Buyer', customerEmail: prefix + '@example.test',
+      city: 'Karachi', address: 'Synthetic test delivery address',
+      paymentMethod: 'COD', items: [{ sku: 'SKU-1', qty: 1 }]
+    });
+  expect(checkout.status).toBe(201);
+  const order = checkout.body.order;
+  for (const status of ['CONFIRMED', 'PICKING', 'PACKED']) {
+    const response = await auth(supertest(server.app).patch('/api/orders/' + order.id + '/status')).send({ status });
+    expect(response.status).toBe(200);
+  }
+  const dispatch = await auth(supertest(server.app).patch('/api/orders/' + order.id + '/status'))
+    .set('Idempotency-Key', prefix + '-dispatch').send({ status: 'DISPATCHED' });
+  expect(dispatch.status).toBe(200);
+  const delivery = await auth(supertest(server.app).patch('/api/orders/' + order.id + '/status')).send({ status: 'DELIVERED' });
+  expect(delivery.status).toBe(200);
+  const requested = await auth(supertest(server.app).post('/api/orders/' + order.id + '/return'))
+    .send({ reason: 'Synthetic test return' });
+  expect(requested.status).toBe(201);
+  const returnId = requested.body.return.id;
+  const approved = await auth(supertest(server.app).post('/api/returns/' + returnId + '/decision'))
+    .send({ decision: 'approved' });
+  expect(approved.status).toBe(200);
+  return { order, returnId };
+}
+
 afterEach(async () => {
   if (tempDir) await fs.rm(tempDir, { recursive: true, force: true });
   tempDir = null;
@@ -155,8 +184,15 @@ describe('v17 collection-backed catalog, payment and refund routes', () => {
     expect(approvedReturn.status).toBe(200);
     const receivedReturn = await auth(supertest(server.app).post('/api/returns/' + returnId + '/receive'))
       .set('Idempotency-Key', 'v17-receive-return')
-      .send({ hubCode: 'HUB-KHI' });
+      .send({ hubCode: 'HUB-KHI', physicalReceiptConfirmed: true, conditionAssessed: true, disposition: 'restockable' });
     expect(receivedReturn.status).toBe(200);
+    expect(receivedReturn.body.return).toMatchObject({
+      status: 'received', stockDisposition: 'restockable',
+      receiptEvidence: { source: 'operator_report', status: 'not_independently_verified',
+        physicalReceiptConfirmed: true, conditionAssessed: true, disposition: 'restockable',
+        providerVerified: false, independentlyVerified: false }
+    });
+    expect(receivedReturn.body.message).toContain('not independently verified');
     expect(receivedReturn.body.refund).toMatchObject({
       returnId, orderId: order.id, amountMinor, currency: 'PKR',
       status: 'manual_pending', executionMode: 'manual', providerVerified: false
@@ -171,4 +207,54 @@ describe('v17 collection-backed catalog, payment and refund routes', () => {
     expect(await adapter.count('auditLogs', { action: 'refund.request' })).toBe(1);
     expect(await adapter.count('auditLogs', { action: 'refund.manual_recorded' })).toBe(1);
   });
+  it('rejects return receipt without an explicit physical receipt and condition assessment', async () => {
+    const { adapter } = await setup();
+    const token = await adminToken();
+    const auth = (request) => request.set('Authorization', 'Bearer ' + token);
+    const { returnId } = await createApprovedReturn(auth, 'missing-attestation');
+    const before = (await adapter.find('stock', { sku: 'SKU-1', hubCode: 'HUB-KHI' }))[0];
+    const response = await auth(supertest(server.app).post('/api/returns/' + returnId + '/receive'))
+      .set('Idempotency-Key', 'missing-attestation-receive')
+      .send({ hubCode: 'HUB-KHI', physicalReceiptConfirmed: false, conditionAssessed: true, disposition: 'restockable' });
+    expect(response.status).toBe(400);
+    expect(await adapter.findById('returns', returnId)).toMatchObject({ status: 'approved' });
+    expect((await adapter.find('stock', { sku: 'SKU-1', hubCode: 'HUB-KHI' }))[0].onHand).toBe(before.onHand);
+    expect(await adapter.count('movements', { type: 'RETURN_IN' })).toBe(0);
+  });
+
+  it('rejects a return destination that has no existing warehouse record', async () => {
+    const { adapter } = await setup();
+    const token = await adminToken();
+    const auth = (request) => request.set('Authorization', 'Bearer ' + token);
+    const { returnId } = await createApprovedReturn(auth, 'unknown-return-hub');
+    const response = await auth(supertest(server.app).post('/api/returns/' + returnId + '/receive'))
+      .set('Idempotency-Key', 'unknown-hub-receive')
+      .send({ hubCode: 'HUB-NOT-REAL', physicalReceiptConfirmed: true, conditionAssessed: true, disposition: 'restockable' });
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe('WAREHOUSE_NOT_AVAILABLE');
+    expect(await adapter.find('stock', { hubCode: 'HUB-NOT-REAL' })).toHaveLength(0);
+    expect(await adapter.count('movements', { type: 'RETURN_IN' })).toBe(0);
+    expect(await adapter.findById('returns', returnId)).toMatchObject({ status: 'approved' });
+  });
+
+  it('records quarantined returns without increasing saleable stock or writing RETURN_IN', async () => {
+    const { adapter } = await setup();
+    const token = await adminToken();
+    const auth = (request) => request.set('Authorization', 'Bearer ' + token);
+    const { returnId } = await createApprovedReturn(auth, 'quarantine-return');
+    const before = (await adapter.find('stock', { sku: 'SKU-1', hubCode: 'HUB-KHI' }))[0];
+    const response = await auth(supertest(server.app).post('/api/returns/' + returnId + '/receive'))
+      .set('Idempotency-Key', 'quarantine-return-receive')
+      .send({ hubCode: 'HUB-KHI', physicalReceiptConfirmed: true, conditionAssessed: true, disposition: 'quarantine' });
+    expect(response.status).toBe(200);
+    expect(response.body.return).toMatchObject({
+      status: 'received', stockDisposition: 'quarantine',
+      receiptEvidence: { status: 'not_independently_verified', disposition: 'quarantine',
+        providerVerified: false, independentlyVerified: false }
+    });
+    expect(response.body.message).toContain('Only restockable items enter saleable stock');
+    expect((await adapter.find('stock', { sku: 'SKU-1', hubCode: 'HUB-KHI' }))[0].onHand).toBe(before.onHand);
+    expect(await adapter.count('movements', { type: 'RETURN_IN' })).toBe(0);
+  });
+
 });
