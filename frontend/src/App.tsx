@@ -9,6 +9,7 @@ import { ProtectedRoute } from './components/ProtectedRoute'
 import { DashboardLayout } from './components/dashboard/DashboardLayout'
 import { CommandPages } from './pages/dashboard/CommandPages'
 import { ReliabilityPage } from './pages/dashboard/ReliabilityPage'
+import { OrdersPage } from './pages/dashboard/OrdersPage'
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } })
 const viewMotion = { initial: { opacity: 0, y: 10 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: -6 }, transition: { duration: .24, ease: 'easeOut' } }
@@ -27,6 +28,7 @@ function AnimatedRoutes() {
           <Route path="topology" element={<CommandPages />} />
           <Route path="threats" element={<CommandPages />} />
           <Route path="activity" element={<CommandPages />} />
+          <Route path="orders" element={<OrdersPage />} />
           <Route path="reliability" element={<ReliabilityPage />} />
           <Route path="messages" element={<CommandPages />} />
           <Route path="manage" element={<CommandPages />} />

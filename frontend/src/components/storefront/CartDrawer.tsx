@@ -11,9 +11,10 @@ import { useCartStore } from '../../store/useCartStore'
 const checkoutSchema = z.object({
   customerName: z.string().min(2, 'Enter your name'),
   customerEmail: z.string().email('Enter a valid email'),
-  city: z.enum(['Karachi', 'Lahore', 'Islamabad', 'Rawalpindi', 'Faisalabad', 'Multan', 'Peshawar', 'Quetta']),
+  city: z.literal('Karachi'),
+  deliveryArea: z.string().trim().min(2, 'Enter your delivery area'),
   address: z.string().min(5, 'Enter your delivery address'),
-  paymentMethod: z.enum(['COD', 'JAZZCASH', 'EASYPAISA', 'RAAST', 'CARD', 'BANK_TRANSFER']),
+  paymentMethod: z.literal('COD'),
 })
 type CheckoutFields = z.infer<typeof checkoutSchema>
 
@@ -24,17 +25,19 @@ export function CartDrawer() {
   const idempotencyRef = useRef<{ signature: string; key: string } | null>(null)
   const { register, handleSubmit, formState: { errors, isSubmitting }, reset } = useForm<CheckoutFields>({
     resolver: zodResolver(checkoutSchema),
-    defaultValues: { city: 'Karachi', paymentMethod: 'COD' },
+    defaultValues: { city: 'Karachi', deliveryArea: '', paymentMethod: 'COD' },
   })
   const money = new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 })
   const total = lines.reduce((sum, line) => sum + (line.product.priceExGstPkr ?? 0) * line.quantity, 0)
   const hasUnpricedItem = lines.some((line) => !Number.isSafeInteger(line.product.priceExGstPkr))
+  const totalUnits = lines.reduce((sum, line) => sum + line.quantity, 0)
   const submit = async (values: CheckoutFields) => {
     setCheckoutError('')
     if (hasUnpricedItem) {
       setCheckoutError('This demo product does not have a verified PKR price yet.')
       return
     }
+    if (totalUnits > 5) { setCheckoutError('The proposed pilot limit is five total units per order.'); return }
     const payload = {
       ...values,
       items: lines.map((line) => ({ sku: line.product.sku, qty: line.quantity })),
@@ -67,8 +70,8 @@ export function CartDrawer() {
       {open && <>
         <motion.button className="drawer-backdrop" aria-label="Close cart" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={close} />
         <motion.aside className="cart-drawer" initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', damping: 30, stiffness: 280 }} aria-label="Shopping cart">
-          <div className="drawer-head"><div><span className="eyebrow">Live inventory</span><h2 style={{ margin: '5px 0' }}>{receipt ? 'Order confirmed' : 'Your cart'}</h2></div><button className="small-button" aria-label="Close cart" onClick={close}><X size={18} /></button></div>
-          {receipt ? <div className="card-light" style={{ marginTop: 28 }}><span className="success-text">Inventory reserved successfully</span><h3>Thank you for your order.</h3><div className="mono-label">ORDER REFERENCE</div><div className="mono" style={{ margin: '9px 0 20px' }}>{receipt}</div><p className="muted">Your order is assigned to an optimized fulfillment hub.</p><Link className="button button-dark" to="/dashboard" onClick={close}>Watch fulfillment route</Link></div> :
+          <div className="drawer-head"><div><span className="eyebrow">Demonstration inventory</span><h2 style={{ margin: '5px 0' }}>{receipt ? 'Order request accepted' : 'Your cart'}</h2></div><button className="small-button" aria-label="Close cart" onClick={close}><X size={18} /></button></div>
+          {receipt ? <div className="card-light" style={{ marginTop: 28 }}><span className="success-text">Application order recorded</span><h3>Your order request was recorded.</h3><div className="mono-label">ORDER REFERENCE</div><div className="mono" style={{ margin: '9px 0 20px' }}>{receipt}</div><p className="muted">This records an application order and ledger stock reservation only. HUB-KHI and the physical stock count are not independently verified. COD receipt recording is manual, and operator-reported delivery is not independent proof of delivery.</p><Link className="button button-dark" to="/dashboard" onClick={close}>Watch fulfillment route</Link></div> :
           lines.length === 0 ? <div style={{ textAlign: 'center', padding: '60px 10px' }}><ShoppingCart size={32} /><p className="muted">Your cart is waiting for hardware.</p><Link className="button button-dark" to="/store" onClick={close}>Explore catalog</Link></div> :
             <>
               {lines.map(({ product, quantity }) => <div className="cart-line" key={product.id}>
@@ -79,11 +82,12 @@ export function CartDrawer() {
               <form onSubmit={handleSubmit(submit)} style={{ display: 'grid', gap: 12 }}>
                 <label>Name<input className="field" {...register('customerName')} />{errors.customerName && <small className="danger-text">{errors.customerName.message}</small>}</label>
                 <label>Email<input className="field" type="email" {...register('customerEmail')} />{errors.customerEmail && <small className="danger-text">{errors.customerEmail.message}</small>}</label>
-                <label>Delivery city<select className="field" {...register('city')}><option>Karachi</option><option>Lahore</option><option>Islamabad</option><option>Rawalpindi</option><option>Faisalabad</option><option>Multan</option><option>Peshawar</option><option>Quetta</option></select>{errors.city && <small className="danger-text">{errors.city.message}</small>}</label>
-                <label>Delivery address<input className="field" {...register('address')} />{errors.address && <small className="danger-text">{errors.address.message}</small>}</label>
-                <label>Payment method<select className="field" {...register('paymentMethod')}><option value="COD">Cash on delivery</option><option value="JAZZCASH">JazzCash (simulated)</option><option value="EASYPAISA">Easypaisa (simulated)</option><option value="RAAST">Raast (simulated)</option><option value="CARD">Card (simulated)</option><option value="BANK_TRANSFER">Bank transfer (simulated)</option></select>{errors.paymentMethod && <small className="danger-text">{errors.paymentMethod.message}</small>}</label>
+                <label>Proposed pilot city<select className="field" {...register('city')}><option>Karachi</option></select>{errors.city && <small className="danger-text">{errors.city.message}</small>}</label>
+                <label>Delivery area<input className="field" {...register('deliveryArea')} placeholder="Owner-approved area only" />{errors.deliveryArea && <small className="danger-text">{errors.deliveryArea.message}</small>}</label>
+                 <label>Delivery address<input className="field" {...register('address')} />{errors.address && <small className="danger-text">{errors.address.message}</small>}</label>
+                <label>Payment method<select className="field" {...register('paymentMethod')}><option value="COD">Manual cash on delivery (not independently verified)</option></select>{errors.paymentMethod && <small className="danger-text">{errors.paymentMethod.message}</small>}</label><p className="muted">COD is an operator-entered receipt record, not payment-provider confirmation. Delivery is operator-reported unless trusted courier proof-of-delivery is connected.</p><p className="muted">Proposed limits: Karachi only, five total units per order. HUB-KHI remains a proposed candidate.</p>
                 {checkoutError && <p role="alert" className="danger-text">{checkoutError}</p>}
-                <button className="button button-dark" disabled={isSubmitting || hasUnpricedItem}>{isSubmitting ? 'Securing stock…' : 'Place order'}</button>
+                <button className="button button-dark" disabled={isSubmitting || hasUnpricedItem || totalUnits > 5}>{isSubmitting ? 'Securing stock…' : 'Place order'}</button>
               </form>
             </>}
         </motion.aside>

@@ -15,6 +15,7 @@ const helmet = require('helmet');
 const { createSRE } = require('./sre');
 const { createRepository } = require('./repository');
 const { createDomainRepositories } = require('./repository/domain-repositories');
+const { PILOT_POLICY, getPilotAuthorization, getPilotPublicStatus, getPilotAllowedSkus, getPilotAllowedAreas } = require('./pilot-policy');
 
 
 const envFilePath = path.join(__dirname, '.env');
@@ -376,6 +377,7 @@ const checkoutSchema = z.object({
   customerEmail: z.string().trim().email().max(254).optional(),
   shippingRegion: z.string().trim().min(2).max(100).optional(),
   city: z.string().trim().min(2).max(80).optional(),
+  deliveryArea: z.string().trim().min(2).max(100).optional(),
   address: z.string().trim().min(5).max(300).optional(),
   paymentMethod: z.enum(['COD', 'JAZZCASH', 'EASYPAISA', 'RAAST', 'CARD', 'BANK_TRANSFER']).default('COD'),
   items: z.array(z.union([
@@ -492,6 +494,8 @@ const simulationSchema = z.object({
     maxLatency: z.number().min(1).max(1000).optional()
   }).strict().optional().default({})
 }).strict();
+
+app.get('/api/pilot/status', (_req, res) => res.json(getPilotPublicStatus()));
 
 app.get('/api/health', (_req, res) => {
   const summary = sre.healthSummary();
@@ -642,6 +646,20 @@ const checkoutHandler = asyncRoute(async (req, res) => {
   if (db.dataMode === 'production' && req.user.role !== 'buyer') {
     return res.status(403).json({ error: 'Only buyer accounts can place production orders' });
   }
+  const city = req.body.city || req.body.shippingRegion;
+  const paymentMethod = req.body.paymentMethod || 'COD';
+  let pilotPolicy = null;
+  if (db.dataMode === 'production') {
+    if (!getPilotAuthorization().enabled) {
+      return res.status(503).json({ error: 'PILOT_NOT_AUTHORIZED',
+        message: 'Production ordering is disabled until proposed site evidence and business-owner approval are configured.' });
+    }
+    if (city !== PILOT_POLICY.city || paymentMethod !== PILOT_POLICY.payment.method) {
+      return res.status(409).json({ error: 'PILOT_SCOPE_RESTRICTED',
+        message: 'The controlled pilot accepts Karachi orders and manual cash on delivery only.' });
+    }
+    pilotPolicy = PILOT_POLICY;
+  }
   const idempotencyKey = req.get('Idempotency-Key') || req.body.idempotencyKey;
   if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required' });
 
@@ -650,8 +668,19 @@ const checkoutHandler = asyncRoute(async (req, res) => {
     const product = findById(db.products, item.productId, 'Product');
     return { sku: product.sku, qty: item.quantity };
   });
+  const deliveryArea = typeof req.body.deliveryArea === 'string' ? req.body.deliveryArea.trim() : '';
+  if (pilotPolicy) {
+    const allowedSkus = getPilotAllowedSkus();
+    const allowedAreas = getPilotAllowedAreas();
+    if (!deliveryArea || !allowedAreas.includes(deliveryArea.toLocaleLowerCase('en'))) {
+      return res.status(409).json({ error: 'PILOT_AREA_NOT_ALLOWED', message: 'The delivery area is not on the owner-approved pilot area allowlist.' });
+    }
+    if (items.some((item) => !allowedSkus.includes(String(item.sku).toUpperCase()))) {
+      return res.status(409).json({ error: 'PILOT_SKU_NOT_ALLOWED', message: 'One or more requested SKUs are not on the owner-approved pilot SKU allowlist.' });
+    }
+    pilotPolicy = { ...pilotPolicy, allowedSkus, allowedAreas };
+  }
   const buyerId = req.user?.id || 'GUEST-' + createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 24);
-  const city = req.body.city || req.body.shippingRegion;
   const address = req.body.address || req.body.shippingRegion;
   let result;
   try {
@@ -661,16 +690,20 @@ const checkoutHandler = asyncRoute(async (req, res) => {
       customerName: req.body.customerName || req.user?.name,
       city,
       address,
+      deliveryArea,
       paymentMethod: req.body.paymentMethod || 'COD',
       items,
       idempotencyKey,
       actorId: req.user?.id || buyerId,
-      actorRole: req.user?.role || 'buyer'
+      actorRole: req.user?.role || 'buyer',
+      ...(pilotPolicy ? { pilotPolicy } : {})
     });
   } catch (error) {
     if (error.code === 'KEY_REUSED') return res.status(422).json({ error: error.code, message: error.message });
-    if (error.code === 'OUT_OF_STOCK' || error.code === 'PRODUCT_UNAVAILABLE' ||
-        error.code === 'PRICE_UNAVAILABLE' || error.code === 'TARIFF_UNAVAILABLE') {
+    if (['OUT_OF_STOCK', 'PRODUCT_UNAVAILABLE', 'PRICE_UNAVAILABLE', 'TARIFF_UNAVAILABLE',
+      'PILOT_UNIT_LIMIT', 'PILOT_ORDER_AMOUNT_LIMIT', 'PILOT_DAILY_ORDER_LIMIT',
+      'PILOT_BUYER_DAILY_LIMIT', 'PILOT_COD_EXPOSURE_LIMIT', 'PILOT_SITE_STOCK_UNAVAILABLE',
+      'PILOT_AREA_NOT_ALLOWED', 'PILOT_SKU_NOT_ALLOWED', 'PILOT_SITE_NOT_REGISTERED'].includes(error.code)) {
       return res.status(409).json({ error: error.code, message: error.message });
     }
     throw error;
@@ -1295,7 +1328,7 @@ app.post('/api/returns/:id/receive', requireRoles('admin', 'operator'), validate
     await persist();
     res.json(result);
   } catch (error) {
-    if (error.code === 'INVALID_TRANSITION') return res.status(409).json({ error: error.code, message: error.message });
+    if (['INVALID_TRANSITION', 'WAREHOUSE_NOT_FOUND'].includes(error.code)) return res.status(409).json({ error: error.code, message: error.message });
     throw error;
   }
 }));

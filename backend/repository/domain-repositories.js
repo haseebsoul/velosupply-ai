@@ -1,6 +1,7 @@
 'use strict';
 
 const { randomUUID, createHash } = require('node:crypto');
+const { getPakistanDayKey } = require('../pilot-policy');
 
 const BUYER_ROLES = new Set(['buyer', 'operator', 'admin']);
 const MOVEMENT_TYPES = new Set(['RECEIVE', 'RESERVE', 'RELEASE', 'SHIP', 'ADJUST', 'TRANSFER_OUT', 'TRANSFER_IN', 'RETURN_IN']);
@@ -421,6 +422,7 @@ function createDomainRepositories(adapter) {
       const buyerId = requiredString(input.buyerId, 'buyerId');
       const city = requiredString(input.city, 'city');
       const address = requiredString(input.address, 'address');
+      const deliveryArea = input.deliveryArea ? requiredString(input.deliveryArea, 'deliveryArea') : '';
       const paymentMethod = requiredString(input.paymentMethod, 'paymentMethod').toUpperCase();
       const idempotencyKey = requiredString(input.idempotencyKey, 'Idempotency-Key');
       if (!['COD', 'JAZZCASH', 'EASYPAISA', 'RAAST', 'CARD', 'BANK_TRANSFER'].includes(paymentMethod)) {
@@ -436,8 +438,28 @@ function createDomainRepositories(adapter) {
       const quantities = new Map();
       for (const item of itemRows) quantities.set(item.sku, (quantities.get(item.sku) || 0) + item.qty);
       const normalizedItems = [...quantities.entries()].map(([sku, qty]) => ({ sku, qty }));
+      if (input.pilotPolicy) {
+        const requestedUnits = normalizedItems.reduce((sum, item) => sum + item.qty, 0);
+        if (paymentMethod !== 'COD' || city !== 'Karachi') {
+          const error = new Error('The controlled pilot accepts Karachi orders and COD only');
+          error.code = 'PILOT_SCOPE_RESTRICTED'; throw error;
+        }
+        if (requestedUnits > input.pilotPolicy.limits.maxUnitsPerOrder) {
+          const error = new Error('The controlled pilot order limit is five total units');
+          error.code = 'PILOT_UNIT_LIMIT'; throw error;
+        }
+        if (!deliveryArea || !input.pilotPolicy.allowedAreas?.includes(deliveryArea.toLocaleLowerCase('en'))) {
+          const error = new Error('The delivery area is not approved for the controlled pilot');
+          error.code = 'PILOT_AREA_NOT_ALLOWED'; throw error;
+        }
+        if (normalizedItems.some((item) => !input.pilotPolicy.allowedSkus?.includes(item.sku.toUpperCase()))) {
+          const error = new Error('The requested SKU is not approved for the controlled pilot');
+          error.code = 'PILOT_SKU_NOT_ALLOWED'; throw error;
+        }
+      }
       const requestBody = {
         buyerId, city, address, paymentMethod,
+        ...(deliveryArea ? { deliveryArea } : {}),
         items: normalizedItems
       };
       const requestHash = createHash('sha256').update(JSON.stringify(requestBody)).digest('hex');
@@ -479,8 +501,15 @@ function createDomainRepositories(adapter) {
           throw new TypeError('Active tariff rule values are invalid');
         }
 
-        const rankedHubs = HUB_RANKING[city];
+        const rankedHubs = input.pilotPolicy ? [input.pilotPolicy.siteCode] : HUB_RANKING[city];
         if (!rankedHubs) throw new TypeError('Unsupported delivery city: ' + city);
+        if (input.pilotPolicy) {
+          const siteRows = await repository.find('warehouses', { code: input.pilotPolicy.siteCode }, { limit: 1 });
+          if (!siteRows.length || siteRows[0].archivedAt) {
+            const error = new Error('The proposed pilot site has no existing active warehouse record; no site or stock record will be created.');
+            error.code = 'PILOT_SITE_NOT_REGISTERED'; throw error;
+          }
+        }
         const lines = [];
         for (const item of normalizedItems) {
           const productsFound = await repository.find('products', { sku: item.sku }, { limit: 1 });
@@ -509,6 +538,10 @@ function createDomainRepositories(adapter) {
           const stock = line.stockByHub.get(hubCode);
           return stock && stock.onHand - stock.reserved >= line.qty;
         }));
+        if (input.pilotPolicy && !sharedHub) {
+          const error = new Error('The proposed Karachi pilot site has no eligible recorded stock; no alternate hub will be used.');
+          error.code = 'PILOT_SITE_STOCK_UNAVAILABLE'; throw error;
+        }
         const allocations = [];
         let splitShipment = false;
         if (sharedHub) {
@@ -552,6 +585,32 @@ function createDomainRepositories(adapter) {
         if (![subtotalExMinor, gstMinor, deliveryFeeMinor, totalMinor].every(Number.isSafeInteger)) {
           throw new TypeError('PKR order totals exceed the safe integer range');
         }
+        if (input.pilotPolicy) {
+          if (totalMinor > input.pilotPolicy.limits.maxOrderAmountMinor) {
+            const error = new Error('The controlled pilot per-order value limit is PKR 25,000');
+            error.code = 'PILOT_ORDER_AMOUNT_LIMIT'; throw error;
+          }
+          const dayKey = getPakistanDayKey(now);
+          const allOrders = await repository.find('orders', {});
+          const todaysOrders = allOrders.filter((order) => getPakistanDayKey(order.createdAt) === dayKey);
+          if (todaysOrders.length >= input.pilotPolicy.limits.maxOrdersPerPakistanDay) {
+            const error = new Error('The controlled pilot daily order limit has been reached');
+            error.code = 'PILOT_DAILY_ORDER_LIMIT'; throw error;
+          }
+          if (todaysOrders.filter((order) => (order.buyerId || order.userId) === buyerId).length >= input.pilotPolicy.limits.maxOrdersPerBuyerPerPakistanDay) {
+            const error = new Error('The controlled pilot allows one order per buyer per Pakistan-local day');
+            error.code = 'PILOT_BUYER_DAILY_LIMIT'; throw error;
+          }
+          const exposure = allOrders.reduce((sum, order) => {
+            if (order.paymentMethod !== 'COD' || order.paymentState !== 'pending_cod' || order.status === 'CANCELLED') return sum;
+            const amount = order.totalMinor ?? order.price?.totalMinor;
+            return Number.isSafeInteger(amount) && amount > 0 ? sum + amount : sum;
+          }, 0);
+          if (exposure + totalMinor > input.pilotPolicy.limits.maxOutstandingCodMinor) {
+            const error = new Error('The controlled pilot outstanding COD exposure limit would be exceeded');
+            error.code = 'PILOT_COD_EXPOSURE_LIMIT'; throw error;
+          }
+        }
 
         const orderId = 'ORD-' + randomUUID();
         const orderCode = 'VS-' + randomUUID().slice(0, 8).toUpperCase();
@@ -594,6 +653,7 @@ function createDomainRepositories(adapter) {
           city,
           shippingRegion: city,
           address,
+          ...(deliveryArea ? { deliveryArea } : {}),
           customerName: input.customerName || 'Buyer',
           customerEmail: input.buyerEmail || '',
           warehouse_hub: hubs[0] || null,
@@ -612,6 +672,15 @@ function createDomainRepositories(adapter) {
           paymentMethod,
           paymentState,
           paymentSimulated: paymentMethod !== 'COD',
+          paymentEvidence: paymentMethod === 'COD'
+            ? { mode: 'manual_cod', status: 'not_recorded', providerVerified: false, independentlyVerified: false }
+            : { mode: 'simulated', status: 'not_provider_verified', providerVerified: false, independentlyVerified: false },
+          inventoryEvidence: { source: 'application_stock_ledger', status: 'reservation_recorded', physicalCountVerified: false, independentlyVerified: false },
+          deliveryStatus: 'not_dispatched',
+          deliveryEvidence: { status: 'not_delivered', providerVerified: false, independentlyVerified: false },
+          ...(input.pilotPolicy ? {
+            pilotScope: 'karachi-proposed', pilotSiteCode: input.pilotPolicy.siteCode
+          } : {}),
           hubs,
           splitShipment,
           status: 'PLACED',
@@ -875,12 +944,20 @@ function createDomainRepositories(adapter) {
           }
         }
 
+        const deliveryEvidence = nextStatus === 'DELIVERED' ? {
+          source: 'operator_report', status: 'not_independently_verified',
+          providerVerified: false, independentlyVerified: false, recordedBy: actorId, reportedAt: at
+        } : order.deliveryEvidence;
         const timeline = [...(order.timeline || []), {
-          status: nextStatus, at, actorId, note: 'Order status advanced'
+          status: nextStatus, at, actorId,
+          note: nextStatus === 'DELIVERED'
+            ? 'An operator reported delivery; this is not independent proof of delivery.'
+            : 'Order status advanced'
         }];
         const paymentState = order.paymentState;
         const updated = await repository.update('orders', orderId, {
-          status: nextStatus, timeline, paymentState, updatedAt: at
+          status: nextStatus, timeline, paymentState, updatedAt: at,
+          ...(nextStatus === 'DELIVERED' ? { deliveryStatus: 'operator_reported', deliveryEvidence } : {})
         });
         await repository.insert('auditLogs', {
           id: 'AUD-' + randomUUID(), actorId, actorRole: actor.role || 'operator',
@@ -944,6 +1021,9 @@ function createDomainRepositories(adapter) {
           paymentState: 'paid_manual',
           paymentRecordId: payment.id,
           paymentRecordedAt: at,
+          paymentVerificationStatus: 'manual_recorded_not_independently_verified',
+          paymentEvidence: { mode: 'manual_cod', status: 'manual_recorded_not_independently_verified',
+            providerVerified: false, independentlyVerified: false, externalReference, recordedBy: actorId, recordedAt: at },
           updatedAt: at
         });
         await repository.insert('auditLogs', {
@@ -1041,6 +1121,12 @@ function createDomainRepositories(adapter) {
         }
         const order = await repository.findById('orders', record.orderId);
         if (!order) throw new Error('Return order not found');
+        const warehouses = await repository.find('warehouses', { code: hubCode }, { limit: 1 });
+        if (!warehouses.length || warehouses[0].archivedAt) {
+          const error = new Error('Returned stock can only be received into an existing, active warehouse record');
+          error.code = 'WAREHOUSE_NOT_FOUND';
+          throw error;
+        }
         const orderItems = await repository.find('orderItems', { orderId: order.id });
         const items = orderItems.length ? orderItems : (order.items || []);
         const at = new Date().toISOString();

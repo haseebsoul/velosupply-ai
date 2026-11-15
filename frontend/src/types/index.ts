@@ -51,6 +51,7 @@ export interface OrderItem {
 
 export interface Order {
   id: string
+  code?: string
   customerName: string
   customerEmail: string
   shippingRegion: string
@@ -62,8 +63,13 @@ export interface Order {
   userId?: string
   city?: string
   address?: string
+  deliveryArea?: string
   paymentMethod?: string
   paymentState?: string
+  paymentVerificationStatus?: string
+  paymentEvidence?: { mode?: string; status?: string; providerVerified?: boolean; independentlyVerified?: boolean; externalReference?: string }
+  deliveryStatus?: string
+  deliveryEvidence?: { source?: string; status?: string; providerVerified?: boolean; independentlyVerified?: boolean; reportedAt?: string }
   price?: { currency?: string; totalPkr?: number; totalMinor?: number; subtotalExMinor?: number; gstMinor?: number; deliveryFeeMinor?: number; simulated?: boolean }
   status: string
   warehouse_hub?: string
