@@ -53,10 +53,10 @@ export function DeliveryAssignmentsPage() {
             <div className="table-wrap"><table className="dash-table delivery-assignment-table">
               <thead><tr><th>ORDER</th><th>DESTINATION</th><th>STATUS</th><th>DELIVERER</th><th>ACTION</th></tr></thead>
               <tbody>{orders.map(order => <tr key={order.id}>
-                <td><strong>{order.code || order.id}</strong><small>{order.customerName || 'Buyer'}</small></td>
+                <td><strong>{order.id}</strong><small>{order.customerName || 'Buyer'}</small></td>
                 <td>{order.city || order.shippingRegion || '—'}</td>
                 <td><span className="status-pill">{order.status}</span></td>
-                <td><select className="field delivery-assignee-select" aria-label={'Deliverer for ' + (order.code || order.id)} value={selected[order.id] || ''} onChange={event => setSelected(current => ({ ...current, [order.id]: event.target.value }))}>
+                <td><select className="field delivery-assignee-select" aria-label={'Deliverer for ' + (order.id)} value={selected[order.id] || ''} onChange={event => setSelected(current => ({ ...current, [order.id]: event.target.value }))}>
                   <option value="">Select Deliverer</option>{deliverers.map(person => <option key={person.id} value={person.id}>{person.name} · {person.email}</option>)}
                 </select></td>
                 <td><button className="small-button" type="button" disabled={busyId === order.id || !selected[order.id]} onClick={() => void assign(order.id)}>{busyId === order.id ? 'Saving…' : 'Assign'}</button></td>

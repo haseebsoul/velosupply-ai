@@ -48,7 +48,7 @@ export function DelivererOrdersPage() {
         orders.length === 0 ? <div className="card-light buyer-empty"><PackageCheck size={30} /><h2>No assigned deliveries</h2><p className="muted">Your administrator or operations team will assign packed shipments to this account.</p></div> :
           <div className="delivery-card-list">
             {orders.map(order => <article className="card-light delivery-order-card" key={order.id}>
-              <div className="delivery-order-heading"><div><span className="mono-label">SHIPMENT REFERENCE</span><h2>{order.code || order.id}</h2></div><span className={statusClass(order.status)}>{order.status}</span></div>
+              <div className="delivery-order-heading"><div><span className="mono-label">SHIPMENT REFERENCE</span><h2>{order.id}</h2></div><span className={statusClass(order.status)}>{order.status}</span></div>
               <div className="delivery-order-details">
                 <div><span className="mono-label">RECIPIENT</span><strong>{order.customerName || 'Buyer'}</strong><small>{order.customerEmail || 'Email not supplied'}</small></div>
                 <div><span className="mono-label">DESTINATION</span><strong>{order.city || order.shippingRegion || 'Address not supplied'}</strong><small>{order.address || 'See order fulfilment notes'}</small></div>
