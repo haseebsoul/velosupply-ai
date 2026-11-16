@@ -143,7 +143,7 @@ async function main() {
         if (!target) throw new Error('The target Administrator changed during recovery. No account was changed.');
         await tx.update('users', target.id, { passwordHash, updatedAt: now });
         await tx.insert('auditLogs', {
-          id: 'AUD-' + randomUUID(), actorId: target.id, actorRole: 'admin',
+          id: 'AUD-' + randomUUID(), actorId: 'system:owner-cli', actorRole: 'system',
           action: 'user.admin_password_recovery', targetType: 'user', targetId: target.id,
           meta: { source: 'owner_cli_recovery' }, at: now
         });
@@ -170,7 +170,7 @@ async function main() {
           });
         }
         await tx.insert('auditLogs', {
-          id: 'AUD-' + randomUUID(), actorId: userId, actorRole: 'admin',
+          id: 'AUD-' + randomUUID(), actorId: 'system:owner-cli', actorRole: 'system',
           action: 'user.bootstrap_create', targetType: 'user', targetId: userId,
           meta: { source: 'owner_cli_bootstrap', bootstrapInvitationsRevoked: bootstrapInvitations.length },
           at: now

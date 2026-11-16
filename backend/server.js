@@ -377,12 +377,12 @@ const registerSchema = z.object({
 }).strict();
 const invitationCreateSchema = z.object({
   role: z.enum(['admin', 'operator']),
-  maxUses: z.number().int().min(1).max(50).default(1),
+  maxUses: z.number().int().min(1).max(1).default(1),
   expiresInDays: z.number().int().min(1).max(90).default(7)
 }).strict();
 const deliveryInvitationCreateSchema = z.object({
   role: z.enum(['buyer', 'deliverer']),
-  maxUses: z.number().int().min(1).max(50).default(1),
+  maxUses: z.number().int().min(1).max(1).default(1),
   expiresInDays: z.number().int().min(1).max(90).default(7)
 }).strict();
 const delivererAssignSchema = z.object({ delivererId: z.string().trim().min(1).max(100) }).strict();
