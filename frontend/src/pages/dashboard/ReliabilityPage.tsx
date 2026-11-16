@@ -22,7 +22,7 @@ const chaosModes = [
   { mode: 'reset', label: 'Reset all effects' }
 ]
 
-function pct(value: number) { return Math.round(value * 100) + '%' }
+function pct(value: number | null | undefined) { return Math.round((Number(value) || 0) * 100) + '%' }
 function badgeClass(status: string) {
   if (['up', 'normal', 'resolved', 'ok'].includes(status)) return 'status-pill'
   if (['degraded', 'warning', 'acknowledged'].includes(status)) return 'status-pill status-warning'
@@ -45,7 +45,69 @@ export function ReliabilityPage() {
   const refresh = useCallback(async () => {
     try {
       const response = await api.get<Dashboard>('/sre')
-      setData(response.data)
+      const incoming = response.data ?? ({} as Dashboard)
+      const metrics = incoming.metrics ?? ({} as Sample)
+      setData({
+        ...incoming,
+        metrics: {
+          at: metrics.at ?? new Date().toISOString(),
+          rps: Number(metrics.rps ?? 0),
+          p95: Number(metrics.p95 ?? 0),
+          p99: Number(metrics.p99 ?? 0),
+          errorRate: Number(metrics.errorRate ?? 0),
+          wsClients: Number(metrics.wsClients ?? 0),
+          memMb: Number(metrics.memMb ?? 0),
+          heapUsedPct: Number(metrics.heapUsedPct ?? 0),
+          eventLoopLagMs: Number(metrics.eventLoopLagMs ?? 0),
+          dbLatencyMs: Number(metrics.dbLatencyMs ?? 0),
+          orderThroughput: Number(metrics.orderThroughput ?? 0)
+        },
+        samples: Array.isArray(incoming.samples) ? incoming.samples.map((sample) => ({
+          ...sample,
+          at: sample?.at ?? new Date().toISOString(),
+          rps: Number(sample?.rps ?? 0),
+          p95: Number(sample?.p95 ?? 0),
+          p99: Number(sample?.p99 ?? 0),
+          errorRate: Number(sample?.errorRate ?? 0),
+          wsClients: Number(sample?.wsClients ?? 0),
+          memMb: Number(sample?.memMb ?? 0),
+          heapUsedPct: Number(sample?.heapUsedPct ?? 0),
+          eventLoopLagMs: Number(sample?.eventLoopLagMs ?? 0),
+          dbLatencyMs: Number(sample?.dbLatencyMs ?? 0),
+          orderThroughput: Number(sample?.orderThroughput ?? 0)
+        })) : [],
+        slos: Array.isArray(incoming.slos) ? incoming.slos.filter(Boolean).map((slo) => ({
+          ...slo,
+          target: Number(slo?.target ?? 0),
+          observed: Number(slo?.observed ?? 0),
+          totalEvents: Number(slo?.totalEvents ?? 0),
+          badEvents: Number(slo?.badEvents ?? 0),
+          budgetRemaining: Number(slo?.budgetRemaining ?? 0),
+          burnRate: slo?.burnRate ?? 0,
+          budgetState: slo?.budgetState ?? 'unknown',
+          description: slo?.description ?? ''
+        })) : [],
+        services: {
+          status: incoming.services?.status ?? 'unknown',
+          services: Array.isArray(incoming.services?.services) ? incoming.services.services.filter(Boolean).map((service) => ({
+            ...service,
+            latencyMs: Number.isFinite(service?.latencyMs) ? Number(service.latencyMs) : null,
+            error: service?.error ?? null,
+            at: service?.at ?? null
+          })) : []
+        },
+        alerts: Array.isArray(incoming.alerts) ? incoming.alerts.filter(Boolean) : [],
+        incidents: Array.isArray(incoming.incidents) ? incoming.incidents.filter(Boolean).map((incident) => ({
+          ...incident,
+          timeline: Array.isArray(incident.timeline) ? incident.timeline : []
+        })) : [],
+        chaos: incoming.chaos ?? { mode: 'reset', expiresAt: null, activatedAt: null },
+        runbooks: Array.isArray(incoming.runbooks) ? incoming.runbooks.filter(Boolean).map((book) => ({
+          ...book,
+          steps: Array.isArray(book.steps) ? book.steps : [],
+          checkedSteps: Array.isArray(book.checkedSteps) ? book.checkedSteps : []
+        })) : []
+      })
       setError('')
     } catch (reason) { setError(errorMessage(reason)) }
   }, [])
@@ -111,15 +173,15 @@ export function ReliabilityPage() {
     setNote('')
   }
 
-  if (!data && error) return <main className="dashboard-content">
-    <h1 className="ops-heading">Reliability</h1>
-    <p className="danger-text" role="alert">{error}</p>
+  if (!data) return <main className="dashboard-content reliability-page">
+    <div className="page-intro"><div><span className="mono-label">SITE RELIABILITY ENGINEERING</span><h1 className="ops-heading">System reliability &amp; SLOs</h1><p className="ops-copy">Service objectives, error budgets, health and controlled failure testing.</p></div></div>
+    {error ? <div className="page-alert" role="alert">{error}</div> : <div className="card-ops reliability-loading">Loading reliability telemetry…</div>}
     <button className="small-button" onClick={() => void refresh()}><RefreshCw size={14} /> Retry</button>
   </main>
 
-  return <main className="dashboard-content">
-    <div className="drawer-head">
-      <div><span className="mono-label">SITE RELIABILITY ENGINEERING</span><h1 className="ops-heading">Reliability</h1><p className="ops-copy">Service objectives, error budgets, health, alerts and controlled failure testing.</p></div>
+  return <main className="dashboard-content reliability-page">
+    <div className="page-intro">
+      <div><span className="mono-label">SITE RELIABILITY ENGINEERING</span><h1 className="ops-heading">System reliability &amp; SLOs</h1><p className="ops-copy">Service objectives, error budgets, health, alerts and controlled failure testing.</p></div>
       <div className="inline-actions">
         {user?.role === 'admin' && <button className="small-button" disabled={busy} onClick={() => void exportBackup()}>Export full backup</button>}
         <button className="small-button" disabled={busy} onClick={() => void refresh()}><RefreshCw size={14} /> Refresh</button>
@@ -153,14 +215,14 @@ export function ReliabilityPage() {
 
       <section className="dash-grid">
         {[
-          { title: 'Requests per second', dataKey: 'rps', stroke: 'var(--navy-700)', fill: 'var(--navy-50)' },
-          { title: 'P95 latency · ms', dataKey: 'p95', stroke: 'var(--orange-500)', fill: 'var(--orange-50)' },
-          { title: 'Error rate · %', dataKey: 'errorPercent', stroke: 'var(--orange-600)', fill: 'var(--orange-50)' },
-          { title: 'Checkout throughput', dataKey: 'orderThroughput', stroke: 'var(--navy-700)', fill: 'var(--navy-50)' }
+          { title: 'Requests per second', dataKey: 'rps', stroke: 'var(--hex-c84b11)', fill: 'var(--hex-fff3ed)' },
+          { title: 'P95 latency · ms', dataKey: 'p95', stroke: 'var(--hex-a93d0b)', fill: 'var(--hex-fff3ed)' },
+          { title: 'Error rate · %', dataKey: 'errorPercent', stroke: 'var(--hex-b45309)', fill: 'var(--hex-fffbeb)' },
+          { title: 'Checkout throughput', dataKey: 'orderThroughput', stroke: 'var(--hex-c84b11)', fill: 'var(--hex-fff3ed)' }
         ].map((chart) => <article className="card-ops dash-card" key={chart.dataKey}>
           <span className="mono-label">TELEMETRY · LAST 120 TICKS</span><h2>{chart.title}</h2>
           <div style={{ height: 230 }}><ResponsiveContainer><AreaChart data={samples}>
-            <CartesianGrid stroke="var(--border-ops)" vertical={false} /><XAxis dataKey="label" hide /><YAxis stroke="var(--ink-muted)" /><Tooltip />
+            <CartesianGrid stroke="var(--border-ops)" vertical={false} /><XAxis dataKey="label" stroke="var(--hex-78716c)" tick={{ fontSize: 9 }} minTickGap={28} /><YAxis stroke="var(--ink-muted)" /><Tooltip />
             <Area type="monotone" dataKey={chart.dataKey} name={chart.title} stroke={chart.stroke} fill={chart.fill} fillOpacity={0.55} />
           </AreaChart></ResponsiveContainer></div>
         </article>)}

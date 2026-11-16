@@ -10,17 +10,19 @@
     "seed": "node seed.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "migrate:state": "node migrate-state.js"
+    "migrate:state": "node migrate-state.js",
+    "bootstrap:admin": "node bootstrap-admin.js",
+    "admin:recover": "node bootstrap-admin.js --recover"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.2",
-    "ws": "^8.18.0",
-    "zod": "^3.24.1",
     "mongodb": "^6.12.0",
-    "helmet": "^8.3.0"
+    "ws": "^8.18.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "supertest": "^7.3.2",

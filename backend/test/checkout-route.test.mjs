@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -65,6 +66,26 @@ async function setup(dataMode = 'test') {
   const state = await adapter.readState();
   serverModule.configureForTests(state, adapter);
   return { adapter };
+}
+
+async function issueBuyerInvitation(adapter, id) {
+  const code = 'TEST-BUYER-' + id;
+  const now = new Date().toISOString();
+  await adapter.insert('invitations', {
+    id: 'INV-' + id,
+    codeHash: createHash('sha256').update(code).digest('hex'),
+    codeHint: code.slice(-4),
+    role: 'buyer',
+    createdBy: 'USER-ADMIN',
+    maxUses: 1,
+    usedCount: 0,
+    usedBy: null,
+    status: 'active',
+    expiresAt: new Date(Date.now() + 86400000).toISOString(),
+    createdAt: now,
+    updatedAt: now
+  });
+  return code;
 }
 
 afterEach(async () => {
@@ -224,9 +245,13 @@ describe('Pakistan checkout HTTP route', () => {
 
   it('registers a buyer in the users collection with explicit unverified filer status and audit', async () => {
     const { adapter } = await setup();
+    const invitationCode = await issueBuyerInvitation(adapter, 'REGISTER-1');
     const response = await supertest(serverModule.app)
       .post('/api/auth/register')
-      .send({ name: 'New Buyer', email: 'newbuyer@example.com', password: 'Password123' });
+      .send({
+        name: 'New Buyer', email: 'newbuyer@example.com', role: 'buyer',
+        password: 'Password123', registrationInviteCode: invitationCode
+      });
 
     expect(response.status).toBe(201);
     expect(response.body.user).toMatchObject({ role: 'buyer', filerStatus: 'unverified', isActive: true });
@@ -325,13 +350,15 @@ describe('Pakistan checkout HTTP route', () => {
 
   it('exposes only the buyer own orders and invoices through /api/me routes', async () => {
     const { adapter } = await setup();
+    const invitationCode = await issueBuyerInvitation(adapter, 'REGISTER-2');
     const registered = await supertest(serverModule.app)
       .post('/api/auth/register')
       .send({
         name: 'Hira Javed',
         email: 'hira@example.com',
         role: 'buyer',
-        password: 'BuyerPassword123'
+        password: 'BuyerPassword123',
+        registrationInviteCode: invitationCode
       });
     expect(registered.status).toBe(201);
     const token = registered.body.token;
@@ -412,4 +439,130 @@ describe('Pakistan checkout HTTP route', () => {
     expect(await adapter.count('movements')).toBe(0);
     expect((await adapter.find('stock', { sku: 'SKU-1', hubCode: 'HUB-KHI' }))[0].reserved).toBe(0);
   });
+
+  it('protects the Admin invitation API and never exposes stored invitation hashes', async () => {
+    const { adapter } = await setup();
+    const operatorLogin = await supertest(serverModule.app)
+      .post('/api/auth/login')
+      .send({ email: 'operator@example.com', password: 'Operator123' });
+    expect(operatorLogin.status).toBe(200);
+
+    const denied = await supertest(serverModule.app)
+      .post('/api/admin/invitations')
+      .set('Authorization', 'Bearer ' + operatorLogin.body.token)
+      .send({ role: 'buyer' });
+    expect(denied.status).toBe(403);
+    expect(await adapter.count('invitations')).toBe(0);
+
+    const adminLogin = await supertest(serverModule.app)
+      .post('/api/auth/login')
+      .send({ email: 'admin@example.com', password: 'AdminPassword123' });
+    expect(adminLogin.status).toBe(200);
+
+    const issued = await supertest(serverModule.app)
+      .post('/api/admin/invitations')
+      .set('Authorization', 'Bearer ' + adminLogin.body.token)
+      .send({ role: 'deliverer', maxUses: 1, expiresInDays: 7 });
+    expect(issued.status).toBe(201);
+    expect(issued.body.invitation).toMatchObject({ role: 'deliverer', status: 'active', usedCount: 0 });
+    expect(issued.body.invitation.code).toMatch(/^VELO-DLV-[A-F0-9]{64}$/);
+
+    const stored = await adapter.findById('invitations', issued.body.invitation.id);
+    expect(stored.codeHash).toBe(createHash('sha256').update(issued.body.invitation.code).digest('hex'));
+    expect(stored).not.toHaveProperty('code');
+
+    const listed = await supertest(serverModule.app)
+      .get('/api/admin/invitations')
+      .set('Authorization', 'Bearer ' + adminLogin.body.token);
+    expect(listed.status).toBe(200);
+    expect(listed.body).toEqual([expect.objectContaining({
+      id: issued.body.invitation.id, role: 'deliverer', status: 'active'
+    })]);
+    expect(listed.body[0]).not.toHaveProperty('codeHash');
+    expect(listed.body[0]).not.toHaveProperty('code');
+  });
+
+  it('registers a Deliverer from the invitation role and scopes the delivery APIs to assigned orders', async () => {
+    const { adapter } = await setup();
+    const invitationCode = 'TEST-DELIVERER-HTTP-1';
+    const createdAt = new Date().toISOString();
+    await adapter.insert('invitations', {
+      id: 'INV-DELIVERER-HTTP-1',
+      codeHash: createHash('sha256').update(invitationCode).digest('hex'),
+      codeHint: 'HTTP',
+      role: 'deliverer',
+      createdBy: 'USER-ADMIN',
+      maxUses: 1,
+      usedCount: 0,
+      usedBy: null,
+      status: 'active',
+      expiresAt: new Date(Date.now() + 86400000).toISOString(),
+      createdAt,
+      updatedAt: createdAt
+    });
+
+    const registered = await supertest(serverModule.app)
+      .post('/api/auth/register')
+      .send({
+        name: 'Delivery Partner',
+        email: 'deliverer@example.com',
+        role: 'buyer',
+        password: 'Deliverer123',
+        registrationInviteCode: invitationCode
+      });
+    expect(registered.status).toBe(201);
+    expect(registered.body.user).toMatchObject({ role: 'deliverer', isActive: true });
+    expect(registered.body.user).not.toHaveProperty('passwordHash');
+    expect(registered.body.user).not.toHaveProperty('filerStatus');
+    expect(await adapter.findById('invitations', 'INV-DELIVERER-HTTP-1'))
+      .toMatchObject({ status: 'used', usedCount: 1, usedBy: registered.body.user.id });
+
+    await adapter.insert('orders', {
+      id: 'ORDER-DELIVERER-OWN',
+      assignedDelivererId: registered.body.user.id,
+      status: 'DISPATCHED',
+      items: [],
+      timeline: []
+    });
+    await adapter.insert('orders', {
+      id: 'ORDER-DELIVERER-OTHER',
+      assignedDelivererId: 'ANOTHER-DELIVERER',
+      status: 'DISPATCHED',
+      items: [],
+      timeline: []
+    });
+
+    const assigned = await supertest(serverModule.app)
+      .get('/api/deliverer/orders')
+      .set('Authorization', 'Bearer ' + registered.body.token);
+    expect(assigned.status).toBe(200);
+    expect(assigned.body.map((order) => order.id)).toEqual(['ORDER-DELIVERER-OWN']);
+
+    const scopedOrders = await supertest(serverModule.app)
+      .get('/api/orders')
+      .set('Authorization', 'Bearer ' + registered.body.token);
+    expect(scopedOrders.status).toBe(200);
+    expect(scopedOrders.body.map((order) => order.id)).toEqual(['ORDER-DELIVERER-OWN']);
+
+    const adminUsers = await supertest(serverModule.app)
+      .get('/api/admin/users')
+      .set('Authorization', 'Bearer ' + registered.body.token);
+    expect(adminUsers.status).toBe(403);
+  });
+
+  it('rejects account registration without an invitation before creating any user', async () => {
+    const { adapter } = await setup();
+    const response = await supertest(serverModule.app)
+      .post('/api/auth/register')
+      .send({
+        name: 'Uninvited Buyer',
+        email: 'uninvited@example.com',
+        role: 'buyer',
+        password: 'BuyerPassword123'
+      });
+    expect(response.status).toBe(403);
+    expect(response.body.error).toMatch(/invitation key is required/i);
+    expect(await adapter.count('users', { email: 'uninvited@example.com' })).toBe(0);
+  });
+
 });

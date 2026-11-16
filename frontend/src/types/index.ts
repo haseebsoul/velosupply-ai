@@ -1,4 +1,4 @@
-export type UserRole = 'admin' | 'operator' | 'buyer' | 'user'
+export type UserRole = 'admin' | 'operator' | 'buyer' | 'deliverer' | 'user'
 
 export interface User {
   id: string
@@ -31,6 +31,7 @@ export interface Product {
 
 export interface Warehouse {
   id: string
+  code?: string
   name: string
   coords: [number, number]
   capacity: number
@@ -60,6 +61,8 @@ export interface Order {
   currency?: string
   buyerId?: string
   userId?: string
+  assignedDelivererId?: string
+  assignedDelivererAt?: string
   city?: string
   address?: string
   paymentMethod?: string

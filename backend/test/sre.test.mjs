@@ -1,4 +1,6 @@
 import express from 'express';
+import os from 'node:os';
+import path from 'node:path';
 import request from 'supertest';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import sreModule from '../sre.js';
@@ -22,7 +24,7 @@ function createHarness() {
     broadcast: (event) => broadcast.push(event),
     getMongoClient: () => null,
     getStateCollection: () => null,
-    getDbPath: () => '/tmp/velosupply-test.json',
+    getDbPath: () => path.join(os.tmpdir(), 'velosupply-test.json'),
     getWebSocketServer: () => null,
     getWebSocketClients: () => 0,
     isApiReady: () => true,

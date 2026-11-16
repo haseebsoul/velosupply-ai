@@ -2,7 +2,7 @@
 
 const { randomUUID, createHash } = require('node:crypto');
 
-const BUYER_ROLES = new Set(['buyer', 'operator', 'admin']);
+const BUYER_ROLES = new Set(['buyer', 'deliverer', 'operator', 'admin']);
 const MOVEMENT_TYPES = new Set(['RECEIVE', 'RESERVE', 'RELEASE', 'SHIP', 'ADJUST', 'TRANSFER_OUT', 'TRANSFER_IN', 'RETURN_IN']);
 
 function requiredString(value, field) {
@@ -77,7 +77,7 @@ function createDomainRepositories(adapter) {
     async create(input) {
       const email = requiredString(input.email, 'email').toLowerCase();
       const role = input.role === 'user' ? 'buyer' : requiredString(input.role, 'role');
-      if (!BUYER_ROLES.has(role)) throw new TypeError('role must be buyer, operator, or admin');
+      if (!BUYER_ROLES.has(role)) throw new TypeError('role must be buyer, deliverer, operator, or admin');
       const filerStatus = role === 'buyer' ? input.filerStatus : undefined;
       if (role === 'buyer' && !['filer', 'non-filer', 'unverified'].includes(filerStatus)) {
         throw new TypeError('filerStatus must be filer, non-filer, or unverified for buyers');
@@ -88,14 +88,6 @@ function createDomainRepositories(adapter) {
           const error = new Error('Email already registered');
           error.code = 'EMAIL_EXISTS';
           throw error;
-        }
-        if (role === 'admin') {
-          const activeAdmins = await repository.find('users', { role: 'admin', isActive: true });
-          if (activeAdmins.length) {
-            const error = new Error('ADMIN_EXISTS');
-            error.code = 'ADMIN_EXISTS';
-            throw error;
-          }
         }
         const userId = input.id || 'USER-' + randomUUID();
         const at = input.createdAt || new Date().toISOString();
@@ -118,6 +110,69 @@ function createDomainRepositories(adapter) {
         return user;
       });
     },
+    async createFromInvitation(input, suppliedHash) {
+      const email = requiredString(input.email, 'email').toLowerCase();
+      const codeHash = requiredString(suppliedHash, 'invitation code hash');
+      return adapter.withTransaction(async ({ repository }) => {
+        const rows = await repository.find('invitations', { codeHash }, { limit: 1 });
+        const invitation = rows[0];
+        // The stored invitation is the role authority; never trust the role posted by the client.
+        const role = invitation?.role;
+        const now = Date.now();
+        const expiresAt = Date.parse(invitation?.expiresAt || '');
+        const maxUses = Number(invitation?.maxUses);
+        const usedCount = Number(invitation?.usedCount);
+        const bootstrapAdminAlreadyExists = invitation?.createdBy === 'system:bootstrap'
+          ? (await repository.find('users', { role: 'admin', isActive: true }, { limit: 1 })).length > 0
+          : false;
+        if (!invitation || !BUYER_ROLES.has(role) || invitation.status !== 'active' ||
+            bootstrapAdminAlreadyExists ||
+            !Number.isSafeInteger(maxUses) || maxUses < 1 ||
+            !Number.isSafeInteger(usedCount) || usedCount < 0 || usedCount >= maxUses ||
+            !Number.isFinite(expiresAt) || expiresAt <= now) {
+          const error = new Error('Invalid, expired, revoked, or exhausted invitation key');
+          error.code = 'INVALID_INVITATION';
+          throw error;
+        }
+        const existingEmail = await repository.find('users', { email }, { limit: 1 });
+        if (existingEmail.length) {
+          const error = new Error('Email already registered');
+          error.code = 'EMAIL_EXISTS';
+          throw error;
+        }
+        const at = new Date(now).toISOString();
+        const userId = input.id || 'USER-' + randomUUID();
+        const userInput = { ...input };
+        delete userInput.filerStatus;
+        const user = await repository.insert('users', {
+          ...userInput, id: userId, email, role,
+          ...(role === 'buyer' ? { filerStatus: input.filerStatus || 'unverified' } : {}),
+          actorRole: role,
+          isActive: input.isActive !== false, deletedAt: null,
+          createdAt: input.createdAt || at, updatedAt: at
+        });
+        const nextUsedCount = usedCount + 1;
+        await repository.update('invitations', invitation.id, {
+          usedCount: nextUsedCount,
+          usedBy: userId,
+          status: nextUsedCount >= maxUses ? 'used' : 'active',
+          lastUsedAt: at,
+          updatedAt: at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: input.actorId || userId,
+          actorRole: role, action: 'user.register',
+          targetType: 'user', targetId: userId,
+          meta: { role, invitationId: invitation.id }, at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: userId, actorRole: role,
+          action: 'invitation.redeem', targetType: 'invitation', targetId: invitation.id,
+          meta: { role }, at
+        });
+        return user;
+      });
+    },
     async changeRole(id, role, actor) {
       role = role === 'user' ? 'buyer' : role;
       if (!BUYER_ROLES.has(role)) throw new TypeError('Unsupported user role');
@@ -125,11 +180,6 @@ function createDomainRepositories(adapter) {
         const user = await repository.findById('users', id);
         if (!user) return null;
         const activeAdmins = await repository.find('users', { role: 'admin', isActive: true });
-        if (role === 'admin' && user.role !== 'admin' && activeAdmins.length) {
-          const error = new Error('ADMIN_EXISTS');
-          error.code = 'ADMIN_EXISTS';
-          throw error;
-        }
         if (user.role === 'admin' && role !== 'admin' && activeAdmins.length <= 1) {
           const error = new Error('The last administrator cannot be demoted');
           error.code = 'LAST_ADMIN';
@@ -607,6 +657,45 @@ function createDomainRepositories(adapter) {
       });
     },
 
+    async assignDeliverer(orderId, delivererId, actor) {
+      if (!['admin', 'operator'].includes(actor?.role)) {
+        const error = new Error('Only workspace administrators or operators can assign deliveries');
+        error.code = 'FORBIDDEN';
+        throw error;
+      }
+      const actorId = requiredString(actor.id, 'actor.id');
+      delivererId = requiredString(delivererId, 'delivererId');
+      return adapter.withTransaction(async ({ repository }) => {
+        const [order, deliverer] = await Promise.all([
+          repository.findById('orders', orderId),
+          repository.findById('users', delivererId)
+        ]);
+        if (!order) return null;
+        if (!deliverer || deliverer.role !== 'deliverer' || deliverer.isActive === false || deliverer.deletedAt) {
+          const error = new Error('An active Deliverer account is required');
+          error.code = 'INVALID_DELIVERER';
+          throw error;
+        }
+        const orderStatus = String(order.status).toUpperCase();
+        if (orderStatus !== 'PACKED' && !(orderStatus === 'DISPATCHED' && !order.assignedDelivererId)) {
+          const error = new Error('A delivery can be assigned only to an unassigned dispatched order or a packed order');
+          error.code = 'INVALID_ASSIGNMENT_STATE';
+          throw error;
+        }
+        const at = new Date().toISOString();
+        const updated = await repository.update('orders', orderId, {
+          assignedDelivererId: delivererId, assignedDelivererAt: at,
+          assignedDelivererBy: actorId, updatedAt: at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId, actorRole: actor.role,
+          action: 'order.assign_deliverer', targetType: 'order', targetId: orderId,
+          meta: { delivererId }, at
+        });
+        return updated;
+      });
+    },
+
     async confirmRoute(orderId, actor) {
       const actorId = requiredString(actor.id, 'actor.id');
       return adapter.withTransaction(async ({ repository }) => {
@@ -649,6 +738,12 @@ function createDomainRepositories(adapter) {
       }, async () => {
         const order = await repository.findById('orders', orderId);
         if (!order) return null;
+        if (actor.role === 'deliverer' &&
+            (nextStatus !== 'DELIVERED' || order.status !== 'DISPATCHED' || order.assignedDelivererId !== actorId)) {
+          const error = new Error('Deliverers may only confirm delivery for an order assigned to their account');
+          error.code = 'FORBIDDEN';
+          throw error;
+        }
         if (!(allowed[order.status] || []).includes(nextStatus)) {
           const error = new Error('Invalid order transition: ' + order.status + ' -> ' + nextStatus);
           error.code = 'INVALID_TRANSITION';
@@ -1237,7 +1332,77 @@ function createDomainRepositories(adapter) {
     }
   };
 
-  return { users, warehouses, products, orders, stockMovements, purchaseOrders, auditLogs, tariffRules };
+  const invitationKeys = {
+    async create(input, actor) {
+      const role = requiredString(input.role, 'role');
+      if (!BUYER_ROLES.has(role)) throw new TypeError('Invitation role must be buyer, deliverer, operator, or admin');
+      const codeHash = requiredString(input.codeHash, 'codeHash');
+      const createdBy = requiredString(input.createdBy, 'createdBy');
+      const maxUses = Number(input.maxUses ?? 1);
+      const expiresAt = Date.parse(input.expiresAt || '');
+      if (!Number.isSafeInteger(maxUses) || maxUses < 1 || maxUses > 50) {
+        throw new TypeError('maxUses must be an integer between 1 and 50');
+      }
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        throw new TypeError('expiresAt must be a future date');
+      }
+      return adapter.withTransaction(async ({ repository }) => {
+        const existing = await repository.find('invitations', { codeHash }, { limit: 1 });
+        if (existing.length) {
+          const error = new Error('Invitation key already exists');
+          error.code = 'DUPLICATE_INVITATION';
+          throw error;
+        }
+        const invitation = await repository.insert('invitations', {
+          ...input, role, codeHash, createdBy, maxUses, usedCount: 0, usedBy: null,
+          status: 'active', createdAt: input.createdAt || new Date().toISOString(),
+          updatedAt: input.updatedAt || new Date().toISOString()
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: actor.id, actorRole: actor.role,
+          action: 'invitation.create', targetType: 'invitation', targetId: invitation.id,
+          meta: { role, maxUses, expiresAt: invitation.expiresAt }, at: invitation.createdAt
+        });
+        return invitation;
+      });
+    },
+    async list() {
+      return adapter.withTransaction(async ({ repository }) => {
+        const now = Date.now();
+        const at = new Date(now).toISOString();
+        const invitations = await repository.find('invitations', {});
+        for (const invitation of invitations) {
+          if (invitation.status === 'active' && Date.parse(invitation.expiresAt || '') <= now) {
+            await repository.update('invitations', invitation.id, { status: 'expired', updatedAt: at });
+          }
+        }
+        return repository.find('invitations', {}, { sort: { createdAt: -1 } });
+      });
+    },
+    async revoke(id, actor) {
+      return adapter.withTransaction(async ({ repository }) => {
+        const invitation = await repository.findById('invitations', id);
+        if (!invitation) return null;
+        if (invitation.status !== 'active') {
+          const error = new Error('Only active invitation keys can be revoked');
+          error.code = 'INVITATION_NOT_ACTIVE';
+          throw error;
+        }
+        const at = new Date().toISOString();
+        const updated = await repository.update('invitations', id, {
+          status: 'revoked', revokedAt: at, updatedAt: at
+        });
+        await repository.insert('auditLogs', {
+          id: 'AUD-' + randomUUID(), actorId: actor.id, actorRole: actor.role,
+          action: 'invitation.revoke', targetType: 'invitation', targetId: id,
+          meta: { role: invitation.role }, at
+        });
+        return updated;
+      });
+    }
+  };
+
+  return { users, invitationKeys, warehouses, products, orders, stockMovements, purchaseOrders, auditLogs, tariffRules };
 }
 
 module.exports = { createDomainRepositories, BUYER_ROLES, MOVEMENT_TYPES };

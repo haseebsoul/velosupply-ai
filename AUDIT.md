@@ -1,3 +1,26 @@
+# Current implementation status — 16 November 2026
+
+> This section reflects the current feature-branch implementation. The baseline findings and target-state notes below were written against an earlier repository snapshot; read them as historical audit context unless explicitly updated here.
+
+## Current state
+
+- **Persistence:** the existing native MongoDB-driver repository persists domain records in named collections. When `MONGODB_URI` is configured, backend startup pings the selected database and uses MongoDB only; connection or migration failures do not silently fall back to local JSON. Without an Atlas URI, local non-production development still uses the file adapter.
+- **Atlas migration:** the repository tracks storage schema version 2. The one-time upgrade normalizes legacy `user` roles to `buyer`, fills Buyer filer state, and updates validators for `users` and `invitations`. Existing collection validator changes use `collMod`; the application database user needs temporary `dbAdmin` on `velosupply` for the one-time upgrade, then should return to least-privilege runtime `readWrite`.
+- **Registration:** every new account (`admin`, `operator`, `buyer`, `deliverer`) requires a role-matched, active invitation. The backend derives the role from the stored invitation, not the client request. User creation and invitation consumption occur in one transaction; invitation records store `usedBy`, only SHA-256 hashes are stored, and expired keys are transitioned to `expired`.
+- **Owner access:** `npm run bootstrap:admin` provisions the first Admin only when none exists. `npm run prepare:admin-recovery` creates a fresh local recovery guard without displaying it; `npm run admin:recover` changes the password only for an exact email match to an existing active Admin. Both owner commands connect directly to Atlas, use hidden password prompts, write audit events and clear their one-time local guard after success.
+- **Deliverer isolation:** Deliverers have a separate `/deliveries` portal and may only read orders assigned to their own account. Admin / Operations can assign active Deliverers to eligible orders; a Deliverer can only confirm delivery for their own dispatched shipment. Buyer cancellation and return routes are not available to Deliverers.
+- **Invitation UI:** Admins can generate one-time Buyer and Deliverer invitations alongside staff invitations, copy a new secret once, see invitation state and revoke unused keys.
+- **Validation:** GitHub Actions passed for the implementation: backend reproducible install, JavaScript syntax, 8 test files / 73 tests, frontend palette guard and TypeScript + Vite production build. See [CI run](https://github.com/haseebsoul/velosupply-ai/actions/runs/43896807133).
+
+## Live owner / deployment checks still outstanding
+
+- The connected Atlas database already contains an active Administrator and its original one-time bootstrap invitation is consumed. The correct owner path is `npm run admin:recover`, not first-admin bootstrap.
+- The current Atlas app database users have `readWrite` but not `dbAdmin`. Temporarily grant `dbAdmin` to the user in the local `MONGODB_URI` for schema v1→v2, run the owner recovery command, then remove `dbAdmin` and retain `readWrite`.
+- No live-browser acceptance test has been completed against the owner's local frontend/backend process.
+- The payment integration still uses a simulated adapter; real payment-provider setup remains a separate production blocker.
+
+---
+
 # VeloSupply AI — Phase 1 Code Audit
 
 **Audit date:** 13 November 2026  
@@ -145,10 +168,9 @@ Variables read by backend source or declared by backend/.env.example:
 | MONGODB_URI | Selects Atlas; production throws if absent |
 | MONGODB_DB_NAME | Atlas database; defaults to velosupply |
 | MONGODB_STATE_COLLECTION | Atlas collection; defaults to application_state |
-| ADMIN_REGISTRATION_KEY | Invitation key for current admin registration |
-| OPERATOR_REGISTRATION_KEY | Invitation key for current operator registration |
+| ADMIN_BOOTSTRAP_KEY | Optional one-time first-administrator invitation secret; remove after redemption |
 
-The example file also documents the MongoDB URI and the two invitation keys. The current backend does not generate and print safe development defaults when values are missing. Invitation keys are not intentionally logged. MONGODB_STATE_COLLECTION is an additional variable not listed in the required retained-variable list.
+Administrator and Operations invitation keys are stored as SHA-256 hashes in the `invitations` collection. The full secret is returned only once at creation and is omitted from list responses. An initial bootstrap key is accepted only when no active Administrator exists. MONGODB_STATE_COLLECTION remains the legacy source collection used during migration.
 
 ## 5. Backend architecture and persistence
 
@@ -278,9 +300,9 @@ The seed contains three users:
 
 Seed password hashes use bcrypt cost 10. Registration uses bcrypt cost 12. The README incorrectly lists ops@velosupply.ai for the operator; the actual seed email is operator@velosupply.ai.
 
-The registration schema allows role admin, operator or user, defaults to user, and validates password length 8–128. It does not require uppercase or numeric characters. Admin and operator registration compare invitation keys with timingSafeEqual. There is no admin bootstrap endpoint or ADMIN_EXISTS response. Multiple admin accounts can be registered.
+The registration schema allows admin, operator, user and buyer roles. Buyer registration is open. Administrator and Operator registration validates a matching, active, unexpired invitation record and consumes it in the same repository transaction as account creation. Invitation codes are SHA-256 hashed at rest. Multiple invited Administrators are allowed; the last active Administrator cannot be demoted or deleted.
 
-Admin user management can promote another user to admin or demote an admin. It prevents deleting one's own account and deleting the last admin, but it does not enforce exactly one admin atomically.
+Admin user management can promote or demote users. The repository permits multiple administrators and transactionally prevents demoting or deleting the last active administrator.
 
 ### Login
 
@@ -436,7 +458,7 @@ Replace README-derived current-state claims in Sections 2.1 and 2.2 with the fol
 - Frontend: React 18, TypeScript 5.7, Vite 6, React Router 6, Zustand 5, TanStack Query 5, Recharts 2, Framer Motion 11, React Hook Form 7, Zod 3, Axios and Tailwind 3.
 - Accounts: admin@velosupply.ai / Haseeb Khan / admin; operator@velosupply.ai / Sarah Chen / operator; buyer@velosupply.ai / Marcus Vance / user. All seeded with password 1234.
 - Buyer role: stored as user and displayed as Buyer. The target buyer role key requires an explicit migration; do not silently assume the existing records already use buyer.
-- Registration: public role defaults to user; admin/operator require invitation keys. Multiple admins are currently possible. No bootstrap endpoint or ADMIN_EXISTS behavior exists.
+- Registration: Buyer self-registration is open; admin/operator require matching, active, unexpired invitation keys. Redemption and account creation run in one repository transaction. Admin-only endpoints generate, list and revoke invitation keys.
 - Routes: public /, /store, /login, /register; authenticated dashboard paths /dashboard, /dashboard/topology, /dashboard/threats, /dashboard/activity, /dashboard/messages, /dashboard/manage, /dashboard/rewards, /dashboard/reports, /dashboard/account and /dashboard/admin. Product detail and tracking paths are absent.
 - API paths: use the exact inventory in Section 7 above. Checkout is currently POST /api/orders/checkout. Add the target /api/checkout as an alias if it is required, while retaining the existing route.
 - WebSocket: /ws/telemetry sends CONNECTED and HEARTBEAT messages with type, level, message, timestamp, metrics and warehouses; some events include order. All sockets receive the same broadcasts.
