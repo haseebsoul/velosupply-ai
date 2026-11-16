@@ -10,7 +10,7 @@
 - **Owner access:** `npm run bootstrap:admin` provisions the first Admin only when none exists. `npm run prepare:admin-recovery` creates a fresh local recovery guard without displaying it; `npm run admin:recover` changes the password only for an exact email match to an existing active Admin. Both owner commands connect directly to Atlas, use hidden password prompts, write audit events and clear their one-time local guard after success.
 - **Deliverer isolation:** Deliverers have a separate `/deliveries` portal and may only read orders assigned to their own account. Admin / Operations can assign active Deliverers to eligible orders; a Deliverer can only confirm delivery for their own dispatched shipment. Buyer cancellation and return routes are not available to Deliverers.
 - **Invitation UI:** Admins can generate one-time Buyer and Deliverer invitations alongside staff invitations, copy a new secret once, see invitation state and revoke unused keys.
-- **Validation:** GitHub Actions passed for the implementation: backend reproducible install, JavaScript syntax, 8 test files / 70 tests, frontend palette guard and TypeScript + Vite production build. See [CI run](https://github.com/haseebsoul/velosupply-ai/actions/runs/43873299067).
+- **Validation:** GitHub Actions passed for the implementation: backend reproducible install, JavaScript syntax, 8 test files / 73 tests, frontend palette guard and TypeScript + Vite production build. See [CI run](https://github.com/haseebsoul/velosupply-ai/actions/runs/43896807133).
 
 ## Live owner / deployment checks still outstanding
 
