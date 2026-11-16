@@ -280,8 +280,11 @@ async function main() {
 
     try {
       await retireLocalSecret(secretName);
+      if (mode === 'recover') {
+        await retireLocalSecret('ADMIN_BOOTSTRAP_KEY');
+      }
       stdout.write(mode === 'recover'
-        ? '\nThe existing Administrator password was reset. The one-time recovery secret has been cleared from backend/.env.\n'
+        ? '\nThe existing Administrator password was reset. Recovery and stale bootstrap secrets have been cleared from backend/.env.\n'
         : '\nThe first Administrator account was created in MongoDB. The one-time bootstrap secret has been cleared from backend/.env.\n');
     } catch (_error) {
       stdout.write(
