@@ -16,7 +16,9 @@ describe('production storage configuration', () => {
     process.env.NODE_ENV = 'production';
     process.env.JWT_SECRET = 'test-only-access-secret';
     process.env.CORS_ORIGIN = 'https://example.invalid';
-    delete process.env.MONGODB_URI;
+    // Preserve an explicitly empty value so server.js's local .env loader
+    // cannot restore a developer's real MongoDB URI during this safety test.
+    process.env.MONGODB_URI = '';
     const serverModule = require('../server.js');
     await expect(serverModule.loadDatabaseState()).rejects.toThrow('MONGODB_URI must be set in production');
   });
