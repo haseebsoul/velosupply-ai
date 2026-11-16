@@ -68,7 +68,28 @@ function askHidden(prompt) {
 
 async function retireLocalSecret(secretName) {
   const source = await fs.readFile(envPath, 'utf8');
-  const matcher = new RegExp('^\\s*' + secretName + '\\s*=.*
+  const newline = String.fromCharCode(10);
+  const updated = source.split(newline).map((line) => {
+    const normalized = line.trimStart();
+    const separator = normalized.indexOf('=');
+    return separator > 0 && normalized.slice(0, separator).trim() === secretName
+      ? secretName + '='
+      : line;
+  }).join(newline);
+  if (updated !== source) {
+    const temporary = envPath + '.' + process.pid + '.tmp';
+    await fs.writeFile(temporary, updated, { encoding: 'utf8', mode: 0o600 });
+    await fs.rename(temporary, envPath);
+  }
+  process.env[secretName] = '';
+}
+
+function validatePassword(password, confirmation) {
+  if (password !== confirmation) throw new Error('The passwords do not match.');
+  if (password.length < 8 || password.length > 128 || !/[A-Z]/.test(password) || !/[0-9]/.test(password)) {
+    throw new Error('Password must be 8–128 characters and include at least one uppercase letter and one number.');
+  }
+}
 
 async function main() {
   await loadLocalEnvironment();
