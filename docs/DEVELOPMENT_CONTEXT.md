@@ -40,9 +40,9 @@ These results describe the tested local state at that time; rerun checks on any 
 
 ## Access-control rules
 
-- Buyer self-registration is public.
-- Administrator and Operations team registration are invitation-only.
-- Internal role names are `admin` and `operator`; UI labels are Administrator and Operations team.
+- Every new role (`admin`, `operator`, `buyer`, `deliverer`) requires a matching active invitation. The persisted invitation is the source of truth for the account role; the client role selector is not trusted.
+- Owner setup uses `npm run bootstrap:admin` only when no active Administrator exists. If an active Administrator already exists but the owner needs password recovery, `npm run admin:recover` resets only the selected active Admin account after an owner-only recovery key is supplied. Both commands clear their one-time local secret after a successful database transaction.
+- Buyer and Deliverer invitation APIs are `/api/admin/invitations`; existing staff invitations use `/api/invitations`. The invitation UI is **Dashboard → Invitation keys**.
 - Do not add a public role selector that can grant privileged access.
 - Enforce roles and invitation redemption on the backend, not only in React.
 - Invitation codes are cryptographically generated, stored as SHA-256 hashes, returned in full only once, and validated for role, expiry, status, and remaining uses. Redemption should be atomic with account creation.
@@ -50,19 +50,15 @@ These results describe the tested local state at that time; rerun checks on any 
 - The optional `ADMIN_BOOTSTRAP_KEY` is a one-time first-admin bootstrap for a clean database when there is no active Administrator. It is not a permanent owner bypass. It is expected to be removed from the deployment secret store after successful redemption.
 - Never print, commit, paste into documentation, or echo any real invitation key. A key shown in chat should be treated as exposed and rotated.
 
-## Current owner-registration issue to investigate
+## Live Atlas facts and owner recovery
 
-The owner reported that the configured bootstrap key was rejected by the registration form. Do not assume the key itself is malformed. Inspect the live code and database state safely:
+A read-only Atlas check at implementation time found the legacy database metadata at schema version 1, one active Administrator, and the system bootstrap invitation already consumed (`usedCount: 1`, `status: used`). This explains why the previously shared one-time key was rejected. No user email, password hash, raw invitation code or URI is included in this handover.
 
-1. Confirm the frontend sends the exact expected request field name and selected role.
-2. Trace the registration route and invitation repository validation path, including the no-active-admin bootstrap condition.
-3. Check whether an Administrator already exists, whether the bootstrap invitation record exists, and whether it is active, expired, or already used. Query only non-secret metadata; never retrieve or log the stored hash or raw key.
-4. Verify the local backend is loading the intended `backend/.env` and connecting to the intended database without displaying environment values.
-5. Add isolated tests for first-admin bootstrap success, invalid key, expired/used key, existing-admin rejection, and normal invited admin/operator redemption. Tests must not connect to the owner's live Atlas database.
-6. Fix the root cause without making privileged registration public. Prefer a secure owner-controlled recovery/bootstrap flow if the original one-time bootstrap has already been consumed.
-7. Rotate any exposed bootstrap or database credentials before production use.
+For the current database, use the owner-only `npm run admin:recover` command after setting a new random `ADMIN_RECOVERY_KEY` in the local `backend/.env`. It resets the password only for an exact email match to an active Admin, writes an audit record, and clears the recovery key. It does not create another administrator or modify invitations. `npm run bootstrap:admin` is reserved for an Atlas database with no active Administrator.
 
-Do not create another bootstrap invitation directly in production data or reset an Administrator account without explicit owner approval and a reviewed, auditable recovery path.
+The live Atlas database users inspected at implementation time have `readWrite` on `velosupply`, without `dbAdmin`. The schema v1→v2 upgrade needs `collMod` on the existing `users` and `invitations` validators. Temporarily grant `dbAdmin` to the database user in `MONGODB_URI` for the one-time migration/first startup, then remove it and retain `readWrite`. Do not make this privilege permanent. The application records schema version 2 so it does not rerun `collMod` on subsequent restarts.
+
+The bootstrap key previously disclosed in chat must be treated as compromised and rotated. Never log, retrieve or expose invitation hashes, password hashes, raw keys, or Atlas connection strings.
 
 ## Known deployment limitation
 

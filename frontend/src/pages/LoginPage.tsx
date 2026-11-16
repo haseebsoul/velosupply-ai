@@ -110,7 +110,7 @@ export function LoginPage() {
     try {
       const { data } = await api.post<{ token: string; user: User }>('/auth/login', values)
       setSession(data.token, data.user)
-      navigate(data.user.role === 'buyer' || data.user.role === 'user' ? '/store/orders' : '/dashboard', { replace: true })
+      navigate(data.user.role === 'buyer' || data.user.role === 'user' ? '/store/orders' : data.user.role === 'deliverer' ? '/deliveries' : '/dashboard', { replace: true })
     } catch (reason) {
       setError(errorMessage(reason))
     }

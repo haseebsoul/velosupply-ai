@@ -22,7 +22,7 @@ const {
 
 const META_COLLECTION = 'application_meta';
 const BACKUP_COLLECTION = 'migrationBackups';
-const STORAGE_SCHEMA_VERSION = 1;
+const STORAGE_SCHEMA_VERSION = 2;
 const TTL_COLLECTIONS = new Set(['healthChecks', 'idempotencyKeys', 'loginAttempts']);
 
 function convertMinorUnitsToLong(value) {
@@ -82,6 +82,17 @@ function cleanMetadataDocument(document) {
   return result;
 }
 
+function normalizeUserRoles(state) {
+  const normalized = clone(state);
+  normalized.users = (Array.isArray(normalized.users) ? normalized.users : []).map((user) => {
+    const next = { ...user };
+    if (next.role === 'user') next.role = 'buyer';
+    if (next.role === 'buyer' && !next.filerStatus) next.filerStatus = 'unverified';
+    return next;
+  });
+  return normalized;
+}
+
 class MongoAdapter {
   constructor(options) {
     if (!options || !options.client || !options.database) {
@@ -106,7 +117,11 @@ class MongoAdapter {
   }
 
   async createIndexes() {
+    const currentMeta = await this.database.collection(META_COLLECTION).findOne({ _id: 'primary' });
+    const schemaUpgradeRequired = !currentMeta ||
+      Number(currentMeta.storageSchemaVersion || 0) < STORAGE_SCHEMA_VERSION;
     if (typeof this.database.listCollections === 'function' && typeof this.database.createCollection === 'function') {
+      const validatorsNeedingUpgrade = new Set(['users', 'invitations']);
       for (const [name, validator] of Object.entries(COLLECTION_VALIDATORS)) {
         const cursor = this.database.listCollections({ name }, { nameOnly: true });
         if (!(await cursor.hasNext())) {
@@ -118,6 +133,29 @@ class MongoAdapter {
             });
           } catch (error) {
             if (error.code !== 48 && error.codeName !== 'NamespaceExists') throw error;
+          }
+        } else if (schemaUpgradeRequired && validatorsNeedingUpgrade.has(name)) {
+          // Existing Atlas collections keep their original validator when application
+          // schemas evolve. Apply the current validator before enabling new roles or
+          // invitation states so MongoDB itself accepts (and still validates) them.
+          try {
+            await this.database.command({
+              collMod: name,
+              validator,
+              validationLevel: 'strict',
+              validationAction: 'error'
+            });
+          } catch (error) {
+            if (error.code === 13 || error.codeName === 'Unauthorized') {
+              const migrationError = new Error(
+                'MongoDB user needs the collMod privilege on database "' +
+                this.database.databaseName + '" to update collection validators (' + name + ').'
+              );
+              migrationError.code = 'SCHEMA_MIGRATION_PERMISSION_REQUIRED';
+              migrationError.cause = error;
+              throw migrationError;
+            }
+            throw error;
           }
         }
       }
@@ -191,7 +229,27 @@ class MongoAdapter {
     await this.createIndexes();
     const metaCollection = this.collection(META_COLLECTION);
     const existingMeta = await metaCollection.findOne({ _id: 'primary' });
-    if (existingMeta) return this;
+    if (existingMeta) {
+      if (Number(existingMeta.storageSchemaVersion || 0) < STORAGE_SCHEMA_VERSION) {
+        // Older app releases stored the generic "user" role as a Buyer alias.
+        // Normalize those rows and fill the required Buyer status before the new
+        // strict validator version is recorded.
+        await this.collection('users').updateMany(
+          { role: 'user' },
+          { $set: { role: 'buyer', filerStatus: 'unverified' } }
+        );
+        await this.collection('users').updateMany(
+          { role: 'buyer', filerStatus: { $exists: false } },
+          { $set: { filerStatus: 'unverified' } }
+        );
+        const result = await metaCollection.updateOne(
+          { _id: 'primary', revision: existingMeta.revision },
+          { $set: { storageSchemaVersion: STORAGE_SCHEMA_VERSION, updatedAt: new Date() } }
+        );
+        if (!result.matchedCount) throw new Error('MongoDB schema version changed during the collection-validator upgrade; restart the API to retry.');
+      }
+      return this;
+    }
 
     const legacyCollection = this.database.collection(this.legacyCollectionName);
     const legacy = await legacyCollection.findOne({ _id: 'primary' });
@@ -224,7 +282,7 @@ class MongoAdapter {
         backupId,
         completedAt: new Date().toISOString()
       };
-      await this.writeState(legacy.state, { migration: this.migration });
+      await this.writeState(normalizeUserRoles(legacy.state), { migration: this.migration });
       return this;
     }
 
@@ -236,7 +294,7 @@ class MongoAdapter {
     }
 
     this.migration = { status: 'initialized', source: null, completedAt: new Date().toISOString() };
-    await this.writeState(options.fallbackState, { migration: this.migration });
+    await this.writeState(normalizeUserRoles(options.fallbackState), { migration: this.migration });
     return this;
   }
 

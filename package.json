@@ -10,6 +10,8 @@
     "test": "npm test --prefix backend",
     "build": "npm run build --prefix frontend",
     "check": "npm test --prefix backend && node scripts/check-hex.mjs && npm run build --prefix frontend",
-    "migrate:state": "npm run migrate:state --prefix backend"
+    "migrate:state": "npm run migrate:state --prefix backend",
+    "bootstrap:admin": "npm run bootstrap:admin --prefix backend",
+    "admin:recover": "npm run admin:recover --prefix backend"
   }
 }

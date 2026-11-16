@@ -122,6 +122,7 @@ async function loadDatabaseState() {
     });
     await repository.initialize();
     domainRepositories = createDomainRepositories(repository);
+    process.stdout.write('VeloSupply storage ready: local JSON adapter (development only)\n');
     return repository.readState();
   }
 
@@ -135,6 +136,7 @@ async function loadDatabaseState() {
   const databaseName = process.env.MONGODB_DB_NAME || 'velosupply';
   const collectionName = process.env.MONGODB_STATE_COLLECTION || 'application_state';
   const database = mongoClient.db(databaseName);
+  await database.command({ ping: 1 });
   stateCollection = database.collection(collectionName);
   const fallbackState = process.env.SEED_DEMO_DATA === 'true' && process.env.NODE_ENV !== 'production'
     ? await seedDatabase()
@@ -147,6 +149,7 @@ async function loadDatabaseState() {
   });
   await repository.initialize({ fallbackState });
   domainRepositories = createDomainRepositories(repository);
+  process.stdout.write('VeloSupply storage ready: MongoDB database "' + databaseName + '" (Atlas / native driver)\n');
   return repository.readState();
 }
 function metricsScore() { return Number(db.metrics?.efficiencyScore || 0); }
@@ -369,7 +372,7 @@ const registerSchema = z.object({
   name: z.string().trim().min(2).max(100),
   email: z.string().trim().email().transform((value) => value.toLowerCase()),
   password: z.string().min(8).max(128).regex(/[A-Z]/, 'Password must contain an uppercase letter').regex(/[0-9]/, 'Password must contain a number'),
-  role: z.enum(['admin', 'operator', 'user', 'buyer']).default('user'),
+  role: z.enum(['admin', 'operator', 'user', 'buyer', 'deliverer']).default('user'),
   registrationInviteCode: z.string().trim().min(1).max(200).optional()
 }).strict();
 const invitationCreateSchema = z.object({
@@ -377,6 +380,12 @@ const invitationCreateSchema = z.object({
   maxUses: z.number().int().min(1).max(50).default(1),
   expiresInDays: z.number().int().min(1).max(90).default(7)
 }).strict();
+const deliveryInvitationCreateSchema = z.object({
+  role: z.enum(['buyer', 'deliverer']),
+  maxUses: z.number().int().min(1).max(50).default(1),
+  expiresInDays: z.number().int().min(1).max(90).default(7)
+}).strict();
+const delivererAssignSchema = z.object({ delivererId: z.string().trim().min(1).max(100) }).strict();
 const checkoutSchema = z.object({
   customerName: z.string().trim().min(2).max(100).optional(),
   customerEmail: z.string().trim().email().max(254).optional(),
@@ -437,7 +446,7 @@ const transferSchema = z.object({
   reason: z.string().trim().min(2).max(120)
 }).strict();
 const roleSchema = z.object({
-  role: z.enum(['admin', 'operator', 'buyer', 'user'])
+  role: z.enum(['admin', 'operator', 'buyer', 'deliverer', 'user'])
 }).strict();
 const simulationSchema = z.object({
   scenario: z.enum(['port_congestion', 'demand_spike', 'auto_rebalance']),
@@ -447,6 +456,19 @@ const simulationSchema = z.object({
     maxLatency: z.number().min(1).max(1000).optional()
   }).strict().optional().default({})
 }).strict();
+
+app.get('/api/auth/bootstrap-status', asyncRoute(async (_req, res) => {
+  const bootstrapKey = String(process.env.ADMIN_BOOTSTRAP_KEY || '').trim();
+  if (!repository || !bootstrapKey) return res.json({ available: false, reason: 'not_configured' });
+  const activeAdmins = await repository.find('users', { role: 'admin', isActive: true }, { limit: 1 });
+  if (activeAdmins.length) return res.json({ available: false, reason: 'already_configured' });
+  const codeHash = createHash('sha256').update(bootstrapKey).digest('hex');
+  const rows = await repository.find('invitations', { codeHash, createdBy: 'system:bootstrap' }, { limit: 1 });
+  const invitation = rows[0];
+  const available = Boolean(invitation && invitation.status === 'active' &&
+    Number(invitation.usedCount) < Number(invitation.maxUses) && Date.parse(invitation.expiresAt) > Date.now());
+  res.json({ available, reason: available ? 'first_admin_ready' : 'rotate_bootstrap_key' });
+}));
 
 app.get('/api/health', (_req, res) => {
   const summary = sre.healthSummary();
@@ -566,6 +588,21 @@ app.post('/api/auth/login', sre.rateLimit({ limit: 10, windowMs: 60_000, name: '
   res.json({ token, user: safeUser({ ...user, lastLoginAt: at }) });
 }));
 
+async function retireBootstrapSecretFromEnv() {
+  process.env.ADMIN_BOOTSTRAP_KEY = '';
+  try {
+    const source = await fs.readFile(envFilePath, 'utf8');
+    const updated = source.replace(/^\s*ADMIN_BOOTSTRAP_KEY\s*=.*$/m, 'ADMIN_BOOTSTRAP_KEY=');
+    if (updated !== source) {
+      const temporaryPath = envFilePath + '.' + process.pid + '.tmp';
+      await fs.writeFile(temporaryPath, updated, { encoding: 'utf8', mode: 0o600 });
+      await fs.rename(temporaryPath, envFilePath);
+    }
+  } catch (_error) {
+    process.stderr.write('Administrator bootstrap was redeemed, but the local secret file could not be cleared. Remove ADMIN_BOOTSTRAP_KEY from backend/.env before restarting.\n');
+  }
+}
+
 async function register(req, res) {
   const requestedRole = req.body.role === 'user' ? 'buyer' : req.body.role;
   const userId = 'USER-' + randomUUID();
@@ -584,18 +621,16 @@ async function register(req, res) {
   };
   let user;
   try {
-    if (requestedRole === 'admin' || requestedRole === 'operator') {
-      if (!req.body.registrationInviteCode) {
-        return res.status(403).json({ error: 'An active invitation key is required for this role' });
-      }
-      const codeHash = createHash('sha256').update(req.body.registrationInviteCode).digest('hex');
-      user = await domainRepositories.users.createFromInvitation(input, codeHash);
-    } else {
-      user = await domainRepositories.users.create(input);
+    if (!req.body.registrationInviteCode) {
+      return res.status(403).json({ error: 'An active invitation key is required to create this account' });
     }
+    const codeHash = createHash('sha256').update(req.body.registrationInviteCode).digest('hex');
+    const matchingInvitation = (await repository.find('invitations', { codeHash }, { limit: 1 }))[0];
+    user = await domainRepositories.users.createFromInvitation(input, codeHash);
+    if (matchingInvitation?.createdBy === 'system:bootstrap') await retireBootstrapSecretFromEnv();
   } catch (error) {
     if (error.code === 'INVALID_INVITATION') {
-      return res.status(403).json({ error: 'Invalid, expired, revoked, exhausted, or role-mismatched invitation key' });
+      return res.status(403).json({ error: 'Invalid, expired, revoked, or exhausted invitation key' });
     }
     if (error.code === 'EMAIL_EXISTS' || error.code === 11000 || error.code === 'DUPLICATE_KEY') {
       return res.status(409).json({ error: 'Email already registered' });
@@ -686,34 +721,38 @@ app.get('/api/admin/backup', requireRoles('admin'), (req, res) => {
 app.get('/api/auth/me', (req, res) => res.json({ user: safeUser(req.user) }));
 app.post('/api/auth/logout', (_req, res) => res.json({ success: true }));
 
-app.post('/api/invitations', requireRoles('admin'), validate(invitationCreateSchema), asyncRoute(async (req, res) => {
-  const prefix = req.body.role === 'admin' ? 'ADM' : 'OPS';
-  const code = 'VELO-' + prefix + '-' + randomBytes(24).toString('hex').toUpperCase();
+async function issueInvitation(req, res) {
+  const role = req.body.role;
+  const prefix = ({ admin: 'ADM', operator: 'OPS', buyer: 'BUY', deliverer: 'DLV' })[role];
+  const code = 'VELO-' + prefix + '-' + randomBytes(32).toString('hex').toUpperCase();
   const at = new Date().toISOString();
   const expiresAt = new Date(Date.now() + req.body.expiresInDays * 86400000).toISOString();
   const codeHash = createHash('sha256').update(code).digest('hex');
   const invitation = await domainRepositories.invitationKeys.create({
-    id: 'INV-' + randomUUID(),
-    codeHash,
-    codeHint: code.slice(-4),
-    role: req.body.role,
-    createdBy: req.user.id,
-    maxUses: req.body.maxUses,
-    usedCount: 0,
-    expiresAt,
-    status: 'active',
-    createdAt: at,
-    updatedAt: at
+    id: 'INV-' + randomUUID(), codeHash, codeHint: code.slice(-4), role,
+    createdBy: req.user.id, maxUses: req.body.maxUses, usedCount: 0, usedBy: null,
+    expiresAt, status: 'active', createdAt: at, updatedAt: at
   }, { id: req.user.id, role: req.user.role });
   db = await repository.readState();
   res.status(201).json({ invitation: {
-    id: invitation.id, role: invitation.role, code,
-    maxUses: invitation.maxUses, usedCount: invitation.usedCount,
+    id: invitation.id, role: invitation.role, code, codeHint: invitation.codeHint,
+    maxUses: invitation.maxUses, usedCount: invitation.usedCount, usedBy: invitation.usedBy,
     expiresAt: invitation.expiresAt, status: invitation.status, createdAt: invitation.createdAt
   } });
+}
+
+app.post('/api/admin/invitations', requireRoles('admin'), validate(deliveryInvitationCreateSchema), asyncRoute(issueInvitation));
+app.get('/api/admin/invitations', requireRoles('admin'), asyncRoute(async (_req, res) => {
+  const invitations = await domainRepositories.invitationKeys.list();
+  db = await repository.readState();
+  res.json(invitations.filter((entry) => ['buyer', 'deliverer'].includes(entry.role))
+    .map(({ codeHash, ...invitation }) => invitation));
 }));
+
+app.post('/api/invitations', requireRoles('admin'), validate(invitationCreateSchema), asyncRoute(issueInvitation));
 app.get('/api/invitations', requireRoles('admin'), asyncRoute(async (_req, res) => {
   const invitations = await domainRepositories.invitationKeys.list();
+  db = await repository.readState();
   res.json(invitations.map(({ codeHash, ...invitation }) => invitation));
 }));
 app.patch('/api/invitations/:id/revoke', requireRoles('admin'), asyncRoute(async (req, res) => {
@@ -725,7 +764,24 @@ app.patch('/api/invitations/:id/revoke', requireRoles('admin'), asyncRoute(async
     db = await repository.readState();
     res.json({ invitation: {
       id: invitation.id, role: invitation.role, codeHint: invitation.codeHint,
-      maxUses: invitation.maxUses, usedCount: invitation.usedCount,
+      maxUses: invitation.maxUses, usedCount: invitation.usedCount, usedBy: invitation.usedBy,
+      expiresAt: invitation.expiresAt, status: invitation.status, createdAt: invitation.createdAt
+    } });
+  } catch (error) {
+    if (error.code === 'INVITATION_NOT_ACTIVE') return res.status(409).json({ error: error.message });
+    throw error;
+  }
+}));
+app.patch('/api/admin/invitations/:id/revoke', requireRoles('admin'), asyncRoute(async (req, res) => {
+  try {
+    const invitation = await domainRepositories.invitationKeys.revoke(
+      req.params.id, { id: req.user.id, role: req.user.role }
+    );
+    if (!invitation) return res.status(404).json({ error: 'Invitation key not found' });
+    db = await repository.readState();
+    res.json({ invitation: {
+      id: invitation.id, role: invitation.role, codeHint: invitation.codeHint,
+      maxUses: invitation.maxUses, usedCount: invitation.usedCount, usedBy: invitation.usedBy,
       expiresAt: invitation.expiresAt, status: invitation.status, createdAt: invitation.createdAt
     } });
   } catch (error) {
@@ -758,12 +814,57 @@ app.post('/api/rewards/:offerId/claim', asyncRoute(async (req, res) => {
 app.get('/api/orders', asyncRoute(async (req, res) => {
   const allOrders = repository ? await repository.find('orders', {}) : db.orders;
   if (req.user.role === 'admin' || req.user.role === 'operator') return res.json(allOrders);
+  if (req.user.role === 'deliverer') {
+    return res.json(allOrders.filter((order) => order.assignedDelivererId === req.user.id));
+  }
   const ownOrders = allOrders.filter((order) =>
     order.buyerId === req.user.id || order.userId === req.user.id ||
     String(order.customerEmail || '').toLowerCase() === req.user.email
   );
   res.json(ownOrders);
 }));
+app.get('/api/admin/deliverers', requireRoles('admin', 'operator'), asyncRoute(async (_req, res) => {
+  const users = repository ? await repository.find('users', { role: 'deliverer', isActive: true }) : db.users.filter((user) => user.role === 'deliverer' && user.isActive !== false);
+  res.json(users.filter((user) => !user.deletedAt).map(({ id, name, email, role }) => ({ id, name, email, role })));
+}));
+app.patch('/api/orders/:id/assign-deliverer', requireRoles('admin', 'operator'), validate(delivererAssignSchema), asyncRoute(async (req, res) => {
+  try {
+    const order = await domainRepositories.orders.assignDeliverer(req.params.id, req.body.delivererId, {
+      id: req.user.id, role: req.user.role
+    });
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    db = await repository.readState();
+    publish('DELIVERY_ASSIGNED', 'A deliverer was assigned to order ' + (order.code || order.id) + '.', 'INFO', { order });
+    res.json({ order });
+  } catch (error) {
+    if (['INVALID_DELIVERER', 'INVALID_ASSIGNMENT_STATE', 'FORBIDDEN'].includes(error.code)) {
+      return res.status(error.code === 'FORBIDDEN' ? 403 : 409).json({ error: error.code, message: error.message });
+    }
+    throw error;
+  }
+}));
+app.get('/api/deliverer/orders', requireRoles('deliverer'), asyncRoute(async (req, res) => {
+  const orders = repository ? await repository.find('orders', { assignedDelivererId: req.user.id }) : db.orders.filter((order) => order.assignedDelivererId === req.user.id);
+  res.json(orders);
+}));
+app.patch('/api/deliverer/orders/:id/status', requireRoles('deliverer'), validate(orderStatusSchema), asyncRoute(async (req, res) => {
+  if (req.body.status !== 'DELIVERED') return res.status(403).json({ error: 'Deliverers can only confirm delivery' });
+  if (!req.get('Idempotency-Key')) return res.status(400).json({ error: 'Idempotency-Key is required to confirm a delivery' });
+  try {
+    const updated = await domainRepositories.orders.advanceStatus(req.params.id, 'DELIVERED', {
+      id: req.user.id, role: req.user.role, idempotencyKey: req.get('Idempotency-Key')
+    });
+    if (!updated) return res.status(404).json({ error: 'Order not found' });
+    db = await repository.readState();
+    publish('ORDER_STATUS', 'Order ' + (updated.code || updated.id) + ' marked delivered.', 'INFO', { order: updated });
+    res.json({ order: updated });
+  } catch (error) {
+    if (error.code === 'FORBIDDEN' || error.code === 'INVALID_TRANSITION') return res.status(403).json({ error: error.code, message: error.message });
+    if (error.code === 'KEY_REUSED') return res.status(422).json({ error: error.code, message: error.message });
+    throw error;
+  }
+}));
+
 app.get('/api/logs', requireRoles('admin', 'operator'), asyncRoute(async (_req, res) => {
   res.json(repository ? await repository.find('logs', {}) : db.logs);
 }));
@@ -1146,7 +1247,7 @@ app.get('/api/returns', asyncRoute(async (req, res) => {
   if (req.user.role === 'admin' || req.user.role === 'operator') return res.json(rows);
   return res.json(rows.filter((entry) => entry.buyerId === req.user.id));
 }));
-app.post('/api/orders/:id/cancel', asyncRoute(async (req, res) => {
+app.post('/api/orders/:id/cancel', requireRoles('admin', 'operator', 'buyer'), asyncRoute(async (req, res) => {
   const order = repository ? await repository.findById('orders', req.params.id) : findById(db.orders, req.params.id, 'Order');
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (req.user.role !== 'admin' && req.user.role !== 'operator' &&
@@ -1169,7 +1270,7 @@ app.post('/api/orders/:id/cancel', asyncRoute(async (req, res) => {
     throw error;
   }
 }));
-app.post('/api/orders/:id/return', validate(returnRequestSchema), asyncRoute(async (req, res) => {
+app.post('/api/orders/:id/return', requireRoles('admin', 'operator', 'buyer'), validate(returnRequestSchema), asyncRoute(async (req, res) => {
   const order = repository ? await repository.findById('orders', req.params.id) : findById(db.orders, req.params.id, 'Order');
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (req.user.role !== 'admin' && req.user.role !== 'operator' &&
@@ -1406,8 +1507,17 @@ async function ensureBootstrapInvitation() {
   const activeAdmins = await repository.find('users', { role: 'admin', isActive: true });
   if (activeAdmins.length > 0) return;
   const codeHash = createHash('sha256').update(bootstrapKey).digest('hex');
-  const existing = await repository.find('invitations', { codeHash }, { limit: 1 });
-  if (existing.length) return;
+  const existing = await repository.find('invitations', { codeHash, createdBy: 'system:bootstrap' }, { limit: 1 });
+  if (existing.length) {
+    const invitation = existing[0];
+    const stillUsable = invitation.status === 'active' &&
+      Number(invitation.usedCount) < Number(invitation.maxUses) &&
+      Date.parse(invitation.expiresAt || '') > Date.now();
+    if (!stillUsable) {
+      process.stderr.write('Owner bootstrap is no longer redeemable. Rotate ADMIN_BOOTSTRAP_KEY to a new random value; the previous key will not be reactivated.\n');
+    }
+    return;
+  }
   const at = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
   await domainRepositories.invitationKeys.create({

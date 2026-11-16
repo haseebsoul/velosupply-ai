@@ -38,7 +38,7 @@ export function ProtectedRoute({ allowedRoles }: ProtectedRouteProps) {
 
   const role: UserRole = user.role === 'user' ? 'buyer' : user.role
   if (allowedRoles && !allowedRoles.includes(role)) {
-    return <Navigate to={role === 'buyer' ? '/store/orders' : '/dashboard'} replace />
+    return <Navigate to={role === 'buyer' ? '/store/orders' : role === 'deliverer' ? '/deliveries' : '/dashboard'} replace />
   }
   return <Outlet />
 }

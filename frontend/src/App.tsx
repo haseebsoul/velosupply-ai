@@ -7,6 +7,8 @@ import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
 import { BuyerOrdersPage } from './pages/BuyerOrdersPage'
 import { BuyerAccountPage } from './pages/BuyerAccountPage'
+import { DelivererOrdersPage } from './pages/DelivererOrdersPage'
+import { DeliveryAssignmentsPage } from './pages/dashboard/DeliveryAssignmentsPage'
 import { InvitationKeysPage } from './pages/dashboard/InvitationKeysPage'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { DashboardLayout } from './components/dashboard/DashboardLayout'
@@ -32,6 +34,8 @@ function AnimatedRoutes() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
 
+      <Route element={<ProtectedRoute allowedRoles={['deliverer']} />}><Route path="/deliveries" element={<DelivererOrdersPage />} /></Route>
+
       <Route element={<ProtectedRoute allowedRoles={['buyer']} />}>
         <Route path="/store/orders" element={<BuyerOrdersPage />} />
         <Route path="/store/account" element={<BuyerAccountPage />} />
@@ -45,6 +49,7 @@ function AnimatedRoutes() {
           <Route path="threats" element={<CommandPages />} />
           <Route path="manage" element={<CommandPages />} />
           <Route path="reports" element={<CommandPages />} />
+          <Route path="deliveries" element={<DeliveryAssignmentsPage />} />
           <Route element={<ProtectedRoute allowedRoles={['admin']} />}>
             <Route path="reliability" element={<ReliabilityPage />} />
             <Route path="messages" element={<CommandPages />} />

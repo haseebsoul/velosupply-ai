@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import {
   Activity, Bell, ChevronLeft, ChevronRight, CircleGauge, FileText, Gift,
   LayoutDashboard, Menu, Network, Package, Shield, ShieldCheck, Store, Users,
-  KeyRound, X
+  KeyRound, Truck, X
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Link, NavLink } from 'react-router-dom'
@@ -23,7 +23,8 @@ const groups: Array<{ title: string; items: NavItem[] }> = [
   { title: 'Operations', items: [
     { to: '/dashboard/topology', label: 'Network map', icon: Network },
     { to: '/dashboard/threats', label: 'Inventory alerts', icon: Shield },
-    { to: '/dashboard/manage', label: 'Manage inventory', icon: Package }
+    { to: '/dashboard/manage', label: 'Manage inventory', icon: Package },
+    { to: '/dashboard/deliveries', label: 'Delivery assignments', icon: Truck }
   ] },
   { title: 'Workspace tools', items: [
     { to: '/dashboard/rewards', label: 'Program', icon: Gift, adminOnly: true },

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Link, useNavigate } from 'react-router-dom'
 import { Eye, EyeOff, ShieldCheck, ShoppingBag, Truck } from 'lucide-react'
@@ -14,7 +14,7 @@ import type { User, UserRole } from '../types'
 const schema = z.object({
   name: z.string().trim().min(2, 'Enter at least 2 characters').max(100),
   email: z.string().trim().email('Enter a valid email').max(254),
-  role: z.enum(['admin', 'operator', 'buyer', 'user']),
+  role: z.enum(['admin', 'operator', 'buyer', 'deliverer', 'user']),
   password: z.string().min(8, 'Use at least 8 characters').max(128).regex(/[A-Z]/, 'Add at least one uppercase letter').regex(/[0-9]/, 'Add at least one number'),
   confirmPassword: z.string(),
   registrationInviteCode: z.string().optional()
@@ -22,7 +22,7 @@ const schema = z.object({
   if (values.password !== values.confirmPassword) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['confirmPassword'], message: 'Passwords do not match' })
   }
-  if (!['user', 'buyer'].includes(values.role) && !values.registrationInviteCode?.trim()) {
+  if (!values.registrationInviteCode?.trim()) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['registrationInviteCode'], message: 'An invitation key is required for this role' })
   }
 })
@@ -31,7 +31,8 @@ type Fields = z.infer<typeof schema>
 const stakeholders: Array<{ value: UserRole; label: string; description: string; icon: LucideIcon }> = [
   { value: 'admin', label: 'Administrator', description: 'Manage people, access and workspace settings', icon: ShieldCheck },
   { value: 'operator', label: 'Operations team', description: 'Manage inventory, routing and fulfillment', icon: Truck },
-  { value: 'buyer', label: 'Buyer', description: 'Browse products and track your orders', icon: ShoppingBag }
+  { value: 'buyer', label: 'Buyer', description: 'Browse products and track your orders', icon: ShoppingBag },
+  { value: 'deliverer', label: 'Deliverer', description: 'Receive assigned shipments and confirm delivery', icon: Truck }
 ]
 
 const rise = {
@@ -44,6 +45,7 @@ export function RegisterPage() {
   const setSession = useAppStore((state) => state.setSession)
   const [visiblePassword, setVisiblePassword] = useState(false)
   const [error, setError] = useState('')
+  const [bootstrapAvailable, setBootstrapAvailable] = useState<boolean | null>(null)
   const {
     register, handleSubmit, setValue, watch, clearErrors,
     formState: { errors, isSubmitting }
@@ -53,25 +55,29 @@ export function RegisterPage() {
   })
   const selectedRole = watch('role')
 
+  useEffect(() => {
+    let active = true
+    api.get<{ available: boolean }>('/auth/bootstrap-status')
+      .then(({ data }) => { if (active) setBootstrapAvailable(data.available) })
+      .catch(() => { if (active) setBootstrapAvailable(false) })
+    return () => { active = false }
+  }, [])
+
   const chooseRole = (role: UserRole) => {
     setValue('role', role, { shouldDirty: true, shouldValidate: true })
-    if (role === 'buyer' || role === 'user') {
-      setValue('registrationInviteCode', '')
-      clearErrors('registrationInviteCode')
-    }
+    clearErrors('registrationInviteCode')
   }
 
   const submit = async (values: Fields) => {
     setError('')
-    const privileged = values.role === 'admin' || values.role === 'operator'
     const payload = {
       name: values.name, email: values.email, role: values.role, password: values.password,
-      ...(privileged ? { registrationInviteCode: values.registrationInviteCode?.trim() } : {})
+      registrationInviteCode: values.registrationInviteCode?.trim()
     }
     try {
       const { data } = await api.post<{ token: string; user: User }>('/auth/register', payload)
       setSession(data.token, data.user)
-      navigate(data.user.role === 'buyer' || data.user.role === 'user' ? '/store/orders' : '/dashboard', { replace: true })
+      navigate(data.user.role === 'buyer' || data.user.role === 'user' ? '/store/orders' : data.user.role === 'deliverer' ? '/deliveries' : '/dashboard', { replace: true })
     } catch (reason) {
       setError(errorMessage(reason))
     }
@@ -114,7 +120,7 @@ export function RegisterPage() {
         </motion.fieldset>
 
         <AnimatePresence initial={false}>
-          {(selectedRole === 'admin' || selectedRole === 'operator') && <motion.div
+          {<motion.div
             key={selectedRole}
             className="admin-invite-note"
             initial={{ opacity: 0, height: 0, y: -6 }}
@@ -123,7 +129,15 @@ export function RegisterPage() {
             transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
           >
             <ShieldCheck size={16} />
-            <span>{selectedRole === 'admin' ? 'Administrator' : 'Operations team'} access is invitation-only. Obtain an active key from your workspace Administrator.</span>
+            <span>{selectedRole === 'admin'
+              ? bootstrapAvailable === true
+                ? 'First Administrator setup is available. Use the one-time owner bootstrap key configured by the workspace owner.'
+                : 'Administrator access is invitation-only. The first-owner bootstrap is currently unavailable; sign in with the existing Administrator or rotate the bootstrap secret through the owner recovery procedure.'
+              : selectedRole === 'operator'
+                ? 'Operations team access is invitation-only. Obtain an active Operations key from your workspace Administrator.'
+                : selectedRole === 'deliverer'
+                  ? 'Deliverer access is invitation-only. Enter the single-use Deliverer key shared by your workspace Administrator.'
+                  : 'Buyer registration is invitation-only. Enter the single-use Buyer key shared by your workspace Administrator.'}</span>
           </motion.div>}
         </AnimatePresence>
 
@@ -136,7 +150,7 @@ export function RegisterPage() {
           </motion.label>
           <motion.label className="registration-label" variants={rise}>Confirm password<input className="field" type="password" autoComplete="new-password" placeholder="Repeat your password" {...register('confirmPassword')} />{errors.confirmPassword && <small className="form-error">{errors.confirmPassword.message}</small>}</motion.label>
           <AnimatePresence initial={false}>
-            {(selectedRole === 'admin' || selectedRole === 'operator') && <motion.label
+            <motion.label
               key={selectedRole + '-invite'}
               className="registration-label invite-field"
               initial={{ opacity: 0, height: 0, y: -6 }}
@@ -144,11 +158,15 @@ export function RegisterPage() {
               exit={{ opacity: 0, height: 0, y: -6 }}
               transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
             >
-              {selectedRole === 'admin' ? 'Administrator invitation key' : 'Operations invitation key'}
+              {selectedRole === 'admin' ? 'Administrator bootstrap / invitation key'
+                : selectedRole === 'operator' ? 'Operations invitation key'
+                  : selectedRole === 'deliverer' ? 'Deliverer invitation key' : 'Buyer invitation key'}
               <input className="field" type="password" autoComplete="off" placeholder="Paste your invitation key" {...register('registrationInviteCode')} />
               {errors.registrationInviteCode && <small className="form-error">{errors.registrationInviteCode.message}</small>}
-              <small className="registration-hint">Obtain an active key from your workspace Administrator.</small>
-            </motion.label>}
+              <small className="registration-hint">{selectedRole === 'admin' && bootstrapAvailable === true
+                ? 'The owner bootstrap key is used once for first-admin setup.'
+                : 'Invitation keys are single-use and expire. Ask your workspace Administrator for a new key if this one is rejected.'}</small>
+            </motion.label>
           </AnimatePresence>
         </div>
         {error && <p role="alert" className="form-error registration-alert">{error}</p>}

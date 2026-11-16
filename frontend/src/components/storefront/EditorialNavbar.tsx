@@ -18,13 +18,14 @@ export function EditorialNavbar() {
           <a href="/#platform">Platform</a><a href="/#catalog">Live Catalog</a><a href="/#telemetry">Telemetry</a><a href="/#pricing">ROI &amp; Pricing</a>
         </nav>
         <div className="nav-actions">
-          <button className="cart-pill" onClick={() => setOpen(true)} aria-label={`Open cart, ${count} items`}><ShoppingBag size={15} /> Cart <span className="mono">{count}</span></button>
+          {user?.role !== 'deliverer' && <button className="cart-pill" onClick={() => setOpen(true)} aria-label={`Open cart, ${count} items`}><ShoppingBag size={15} /> Cart <span className="mono">{count}</span></button>}
           {user?.role === 'buyer' || user?.role === 'user'
             ? <><Link className="login-link" to="/store/orders">My orders</Link><Link className="login-link" to="/store/account">Account</Link></>
-            : user ? <Link className="login-link" to="/dashboard">Workspace</Link>
-              : <Link className="login-link" to="/login">Sign in</Link>}
-          <Link className="button button-dark nav-cta" to={user?.role === 'buyer' || user?.role === 'user' ? '/store/orders' : user ? '/dashboard' : '/register'}>
-            {user?.role === 'buyer' || user?.role === 'user' ? 'Track orders' : user ? 'Command Center' : 'Create account'}
+            : user?.role === 'deliverer' ? <Link className="login-link" to="/deliveries">My deliveries</Link>
+              : user ? <Link className="login-link" to="/dashboard">Workspace</Link>
+                : <Link className="login-link" to="/login">Sign in</Link>}
+          <Link className="button button-dark nav-cta" to={user?.role === 'buyer' || user?.role === 'user' ? '/store/orders' : user?.role === 'deliverer' ? '/deliveries' : user ? '/dashboard' : '/register'}>
+            {user?.role === 'buyer' || user?.role === 'user' ? 'Track orders' : user?.role === 'deliverer' ? 'My deliveries' : user ? 'Command Center' : 'Create account'}
             <ArrowUpRight size={15} />
           </Link>
         </div>

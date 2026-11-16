@@ -10,7 +10,9 @@
     "seed": "node seed.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "migrate:state": "node migrate-state.js"
+    "migrate:state": "node migrate-state.js",
+    "bootstrap:admin": "node bootstrap-admin.js",
+    "admin:recover": "node bootstrap-admin.js --recover"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

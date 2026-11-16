@@ -1,11 +1,11 @@
 # VeloSupply AI
 
-VeloSupply AI is a local-first inventory, fulfillment, and commerce demo. It combines an editorial hardware storefront with an authenticated operations console backed by a persistent Express API and live WebSocket telemetry.
+VeloSupply AI is an inventory, fulfillment, and commerce application. It combines an editorial hardware storefront with a role-scoped operations console backed by a persistent Express API, MongoDB Atlas collections, and live WebSocket telemetry.
 
 ## Architecture
 
 - **Backend:** Node.js, Express, Zod, JWT, bcrypt, MongoDB Node.js driver, and `ws`; listens on port `8000`.
-- **Persistence:** Atlas uses a collection-aware repository (`users`, `products`, `warehouses`, `stock`, `orders`, and the other domain collections); local development keeps `backend/db.json` with atomic replacement. Both adapters expose collection CRUD and transaction methods.
+- **Persistence:** with `MONGODB_URI` configured, the backend connects to the named Atlas database using the native MongoDB driver, pings it, and persists users, invitations, products, warehouses, stock, orders, invoices, returns, purchase orders, movements, audit events and other domain entities to named collections. An Atlas connection failure never falls back to local JSON. Local development without a URI uses `backend/db.json`; production fails closed without MongoDB.
 - **Frontend:** React, TypeScript, Vite, React Router, Zustand, TanStack Query, Recharts, and Tailwind CSS.
 - **API proxy:** Vite forwards `/api` and `/ws` requests to the local backend.
 
@@ -34,7 +34,18 @@ Open the Vite URL printed in the frontend terminal (normally `http://localhost:5
 
 ## Demo accounts
 
-Seeded local-development demo accounts use password `Velo@12345`; production startup does not seed these users. Buyers can self-register. An existing Administrator issues time-limited Administrator or Operations team invitations from **Dashboard → Invitation keys**. Invitation secrets are shown once, stored as SHA-256 hashes, expire, and can be revoked before redemption.
+### Atlas connection and owner account
+
+1. Copy `backend/.env.example` to `backend/.env`. Set `MONGODB_URI` to the private connection URI for `VeloSupplyCluster`, keep `MONGODB_DB_NAME=velosupply`, and set a long random `JWT_SECRET`. Never paste these values into chat or commit the file.
+2. The first-run schema upgrade applies the current validators to the `users` and `invitations` collections using MongoDB `collMod`. The Atlas database user needs `dbAdmin` on `velosupply` for this one-time upgrade in addition to `readWrite`. Temporarily grant `dbAdmin` to the database user configured in `MONGODB_URI`, run the owner command or start the API once, then remove `dbAdmin` and retain only the runtime `readWrite` role. The migration version is recorded so subsequent starts do not repeat `collMod`.
+3. For a database with no active Administrator, set a fresh random `ADMIN_BOOTSTRAP_KEY` (at least 32 characters) in `backend/.env` and run `npm run bootstrap:admin` from the repository root. The CLI prompts for the owner identity and a hidden password, creates the first Admin transactionally, records an audit event, and clears the one-time key from the file.
+4. For a database that already has an active Administrator whose password is unavailable, set a fresh random `ADMIN_RECOVERY_KEY` (at least 32 characters) and run `npm run admin:recover`. The CLI requires the exact email of an existing active Administrator, resets only that account's password, records an audit event, and clears the recovery key. It does not create a second Admin or change invitation records.
+5. Run `npm run dev`, open `http://localhost:5173/login`, and sign in with the owner email and password.
+
+Both owner commands connect directly to the configured Atlas database, ping it, and refuse to use the local JSON adapter. They never print the MongoDB URI, owner key, invitation codes, or password. Bootstrap refuses to create a duplicate Admin. Recovery refuses to change an account unless the entered email identifies exactly one active Administrator. If the Atlas user does not have the temporary `dbAdmin` permission, schema initialization fails closed; do not broaden the runtime account permanently.
+
+
+Seeded local-development demo accounts use password `Velo@12345`; production startup does not seed these users. All new accounts—Administrator, Operations team, Buyer and Deliverer—require an active role-bound invitation. An Administrator manages keys from **Dashboard → Invitation keys**. Secrets are displayed only once, stored as SHA-256 hashes, atomically redeemed with account creation, linked to the redeeming user, and revoked or marked expired when no longer valid.
 
 | Email | Role |
 | --- | --- |
@@ -50,6 +61,7 @@ Copy `backend/.env.example` to `backend/.env` and set `MONGODB_URI`, `MONGODB_DB
 - `/store` — searchable, filterable hardware catalog and checkout drawer.
 - `/store/orders` — authenticated Buyer order tracking, scoped to the signed-in buyer.
 - `/store/account` — Buyer identity and session controls.
+- `/deliveries` — Deliverer workspace, limited to shipments assigned to the signed-in Deliverer.
 - `/login` — role-aware sign-in; demo account fill is available only in local development.
 - `/register` — Buyer self-registration or Administrator / Operations team registration with a matching active invitation key.
 - `/dashboard` — role-aware operations overview and recorded order metrics.
@@ -62,11 +74,12 @@ Copy `backend/.env.example` to `backend/.env` and set `MONGODB_URI`, `MONGODB_DB
 - `/dashboard/reports` — SLA summary and downloadable CSV audit report.
 - `/dashboard/account` — Administrator-only backend health and session controls.
 - `/dashboard/admin` — administrator-only user and role management.
-- `/dashboard/access` — administrator-only invitation key generation, listing and revocation.
+- `/dashboard/access` — administrator-only invitation key generation, listing and revocation for all supported roles.
+- `/dashboard/deliveries` — Admin / Operations view for assigning packed shipments to active Deliverer accounts.
 
 ## API overview
 
-Public endpoints include `GET /api/health`, `GET /api/products`, `POST /api/auth/login`, and `POST /api/auth/register`. Authenticated routes provide profile, buyer-owned orders/invoices, checkout, metrics, warehouses, stock-cover threats, inventory updates, purchase orders and simulations. Purchase orders move through draft → approved → shipped → received; the receive transition alone increases stock. Admin user-management and invitation-key endpoints require an admin bearer token. Invitation secrets are returned only at creation, SHA-256 hashed at rest, and expire or can be revoked before redemption. Live telemetry is broadcast over `/ws/telemetry`.
+Public endpoints include `GET /api/health`, `GET /api/products`, `GET /api/auth/bootstrap-status`, and `POST /api/auth/login`. `POST /api/auth/register` requires an active invitation for every supported role; the persisted invitation determines the new account's role, not the client-submitted role. Authenticated routes provide profile, buyer-owned orders/invoices, checkout, metrics, warehouses, stock-cover threats, inventory updates, purchase orders and simulations. Purchase orders move through draft → approved → shipped → received; the receive transition alone increases stock. Admin user-management and invitation-key endpoints require an admin bearer token. Buyer and Deliverer invitation APIs are under `/api/admin/invitations`; staff invitations use `/api/invitations`. Secrets are returned only at creation, SHA-256 hashed at rest, redeemed atomically with user creation, and record `usedBy`. Deliverers can only list assigned orders and confirm delivery on their own dispatched shipments. The Admin can assign only active Deliverers to packed orders or unassigned dispatched orders. Live telemetry is broadcast over `/ws/telemetry`.
 
 
 ## Design notes

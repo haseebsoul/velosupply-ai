@@ -41,14 +41,14 @@ const COLLECTION_VALIDATORS = {
     bsonType: 'object', required: ['email', 'role', 'isActive'],
     properties: {
       email: { bsonType: 'string' },
-      role: { enum: ['buyer', 'operator', 'admin'] },
+      role: { enum: ['buyer', 'deliverer', 'operator', 'admin'] },
       filerStatus: { enum: ['filer', 'non-filer', 'unverified'] },
       isActive: { bsonType: 'bool' },
       deletedAt: { bsonType: ['string', 'null'] }
     },
     oneOf: [
       { properties: { role: { enum: ['buyer'] } }, required: ['filerStatus'] },
-      { properties: { role: { enum: ['operator', 'admin'] } } }
+      { properties: { role: { enum: ['deliverer', 'operator', 'admin'] } } }
     ]
   } },
   invitations: { $jsonSchema: {
@@ -57,12 +57,13 @@ const COLLECTION_VALIDATORS = {
     properties: {
       codeHash: { bsonType: 'string' },
       codeHint: { bsonType: 'string' },
-      role: { enum: ['admin', 'operator'] },
+      role: { enum: ['buyer', 'deliverer', 'operator', 'admin'] },
       createdBy: { bsonType: 'string' },
       maxUses: { bsonType: ['int', 'long'] },
       usedCount: { bsonType: ['int', 'long'] },
       expiresAt: { bsonType: 'string' },
-      status: { enum: ['active', 'used', 'revoked'] },
+      status: { enum: ['active', 'used', 'revoked', 'expired'] },
+      usedBy: { bsonType: ['string', 'null'] },
       createdAt: { bsonType: 'string' },
       updatedAt: { bsonType: 'string' },
       lastUsedAt: { bsonType: 'string' },

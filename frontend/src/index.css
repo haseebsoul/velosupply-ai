@@ -961,3 +961,42 @@ input[type="range"] { accent-color: var(--hex-c84b11); background: transparent; 
 @media (max-width:620px) {
   .terminal-row { grid-template-columns:75px 58px minmax(0,1fr); gap:6px; font-size:9px; }
 }
+
+/* Deliverer and last-mile assignment views */
+.invitation-summary-grid { grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); }
+.delivery-portal-main { padding-top: clamp(28px, 5vw, 58px); padding-bottom: clamp(42px, 7vw, 82px); }
+.delivery-card-list { display: grid; gap: 14px; margin-top: 22px; }
+.delivery-order-card { min-width: 0; padding: clamp(16px, 3vw, 24px); }
+.delivery-order-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding-bottom: 16px; border-bottom: 1px solid var(--hex-e6e1d8); }
+.delivery-order-heading h2 { margin: 5px 0 0; color: var(--hex-111827); font-size: 18px; overflow-wrap: anywhere; }
+.delivery-order-details { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding-top: 16px; }
+.delivery-order-details > div { min-width: 0; display: grid; gap: 5px; }
+.delivery-order-details strong { color: var(--hex-111827); font-size: 12px; overflow-wrap: anywhere; }
+.delivery-order-details small { color: var(--hex-78716c); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.delivery-confirm-button { min-height: 42px; margin-top: 18px; }
+.delivery-complete-note { display: inline-flex; align-items: center; gap: 7px; margin: 16px 0 0; color: var(--hex-047857); font-size: 11px; font-weight: 650; }
+.delivery-assignment-page { min-width: 0; }
+.delivery-assignment-card { min-width: 0; margin-top: 18px; padding: clamp(15px, 2.5vw, 22px); }
+.delivery-assignment-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+.delivery-assignment-heading > div { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.delivery-assignment-heading h2 { margin: 0 0 4px; color: var(--hex-111827); font-size: 16px; }
+.delivery-assignment-heading p { margin: 0; }
+.delivery-assignment-empty { padding: 24px 8px; text-align: center; }
+.delivery-assignment-empty h3 { margin: 0 0 7px; color: var(--hex-111827); font-size: 14px; }
+.delivery-assignment-empty p { margin: 0; }
+.delivery-assignment-table td { vertical-align: middle; }
+.delivery-assignment-table td small { display: block; margin-top: 4px; color: var(--hex-78716c); font-size: 10px; }
+.delivery-assignee-select { min-width: 185px; max-width: 100%; font-size: 11px; }
+.delivery-assignment-note { margin-top: 14px; line-height: 1.6; }
+.buyer-data-note { display: flex; align-items: flex-start; gap: 7px; }
+@media (max-width: 760px) {
+  .delivery-order-details { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .delivery-assignment-table { min-width: 720px; }
+}
+@media (max-width: 520px) {
+  .delivery-order-details { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .delivery-order-heading { align-items: flex-start; }
+  .delivery-confirm-button { width: 100%; justify-content: center; }
+  .delivery-portal-page .buyer-portal-heading { align-items: flex-start; flex-direction: column; }
+  .delivery-assignment-heading { align-items: flex-start; flex-direction: column; }
+}

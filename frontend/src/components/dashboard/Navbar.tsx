@@ -15,7 +15,8 @@ const titles: Record<string, string> = {
   '/dashboard/reports': 'Reports',
   '/dashboard/account': 'Account',
   '/dashboard/admin': 'User access',
-  '/dashboard/access': 'Invitation keys'
+  '/dashboard/access': 'Invitation keys',
+  '/dashboard/deliveries': 'Delivery assignments'
 }
 
 const quickLinks: Array<{ label: string; to: string; adminOnly?: boolean }> = [
@@ -26,6 +27,7 @@ const quickLinks: Array<{ label: string; to: string; adminOnly?: boolean }> = [
   { label: 'Network map', to: '/dashboard/topology' },
   { label: 'Inventory alerts', to: '/dashboard/threats' },
   { label: 'Manage inventory', to: '/dashboard/manage' },
+  { label: 'Delivery assignments', to: '/dashboard/deliveries' },
   { label: 'Program', to: '/dashboard/rewards', adminOnly: true },
   { label: 'Reports', to: '/dashboard/reports' },
   { label: 'Account', to: '/dashboard/account', adminOnly: true },
