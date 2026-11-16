@@ -1,3 +1,26 @@
+# Current implementation status — 16 November 2026
+
+> This section reflects the current feature-branch implementation. The baseline findings and target-state notes below were written against an earlier repository snapshot; read them as historical audit context unless explicitly updated here.
+
+## Current state
+
+- **Persistence:** the existing native MongoDB-driver repository persists domain records in named collections. When `MONGODB_URI` is configured, backend startup pings the selected database and uses MongoDB only; connection or migration failures do not silently fall back to local JSON. Without an Atlas URI, local non-production development still uses the file adapter.
+- **Atlas migration:** the repository tracks storage schema version 2. The one-time upgrade normalizes legacy `user` roles to `buyer`, fills Buyer filer state, and updates validators for `users` and `invitations`. Existing collection validator changes use `collMod`; the application database user needs temporary `dbAdmin` on `velosupply` for the one-time upgrade, then should return to least-privilege runtime `readWrite`.
+- **Registration:** every new account (`admin`, `operator`, `buyer`, `deliverer`) requires a role-matched, active invitation. The backend derives the role from the stored invitation, not the client request. User creation and invitation consumption occur in one transaction; invitation records store `usedBy`, only SHA-256 hashes are stored, and expired keys are transitioned to `expired`.
+- **Owner access:** `npm run bootstrap:admin` provisions the first Admin only when none exists. `npm run prepare:admin-recovery` creates a fresh local recovery guard without displaying it; `npm run admin:recover` changes the password only for an exact email match to an existing active Admin. Both owner commands connect directly to Atlas, use hidden password prompts, write audit events and clear their one-time local guard after success.
+- **Deliverer isolation:** Deliverers have a separate `/deliveries` portal and may only read orders assigned to their own account. Admin / Operations can assign active Deliverers to eligible orders; a Deliverer can only confirm delivery for their own dispatched shipment. Buyer cancellation and return routes are not available to Deliverers.
+- **Invitation UI:** Admins can generate one-time Buyer and Deliverer invitations alongside staff invitations, copy a new secret once, see invitation state and revoke unused keys.
+- **Validation:** GitHub Actions passed for the implementation: backend reproducible install, JavaScript syntax, 8 test files / 70 tests, frontend palette guard and TypeScript + Vite production build. See [CI run](https://github.com/haseebsoul/velosupply-ai/actions/runs/43873299067).
+
+## Live owner / deployment checks still outstanding
+
+- The connected Atlas database already contains an active Administrator and its original one-time bootstrap invitation is consumed. The correct owner path is `npm run admin:recover`, not first-admin bootstrap.
+- The current Atlas app database users have `readWrite` but not `dbAdmin`. Temporarily grant `dbAdmin` to the user in the local `MONGODB_URI` for schema v1→v2, run the owner recovery command, then remove `dbAdmin` and retain `readWrite`.
+- No live-browser acceptance test has been completed against the owner's local frontend/backend process.
+- The payment integration still uses a simulated adapter; real payment-provider setup remains a separate production blocker.
+
+---
+
 # VeloSupply AI — Phase 1 Code Audit
 
 **Audit date:** 13 November 2026  
