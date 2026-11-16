@@ -63,7 +63,7 @@ Copy `backend/.env.example` to `backend/.env` and set `MONGODB_URI`, `MONGODB_DB
 - `/store/account` — Buyer identity and session controls.
 - `/deliveries` — Deliverer workspace, limited to shipments assigned to the signed-in Deliverer.
 - `/login` — role-aware sign-in; demo account fill is available only in local development.
-- `/register` — Buyer self-registration or Administrator / Operations team registration with a matching active invitation key.
+- `/register` — invitation-backed registration for Administrator, Operations team, Buyer and Deliverer; the persisted invitation determines the account role.
 - `/dashboard` — role-aware operations overview and recorded order metrics.
 - `/dashboard/topology` — warehouse network and scenario simulations.
 - `/dashboard/threats` — stock-cover alerts with available units, days of cover, supplier reliability and recommended draft purchase orders.
