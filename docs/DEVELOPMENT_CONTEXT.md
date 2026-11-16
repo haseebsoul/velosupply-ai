@@ -2,6 +2,16 @@
 
 This file is the working handover for future maintenance. Read it before changing authentication, registration, persistence, or the application startup flow.
 
+
+## Latest validated implementation snapshot — 16 November 2026
+
+- This handover has been refreshed alongside the role-onboarding route tests. Read the current branch head rather than assuming the historical baseline SHA below is current.
+- The latest completed GitHub Actions validation at this update is [run #43896807133](https://github.com/haseebsoul/velosupply-ai/actions/runs/43896807133): backend `npm ci`, backend syntax checks, **8 test files / 73 tests passed**, palette validation, root dev-launcher syntax, frontend `npm ci`, and frontend TypeScript/Vite production build all passed.
+- Added HTTP coverage verifies Administrator-only invitation issuance, invitation hash secrecy, invitation-derived Deliverer role assignment, Deliverer order scoping, denial of admin APIs to Deliverers, and rejection of registration without a key.
+- Current access model: all four roles (`admin`, `operator`, `buyer`, `deliverer`) require a single-use invitation. The invitation's stored role is authoritative.
+- The current Atlas account's known schema-v1 to schema-v2 upgrade still requires a temporary `dbAdmin` grant for `collMod`; remove that role after migration and owner recovery, retaining runtime `readWrite`.
+- The latest CI success verifies the repository build and isolated tests. It does **not** prove that the owner's local clone is synchronized, that the live Atlas migration has completed, or that a browser acceptance test has passed.
+
 ## Repository and working baseline
 
 - Repository: https://github.com/haseebsoul/velosupply-ai
