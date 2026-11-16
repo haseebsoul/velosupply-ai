@@ -1367,7 +1367,9 @@ function tickTelemetry() {
     message: `Network heartbeat ${db.telemetry.tick}: ${db.warehouses.filter((hub) => hub.status === 'online').length} fulfillment nodes online.`
   });
   broadcast(event);
-  persist().catch((error) => console.error('[persistence-error]', error));
+  // Heartbeat telemetry is transient. Persisting it every two seconds races
+  // with transactional domain writes and can overwrite newer repository state.
+  // Durable business changes are persisted by their request handlers instead.
 }
 
 server.on('upgrade', (request, socket, head) => {
