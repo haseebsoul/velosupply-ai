@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -65,6 +66,26 @@ async function setup(dataMode = 'test') {
   const state = await adapter.readState();
   serverModule.configureForTests(state, adapter);
   return { adapter };
+}
+
+async function issueBuyerInvitation(adapter, id) {
+  const code = 'TEST-BUYER-' + id;
+  const now = new Date().toISOString();
+  await adapter.insert('invitations', {
+    id: 'INV-' + id,
+    codeHash: createHash('sha256').update(code).digest('hex'),
+    codeHint: code.slice(-4),
+    role: 'buyer',
+    createdBy: 'USER-ADMIN',
+    maxUses: 1,
+    usedCount: 0,
+    usedBy: null,
+    status: 'active',
+    expiresAt: new Date(Date.now() + 86400000).toISOString(),
+    createdAt: now,
+    updatedAt: now
+  });
+  return code;
 }
 
 afterEach(async () => {
@@ -224,9 +245,13 @@ describe('Pakistan checkout HTTP route', () => {
 
   it('registers a buyer in the users collection with explicit unverified filer status and audit', async () => {
     const { adapter } = await setup();
+    const invitationCode = await issueBuyerInvitation(adapter, 'REGISTER-1');
     const response = await supertest(serverModule.app)
       .post('/api/auth/register')
-      .send({ name: 'New Buyer', email: 'newbuyer@example.com', password: 'Password123' });
+      .send({
+        name: 'New Buyer', email: 'newbuyer@example.com', role: 'buyer',
+        password: 'Password123', registrationInviteCode: invitationCode
+      });
 
     expect(response.status).toBe(201);
     expect(response.body.user).toMatchObject({ role: 'buyer', filerStatus: 'unverified', isActive: true });
@@ -325,13 +350,15 @@ describe('Pakistan checkout HTTP route', () => {
 
   it('exposes only the buyer own orders and invoices through /api/me routes', async () => {
     const { adapter } = await setup();
+    const invitationCode = await issueBuyerInvitation(adapter, 'REGISTER-2');
     const registered = await supertest(serverModule.app)
       .post('/api/auth/register')
       .send({
         name: 'Hira Javed',
         email: 'hira@example.com',
         role: 'buyer',
-        password: 'BuyerPassword123'
+        password: 'BuyerPassword123',
+        registrationInviteCode: invitationCode
       });
     expect(registered.status).toBe(201);
     const token = registered.body.token;
