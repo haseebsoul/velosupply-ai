@@ -38,6 +38,10 @@ try {
 }
 
 const PORT = Number(process.env.PORT) || 8000;
+const STORAGE_MODE = String(process.env.STORAGE_MODE || 'auto').trim().toLowerCase();
+if (!['auto', 'mongodb', 'file'].includes(STORAGE_MODE)) {
+  throw new Error('STORAGE_MODE must be auto, mongodb, or file');
+}
 let generatedDevelopmentDefault = false;
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') throw new Error('JWT_SECRET must be set in production');
@@ -112,8 +116,8 @@ async function loadDatabaseState() {
   const mongoUri = process.env.MONGODB_URI;
 
   if (!mongoUri) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('MONGODB_URI must be set in production');
+    if (process.env.NODE_ENV === 'production' || STORAGE_MODE === 'mongodb') {
+      throw new Error('MONGODB_URI must be set when STORAGE_MODE=mongodb or NODE_ENV=production');
     }
     repository = createRepository({
       filePath: DB_PATH,
@@ -124,14 +128,22 @@ async function loadDatabaseState() {
     return repository.readState();
   }
 
+  if (STORAGE_MODE === 'file') {
+    throw new Error('MONGODB_URI is configured; refusing to fall back to file storage');
+  }
+
   const { MongoClient } = require('mongodb');
   mongoClient = new MongoClient(mongoUri, {
-    serverSelectionTimeoutMS: 10000,
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 10000,
     maxPoolSize: 10
   });
   await mongoClient.connect();
 
   const databaseName = process.env.MONGODB_DB_NAME || 'velosupply';
+  const hostname = new URL(mongoUri).hostname.toLowerCase();
+  const clusterLabel = hostname.startsWith('velosupplycluster.') ? 'VeloSupplyCluster' : 'configured Atlas cluster';
+  console.log(`Connected to MongoDB Atlas database ${databaseName} on ${clusterLabel}.`);
   const collectionName = process.env.MONGODB_STATE_COLLECTION || 'application_state';
   const database = mongoClient.db(databaseName);
   stateCollection = database.collection(collectionName);
@@ -481,8 +493,10 @@ app.get('/api/products', asyncRoute(async (req, res) => {
     repository ? repository.find('stock', {}) : (db.stock || [])
   ]);
   const stockBySku = new Map(stockRows.map((row) => [row.sku, row]));
+  const featuredOnly = String(req.query.featured || '').toLowerCase() === 'true';
   const products = allProducts.filter((product) =>
     !product.archivedAt && product.status !== 'inactive' &&
+    (!featuredOnly || product.featured === true) &&
     (!category || category === 'all' || product.category.toLowerCase() === category) &&
     (!search || `${product.name} ${product.sku} ${product.description}`.toLowerCase().includes(search))
   ).map((product) => {
@@ -492,6 +506,59 @@ app.get('/api/products', asyncRoute(async (req, res) => {
     return { ...product, onHand, reserved, available: Math.max(0, onHand - reserved) };
   });
   res.json(products);
+}));
+app.get('/api/public/stats', asyncRoute(async (_req, res) => {
+  const [products, stockRows, orders, warehouses, auditRows] = await Promise.all([
+    repository ? repository.find('products', {}) : (db.products || []),
+    repository ? repository.find('stock', {}) : (db.stock || []),
+    repository ? repository.find('orders', {}) : (db.orders || []),
+    repository ? repository.find('warehouses', {}) : (db.warehouses || []),
+    repository ? repository.find('auditLogs', {}) : (db.auditLogs || [])
+  ]);
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const activeOrders = orders.filter((order) => !['DELIVERED', 'delivered', 'CANCELLED', 'cancelled', 'RETURNED', 'returned'].includes(String(order.status || '')));
+  const fulfilledThisMonth = orders.filter((order) => {
+    const status = String(order.status || '').toLowerCase();
+    const at = Date.parse(order.updatedAt || order.deliveredAt || order.createdAt || '');
+    return status === 'delivered' && Number.isFinite(at) && at >= monthStart;
+  }).length;
+  const unitsTracked = stockRows.length
+    ? stockRows.reduce((sum, row) => sum + Math.max(0, Number(row.onHand || 0)), 0)
+    : products.reduce((sum, product) => sum + Math.max(0, Number(product.stock || 0)), 0);
+  const publicActions = new Map([
+    ['warehouse.create', 'A warehouse hub was added to the network.'],
+    ['product.create', 'A hardware item was published to the catalog.'],
+    ['purchase_order.receive', 'A replenishment receipt was recorded.'],
+    ['order.delivered', 'An order reached its delivery milestone.']
+  ]);
+  const activity = db.dataMode === 'production'
+    ? auditRows
+      .filter((entry) => publicActions.has(entry.action))
+      .sort((a, b) => Date.parse(b.at || '') - Date.parse(a.at || ''))
+      .slice(0, 4)
+      .map((entry) => ({
+        id: String(entry.id || entry.targetId || entry.action),
+        message: publicActions.get(entry.action),
+        at: entry.at || null
+      }))
+    : [];
+  res.json({
+    currency: 'PKR',
+    dataMode: db.dataMode || 'unclassified',
+    unitsTracked,
+    activeOrders: activeOrders.length,
+    ordersFulfilledThisMonth: fulfilledThisMonth,
+    onTimeDispatchRate: null,
+    warehouses: warehouses.map((hub) => ({
+      code: hub.code || hub.id,
+      name: hub.name,
+      city: hub.city,
+      status: hub.status || 'unknown',
+      capacity: Number.isFinite(Number(hub.capacity)) ? Number(hub.capacity) : null
+    })),
+    activity
+  });
 }));
 app.post('/api/newsletter', validate(newsletterSchema), asyncRoute(async (req, res) => {
   const existing = db.newsletter.find((entry) => entry.email === req.body.email);
@@ -505,6 +572,20 @@ app.post('/api/newsletter', validate(newsletterSchema), asyncRoute(async (req, r
   await persist();
   res.status(201).json({ success: true, subscribed: true, alreadySubscribed: false });
 }));
+async function administratorExists() {
+  const users = repository
+    ? await repository.find('users', { role: 'admin' })
+    : (db.users || []).filter((user) => user.role === 'admin');
+  return users.some((user) => user.isActive !== false && !user.deletedAt && user.status !== 'suspended');
+}
+
+const bootstrapStatusHandler = asyncRoute(async (_req, res) => {
+  const hasAdmin = await administratorExists();
+  res.json({ hasAdmin, adminExists: hasAdmin });
+});
+app.get('/api/auth/bootstrap-status', bootstrapStatusHandler);
+app.get('/api/auth/bootstrap', bootstrapStatusHandler);
+
 app.post('/api/auth/login', sre.rateLimit({ limit: 10, windowMs: 60_000, name: 'login' }), validate(loginSchema), asyncRoute(async (req, res) => {
   const now = Date.now();
   const attempts = repository ? await repository.find('loginAttempts', { email: req.body.email }) : (db.sre?.loginAttempts || []);
@@ -561,10 +642,15 @@ app.post('/api/auth/login', sre.rateLimit({ limit: 10, windowMs: 60_000, name: '
 }));
 
 async function register(req, res) {
-  if (req.body.role === 'admin' || req.body.role === 'operator') {
-    const roleName = req.body.role;
-    const keyName = roleName === 'admin' ? 'ADMIN_REGISTRATION_KEY' : 'OPERATOR_REGISTRATION_KEY';
-    const expectedCode = process.env[keyName] || '';
+  const requestedRole = req.body.role === 'user' ? 'buyer' : req.body.role;
+  if (requestedRole === 'admin') {
+    if (await administratorExists()) {
+      return res.status(409).json({ error: 'ADMIN_EXISTS' });
+    }
+    // The initial workspace owner may bootstrap the single Administrator without an invite.
+    // The domain repository enforces the same invariant transactionally for concurrent requests.
+  } else if (requestedRole === 'operator') {
+    const expectedCode = process.env.OPERATOR_REGISTRATION_KEY || '';
     const suppliedCode = req.body.registrationInviteCode || '';
     const expectedBuffer = Buffer.from(expectedCode);
     const suppliedBuffer = Buffer.from(suppliedCode);
@@ -572,15 +658,12 @@ async function register(req, res) {
       expectedBuffer.length === suppliedBuffer.length &&
       timingSafeEqual(expectedBuffer, suppliedBuffer);
     if (!validCode) {
-      return res.status(403).json({ error: roleName === 'admin'
-        ? 'Administrator registration requires a valid invitation key'
-        : 'Operations registration requires a valid invitation key' });
+      return res.status(403).json({ error: 'Operations registration requires a valid invitation key' });
     }
   }
 
   const passwordHash = await bcrypt.hash(req.body.password, 12);
   const userId = 'USER-' + randomUUID();
-  const requestedRole = req.body.role === 'user' ? 'buyer' : req.body.role;
   let user;
   try {
     user = await domainRepositories.users.create({
