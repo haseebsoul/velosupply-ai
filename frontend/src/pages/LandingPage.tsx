@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react'
 import {
-  ArrowRight, ArrowUpRight, Boxes, CircleDot, Network, Package, ShieldCheck,
+  ArrowRight, ArrowUpRight, Boxes, CircleDot, Package, ShieldCheck,
   ShoppingBag, Truck, Warehouse, Router, Zap, Cpu
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
