@@ -121,3 +121,68 @@ describe('administrator bootstrap and role registration', () => {
     expect(Object.keys(response.body).sort()).toEqual(['adminExists', 'hasAdmin']);
   });
 });
+
+
+describe('public Pakistan storefront data routes', () => {
+  it('returns the SRS ROI estimate using the documented default assumptions', async () => {
+    await setup();
+    const response = await supertest(serverModule.app)
+      .post('/api/public/roi')
+      .send({
+        orders: 100,
+        avgOrderValuePkr: 20000,
+        stockoutRatePct: 10,
+        hoursPerDay: 1,
+        hubs: 2
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      currency: 'PKR',
+      monthlyRevenuePkr: 2000000,
+      lostToStockoutsPkr: 200000,
+      recoveredPkr: 130000,
+      loadSheddingLossPkr: 21000,
+      savedByQueuePkr: 8400,
+      monthlyBenefitPkr: 138400,
+      hoursSaved: 24,
+      assumptions: {
+        stockoutRecoveryFactor: 0.65,
+        loadSheddingSavingsFactor: 0.4,
+        idleStaffCostPerHourPkr: 350,
+        growthPlanPricePkr: 39900
+      }
+    });
+    expect(response.body.paybackMonths).toBeCloseTo(39900 / 138400);
+  });
+
+  it('rejects invalid ROI inputs rather than returning a fabricated estimate', async () => {
+    await setup();
+    const response = await supertest(serverModule.app)
+      .post('/api/public/roi')
+      .send({
+        orders: -1,
+        avgOrderValuePkr: 20000,
+        stockoutRatePct: 10,
+        hoursPerDay: 1,
+        hubs: 2
+      });
+    expect(response.status).toBe(422);
+  });
+
+  it('returns honest empty workspace stats without fabricated catalog or activity records', async () => {
+    await setup();
+    const response = await supertest(serverModule.app).get('/api/public/stats');
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      currency: 'PKR',
+      unitsTracked: 0,
+      gmv24hPkr: 0,
+      activeOrders: 0,
+      ordersFulfilledThisMonth: 0,
+      onTimeDispatchRate: null,
+      warehouses: [],
+      activity: []
+    });
+  });
+});
