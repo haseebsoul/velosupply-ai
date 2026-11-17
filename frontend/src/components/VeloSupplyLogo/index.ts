@@ -1,0 +1,1 @@
+export { VeloSupplyLogo } from './VeloSupplyLogo'
