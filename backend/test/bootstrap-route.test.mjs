@@ -167,7 +167,7 @@ describe('public Pakistan storefront data routes', () => {
         hoursPerDay: 1,
         hubs: 2
       });
-    expect(response.status).toBe(422);
+    expect(response.status).toBe(400);
   });
 
   it('returns honest empty workspace stats without fabricated catalog or activity records', async () => {
