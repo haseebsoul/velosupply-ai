@@ -62,7 +62,7 @@ describe('administrator bootstrap and role registration', () => {
     await setup();
     const response = await supertest(serverModule.app).get('/api/auth/bootstrap-status');
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ hasAdmin: false, adminExists: false });
+    expect(response.body).toEqual({ hasAdmin: false });
   });
 
   it('creates the first Administrator without a key and prevents a second Administrator', async () => {
@@ -81,7 +81,7 @@ describe('administrator bootstrap and role registration', () => {
 
     const status = await supertest(serverModule.app).get('/api/auth/bootstrap');
     expect(status.status).toBe(200);
-    expect(status.body).toEqual({ hasAdmin: true, adminExists: true });
+    expect(status.body).toEqual({ adminExists: true });
 
     const second = await supertest(serverModule.app).post('/api/auth/register').send({
       ...payload,
@@ -118,7 +118,7 @@ describe('administrator bootstrap and role registration', () => {
     await setup();
     const response = await supertest(serverModule.app).get('/api/auth/bootstrap-status');
     expect(response.status).toBe(200);
-    expect(Object.keys(response.body).sort()).toEqual(['adminExists', 'hasAdmin']);
+    expect(Object.keys(response.body)).toEqual(['hasAdmin']);
   });
 });
 
