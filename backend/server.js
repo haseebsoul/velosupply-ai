@@ -135,6 +135,20 @@ async function loadDatabaseState() {
     throw new Error('MONGODB_URI is configured; refusing to fall back to file storage');
   }
 
+  const atlasUri = new URL(mongoUri);
+  const databaseName = process.env.MONGODB_DB_NAME || 'velosupply';
+  const expectedCluster = process.env.MONGODB_CLUSTER_NAME || 'VeloSupplyCluster';
+  const expectedHostname = 'velosupplycluster.pxxsryp.mongodb.net';
+  if (atlasUri.protocol !== 'mongodb+srv:' ||
+      atlasUri.hostname.toLowerCase() !== expectedHostname ||
+      atlasUri.username !== 'velosupply_local_app' ||
+      atlasUri.pathname.replace(/^\\/+/, '') !== 'velosupply' ||
+      databaseName !== 'velosupply' ||
+      expectedCluster !== 'VeloSupplyCluster' ||
+      atlasUri.searchParams.get('appName') !== 'VeloSupplyCluster') {
+    throw new Error('MONGODB_URI must target the VeloSupplyCluster / velosupply database with the restricted velosupply_local_app user');
+  }
+
   const { MongoClient } = require('mongodb');
   mongoClient = new MongoClient(mongoUri, {
     serverSelectionTimeoutMS: 5000,
@@ -143,10 +157,7 @@ async function loadDatabaseState() {
   });
   await mongoClient.connect();
 
-  const databaseName = process.env.MONGODB_DB_NAME || 'velosupply';
-  const hostname = new URL(mongoUri).hostname.toLowerCase();
-  const clusterLabel = hostname.startsWith('velosupplycluster.') ? 'VeloSupplyCluster' : 'configured Atlas cluster';
-  console.log(`Connected to MongoDB Atlas database ${databaseName} on ${clusterLabel}.`);
+  console.log('Connected to MongoDB Atlas database velosupply on VeloSupplyCluster.');
   const collectionName = process.env.MONGODB_STATE_COLLECTION || 'application_state';
   const database = mongoClient.db(databaseName);
   stateCollection = database.collection(collectionName);
