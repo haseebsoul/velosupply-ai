@@ -1,4 +1,5 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
+import type { FormEvent } from 'react'
 import {
   ArrowRight, ArrowUpRight, Boxes, CircleDot, Package, ShieldCheck,
   ShoppingBag, Truck, Warehouse, Router, Zap, Cpu
@@ -160,7 +161,7 @@ export function LandingPage() {
               {stockBoard.length ? stockBoard.map((product) => <div className="snapshot-stock-row" key={product.id}>
                 <span className="snapshot-stock-sku">{product.sku}</span>
                 <strong>{product.name}</strong>
-                <span className={`snapshot-stock-status ${product.available ?? product.stock > 0 ? 'in-stock' : 'out-stock'}`}>{formatCount(product.available ?? product.stock)} units</span>
+                <span className={`snapshot-stock-status ${Number(product.available ?? product.stock) > 0 ? 'in-stock' : 'out-stock'}`}>{formatCount(product.available ?? product.stock)} units</span>
               </div>) : <p className="empty-note">{stockBoardLoading ? 'Loading catalog records…' : 'No stock records available yet.'}</p>}
             </div>
             <div className="snapshot-footer"><span>DATA SOURCE</span><strong>{stats?.dataMode === 'production' ? 'ATLAS PRODUCTION' : stats?.dataMode === 'demo' ? 'LOCAL DEMO DATA' : 'NOT AVAILABLE'}</strong></div>
@@ -287,7 +288,7 @@ export function LandingPage() {
           </div>
           <footer className="site-footer plans-footer">
             <div className="wrap footer-row">
-              <div><Link className="brand" to="/"><span className="brand-mark"><Boxes size={16} /></span> VeloSupply AI</Link><p>Hardware commerce and fulfilment for Pakistan.</p></div>
+              <div><VeloSupplyLogo /><p>Hardware commerce and fulfilment for Pakistan.</p></div>
               <form className="footer-subscribe" onSubmit={subscribe}>
                 <label htmlFor="newsletter-email">Field notes from the network</label>
                 <div><input id="newsletter-email" name="email" type="email" required className="field" placeholder="Email address" /><button className="button button-orange" disabled={newsletterBusy}>{newsletterBusy ? 'Saving…' : 'Subscribe'}</button></div>
