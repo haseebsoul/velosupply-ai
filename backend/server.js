@@ -116,8 +116,11 @@ async function loadDatabaseState() {
   const mongoUri = process.env.MONGODB_URI;
 
   if (!mongoUri) {
-    if (process.env.NODE_ENV === 'production' || STORAGE_MODE === 'mongodb') {
-      throw new Error('MONGODB_URI must be set when STORAGE_MODE=mongodb or NODE_ENV=production');
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('MONGODB_URI must be set in production');
+    }
+    if (STORAGE_MODE === 'mongodb') {
+      throw new Error('MONGODB_URI must be set when STORAGE_MODE=mongodb');
     }
     repository = createRepository({
       filePath: DB_PATH,
