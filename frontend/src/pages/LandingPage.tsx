@@ -17,10 +17,11 @@ type PublicStats = {
   currency: 'PKR'
   dataMode: string
   unitsTracked: number
+  gmv24hPkr: number
   activeOrders: number
   ordersFulfilledThisMonth: number
   onTimeDispatchRate: number | null
-  warehouses: Array<{ code: string; name: string; city?: string; status: string; capacity: number | null }>
+  warehouses: Array<{ code: string; name: string; city?: string; status: string; capacity: number | null; availableUnits: number; daysOfCover: number | null; lowStock: boolean }>
   activity: Array<{ id: string; message: string; at: string | null }>
 }
 
@@ -59,6 +60,8 @@ const formatCount = (value?: number | null) => value === null || value === undef
 export function LandingPage() {
   const [stats, setStats] = useState<PublicStats | null>(null)
   const [products, setProducts] = useState<Product[]>([])
+  const [stockBoard, setStockBoard] = useState<Product[]>([])
+  const [stockBoardLoading, setStockBoardLoading] = useState(true)
   const [productsLoading, setProductsLoading] = useState(true)
   const [productsError, setProductsError] = useState('')
   const [health, setHealth] = useState<'checking' | 'online' | 'degraded'>('checking')
@@ -70,6 +73,13 @@ export function LandingPage() {
     api.get<PublicStats>('/public/stats')
       .then(({ data }) => { if (mounted) setStats(data) })
       .catch(() => { if (mounted) setStats(null) })
+    api.get<Product[]>('/products')
+      .then(({ data }) => {
+        if (!mounted) return
+        setStockBoard(data.slice(0, 8))
+        setStockBoardLoading(false)
+      })
+      .catch(() => { if (mounted) setStockBoardLoading(false) })
     api.get<Product[]>('/products?featured=true')
       .then(({ data }) => {
         if (!mounted) return
@@ -110,6 +120,7 @@ export function LandingPage() {
 
   const hubLookup = new Map((stats?.warehouses || []).map((hub) => [hub.code, hub]))
   const hubs = cityHubs.map((hub) => ({ ...hub, live: hubLookup.get(hub.code) || null }))
+  const formatPkr = (value?: number | null) => value == null ? '—' : `Rs ${Math.round(value).toLocaleString('en-PK')}`
 
   return <div className="editorial pakistan-landing">
     <EditorialNavbar />
@@ -141,15 +152,23 @@ export function LandingPage() {
               <small>Current orders in progress</small>
             </div>
             <div className="snapshot-secondary">
-              <div><span className="mono-label">24H GMV · PKR</span><strong>—</strong><small>Shown after live order totals are available</small></div>
+              <div><span className="mono-label">24H GMV · PKR</span><strong>{formatPkr(stats?.gmv24hPkr)}</strong><small>Recorded order value in the last 24 hours</small></div>
               <div><span className="mono-label">HUBS REPORTING</span><strong>{formatCount(stats?.warehouses.length)}</strong><small>Configured warehouse hubs</small></div>
+            </div>
+            <div className="snapshot-stock">
+              <div className="snapshot-stock-heading"><span className="mono-label">STOCK BOARD · LIVE CATALOG</span><span className="mono-label">{stockBoardLoading ? 'LOADING' : `${stockBoard.length} ITEMS`}</span></div>
+              {stockBoard.length ? stockBoard.map((product) => <div className="snapshot-stock-row" key={product.id}>
+                <span className="snapshot-stock-sku">{product.sku}</span>
+                <strong>{product.name}</strong>
+                <span className={`snapshot-stock-status ${product.available ?? product.stock > 0 ? 'in-stock' : 'out-stock'}`}>{formatCount(product.available ?? product.stock)} units</span>
+              </div>) : <p className="empty-note">{stockBoardLoading ? 'Loading catalog records…' : 'No stock records available yet.'}</p>}
             </div>
             <div className="snapshot-footer"><span>DATA SOURCE</span><strong>{stats?.dataMode === 'production' ? 'ATLAS PRODUCTION' : stats?.dataMode === 'demo' ? 'LOCAL DEMO DATA' : 'NOT AVAILABLE'}</strong></div>
           </aside>
         </div>
         <div className="wrap showcase-wrap">
           <div className="showcase-strip" aria-label="VeloSupply logistics and hardware showcase">
-            {stripItems.map((item) => <div className={`showcase-panel ${item.className}`} key={item.src}>
+            {stripItems.map((item) => <div className={`showcase-panel ${item.className}`} key={item.className}>
               <div className="showcase-art"><item.icon size={29} strokeWidth={1.35} /></div>
               <span>{item.label}</span>
             </div>)}
@@ -170,8 +189,8 @@ export function LandingPage() {
             <div className="hub-list">
               {hubs.map((hub) => <article className="hub-row" key={hub.code}>
                 <span className="hub-code">{hub.code}</span>
-                <div><strong>{hub.live?.name || hub.city + ' hub'}</strong><small>{hub.live?.city || hub.city}</small></div>
-                <span className={`hub-indicator ${hub.live?.status === 'online' ? 'online' : 'unknown'}`} />
+                <div><strong>{hub.live?.name || hub.city + ' hub'}</strong><small>{hub.live?.city || hub.city}</small><small className="hub-live-units">{hub.live ? `${formatCount(hub.live.availableUnits)} available · ${hub.live.daysOfCover == null ? 'cover n/a' : `${hub.live.daysOfCover.toFixed(1)} days cover`}` : 'Live stock figures unavailable'}</small></div>
+                <span className={`hub-indicator ${hub.live?.lowStock ? 'low' : hub.live?.status === 'online' ? 'online' : 'unknown'}`} />
               </article>)}
               {!stats?.warehouses.length && <p className="empty-note">Warehouse information will appear when hubs are configured in the workspace.</p>}
             </div>
@@ -181,7 +200,7 @@ export function LandingPage() {
                 <path className="map-outline" d="M142 27 L211 40 L252 24 L300 56 L344 49 L381 82 L423 92 L451 133 L426 166 L438 207 L403 236 L383 279 L344 292 L328 327 L286 309 L252 331 L222 307 L190 316 L157 287 L128 282 L106 249 L76 233 L92 199 L75 164 L106 137 L93 100 L119 78 Z" />
                 {[[232,292,390,130],[390,130,412,88],[390,130,350,157],[350,157,333,66],[154,170,232,292],[154,170,350,157],[333,66,412,88]].map(([x1,y1,x2,y2],i)=><line key={i} className="map-route" x1={x1} y1={y1} x2={x2} y2={y2} />)}
                 {hubs.map((hub) => <g key={hub.code} className="map-hub">
-                  <circle cx={hub.x} cy={hub.y} r="9" className={hub.live ? 'map-marker-live' : 'map-marker'} />
+                  <circle cx={hub.x} cy={hub.y} r="9" className={hub.live?.lowStock ? 'map-marker-live' : 'map-marker'} />
                   <circle cx={hub.x} cy={hub.y} r="3" className="map-marker-core" />
                   <text x={hub.x + 13} y={hub.y - 9}>{hub.city}</text>
                 </g>)}
