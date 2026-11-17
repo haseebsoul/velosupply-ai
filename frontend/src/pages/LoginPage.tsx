@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Eye, EyeOff, Boxes, ShieldCheck, ShoppingBag, Truck } from 'lucide-react'
+import { Eye, EyeOff, ShieldCheck, ShoppingBag, Truck } from 'lucide-react'
+import { VeloSupplyLogo } from '../components/VeloSupplyLogo'
 import { z } from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -218,7 +219,7 @@ export function LoginPage() {
     <section className="login-art">
       <NetworkCanvas />
       <div className="login-art-copy">
-        <Link className="brand" to="/" style={{ color: 'var(--ink)' }}><span className="brand-mark"><Boxes size={16} /></span> VeloSupply AI</Link>
+        <VeloSupplyLogo size="lg" />
         <span className="mono-label login-kicker">OPERATIONS, CONNECTED</span>
         <h1>Decode the future with autonomous logistics.</h1>
         <p className="ops-muted">A clear view of every unit, every hub and every delivery.</p>
