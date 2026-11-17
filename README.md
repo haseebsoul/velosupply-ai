@@ -146,3 +146,13 @@ The public landing page is arranged into five sections: hardware logistics, Paki
 The login page asks users to select their role before entering credentials. The registration page checks the bootstrap endpoint before showing the one-time initial Administrator option. The actual Atlas dataset already has one Administrator, so the primary-Admin registration card is expected to be hidden for that database. A remote Atlas connector check is not a substitute for starting the local backend with the owner's Windows environment file and confirming its driver handshake.
 
 For the exact owner setup, the local file is `backend/.env` (not `packages/backend/.env` in this repository). Do not commit the file or share its password. Once configured, run `npm run dev` from the repository root and confirm the safe startup line reports a successful connection to `velosupply` on `VeloSupplyCluster` before testing login or registration.
+
+
+## Landing image assets
+
+The committed image slots are ready to replace with locally owned or licensed product and operations photography. Keep the current filenames when replacing images:
+- `frontend/public/images/landing/showcase/strip-01.jpg` through `strip-08.jpg` (portrait 3:4 showcase panels)
+- `frontend/public/images/landing/categories/cat-industrial.jpg`, `cat-electronics.jpg`, `cat-packaging.jpg`, and `cat-logistics.jpg` (4:3 category tiles)
+- `frontend/public/images/landing/featured/product-01.jpg` through `product-04.jpg` (square fallback product art)
+
+The landing showcase and category tiles load these local assets. Product cards prefer a catalog record's `imageUrl` and otherwise choose a local category illustration. The instructions and ratios are also in `frontend/public/images/landing/README.txt`.

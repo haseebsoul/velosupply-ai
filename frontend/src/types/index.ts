@@ -12,6 +12,7 @@ export interface Product {
   sku: string
   name: string
   description: string
+  imageUrl?: string
   category: string
   price: number
   priceExGstPkr?: number

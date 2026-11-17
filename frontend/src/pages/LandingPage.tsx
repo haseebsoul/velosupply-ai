@@ -1,10 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
-  ArrowRight, ArrowUpRight, Boxes, CircleDot, Package, ShieldCheck,
-  ShoppingBag, Truck, Warehouse, Router, Zap, Cpu
+  ArrowRight, ArrowUpRight, CircleDot, Package, ShieldCheck, ShoppingBag, Truck
 } from 'lucide-react'
-import type { LucideIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { z } from 'zod'
 import { EditorialNavbar } from '../components/storefront/EditorialNavbar'
@@ -28,21 +26,21 @@ type PublicStats = {
 }
 
 const newsletterSchema = z.string().email('Enter a valid email address')
-const stripItems: Array<{ label: string; className: string; icon: LucideIcon }> = [
-  { label: 'Solar energy', className: 'strip-a', icon: Zap },
-  { label: 'Power systems', className: 'strip-b', icon: Cpu },
-  { label: 'Network hardware', className: 'strip-c', icon: Router },
-  { label: 'Warehouse systems', className: 'strip-d', icon: Warehouse },
-  { label: 'Industrial equipment', className: 'strip-e', icon: Boxes },
-  { label: 'Secure logistics', className: 'strip-f', icon: ShieldCheck },
-  { label: 'Connected commerce', className: 'strip-g', icon: Package },
-  { label: 'Last-mile delivery', className: 'strip-h', icon: Truck }
+const stripItems: Array<{ label: string; className: string; image: string }> = [
+  { label: 'Solar energy', className: 'strip-a', image: '/images/landing/showcase/strip-01.jpg' },
+  { label: 'Power systems', className: 'strip-b', image: '/images/landing/showcase/strip-02.jpg' },
+  { label: 'Network hardware', className: 'strip-c', image: '/images/landing/showcase/strip-03.jpg' },
+  { label: 'Warehouse systems', className: 'strip-d', image: '/images/landing/showcase/strip-04.jpg' },
+  { label: 'Industrial equipment', className: 'strip-e', image: '/images/landing/showcase/strip-05.jpg' },
+  { label: 'Secure logistics', className: 'strip-f', image: '/images/landing/showcase/strip-06.jpg' },
+  { label: 'Connected commerce', className: 'strip-g', image: '/images/landing/showcase/strip-07.jpg' },
+  { label: 'Last-mile delivery', className: 'strip-h', image: '/images/landing/showcase/strip-08.jpg' }
 ]
-const categoryItems: Array<{ name: string; detail: string; icon: LucideIcon }> = [
-  { name: 'Industrial', detail: 'Power and infrastructure', icon: Warehouse },
-  { name: 'Electronics', detail: 'Networking and computing', icon: Router },
-  { name: 'Packaging', detail: 'Retail and fulfilment', icon: Package },
-  { name: 'Logistics', detail: 'Warehouse and tracking', icon: Truck }
+const categoryItems: Array<{ name: string; detail: string; image: string }> = [
+  { name: 'Industrial', detail: 'Power and infrastructure', image: '/images/landing/categories/cat-industrial.jpg' },
+  { name: 'Electronics', detail: 'Networking and computing', image: '/images/landing/categories/cat-electronics.jpg' },
+  { name: 'Packaging', detail: 'Retail and fulfilment', image: '/images/landing/categories/cat-packaging.jpg' },
+  { name: 'Logistics', detail: 'Warehouse and tracking', image: '/images/landing/categories/cat-logistics.jpg' }
 ]
 const cityHubs = [
   { code: 'HUB-KHI', city: 'Karachi', x: 232, y: 292 },
@@ -170,10 +168,10 @@ export function LandingPage() {
         </div>
         <div className="wrap showcase-wrap">
           <div className="showcase-strip" aria-label="VeloSupply logistics and hardware showcase">
-            {stripItems.map((item) => <div className={`showcase-panel ${item.className}`} key={item.className}>
-              <div className="showcase-art"><item.icon size={29} strokeWidth={1.35} /></div>
+            {stripItems.map((item, index) => <article className={`showcase-panel ${item.className}`} key={item.className}>
+              <img className="showcase-image" src={item.image} alt="" loading={index < 4 ? 'eager' : 'lazy'} decoding="async" />
               <span>{item.label}</span>
-            </div>)}
+            </article>)}
           </div>
         </div>
         <div className="pakistan-marquee" aria-label="Pakistan hubs and carriers">
@@ -231,7 +229,7 @@ export function LandingPage() {
           </div>
           <div className="category-strip">
             {categoryItems.map((item) => <article className="category-tile" key={item.name}>
-              <div className="category-art"><item.icon size={25} strokeWidth={1.4} /></div>
+              <div className="category-art"><img src={item.image} alt="" loading="lazy" decoding="async" /></div>
               <div><strong>{item.name}</strong><span>{item.detail}</span></div>
             </article>)}
           </div>
@@ -243,7 +241,10 @@ export function LandingPage() {
           {!productsLoading && !productsError && products.length === 0 && <div className="catalog-empty">
             <Package size={25} />
             <div><strong>Catalog is currently empty</strong><p>Administrators can publish the first products inside the workspace.</p></div>
-            <Link className="button button-outline" to="/login">Open workspace <ArrowRight size={15} /></Link>
+            <div className="catalog-empty-actions">
+              <Link className="button button-outline" to="/login">Open workspace <ArrowRight size={15} /></Link>
+              <Link className="button button-orange" to="/register">Redeem invitation key <ArrowRight size={15} /></Link>
+            </div>
           </div>}
           <div className="catalog-footnote">Product availability and prices are retrieved from the VeloSupply catalog. Prices are displayed in Pakistani rupees.</div>
         </div>
