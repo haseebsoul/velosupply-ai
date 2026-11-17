@@ -579,7 +579,7 @@ app.get('/api/public/stats', asyncRoute(async (_req, res) => {
         return productHub === hubCode;
       });
       const hubStock = hubProducts.map((product) => {
-        const stock = stockRows.find((row) => row.sku === product.sku && (row.hubCode || row.hubCode) === hubCode);
+        const stock = stockRows.find((row) => row.sku === product.sku && row.hubCode === hubCode);
         const onHand = stock ? Number(stock.onHand || 0) : Number(product.stock || 0);
         const reserved = stock ? Number(stock.reserved || 0) : Number(product.reserved || 0);
         return { available: Math.max(0, onHand - reserved), demandPerDay: Math.max(0, Number(product.velocity_per_hr || 0)) * 24 };
