@@ -637,3 +637,12 @@ The MongoDB Atlas connector successfully connected to project `VeloSupply AI`, c
 - A full browser acceptance run against the owner's live Atlas database was not performed.
 - The prior AUDIT findings remain: payment providers/carriers are simulated adapters; full product/warehouse/supplier CRUD and portions of Settings, messages, offline queue, Urdu/i18n, and broader SRE/backup acceptance remain incomplete. The public landing refresh does not mark those broader dashboard requirements as complete.
 - The local file adapter and demo seed remain available for development as required by the SRS; when a Mongo URI is present, the service must not silently fall back to file storage.
+
+
+### Final hosted verification — 17 November 2026
+
+- GitHub Actions run: [44176934321](https://github.com/haseebsoul/velosupply-ai/actions/runs/44176934321) — `success`, commit `2833183b89ca8ab653b0f432493f4307e7c30b72`.
+- Backend: syntax checks passed; 10 Vitest files and 74 tests passed, including 7 new bootstrap/public-storefront tests.
+- Frontend: palette guard passed; TypeScript `tsc -b` passed; Vite production build passed.
+- Root dev-script syntax passed.
+- This is CI verification, not a local Windows startup, live Node-to-Atlas handshake, or manual browser acceptance.
