@@ -591,3 +591,58 @@ GitHub Actions run [#43542854503](https://github.com/haseebsoul/velosupply-ai/ac
 - Frontend \`npm ci\` and \`npm run build\` (TypeScript + Vite production build) passed.
 
 This is hosted GitHub Actions verification. A local \`git clone\` was not possible from the tool environment because DNS resolution for \`github.com\` failed; no claim of a separate local build is made. No Atlas data, credentials, network access, or deployment was changed during this review. PR #4 remains Draft pending human review and the outstanding integration/owner-side verification work.
+
+
+## V21 Atlas, authentication and Pakistan storefront audit — 17 November 2026
+
+### Repository baseline and branch
+
+- Repository: `haseebsoul/velosupply-ai`.
+- Working branch: `pakistan/v21-atlas-auth-editorial`, created from the existing `pakistan/v20-sre-log-redaction` head (`7c2cc28c6eac7bada317e729eef9d0ea5e63eb7b`). This deliberately continues the repository's v20 collection/repository/SRE work rather than creating a disconnected branch from the older v14 baseline named in the SRS. No changes were made to `main` or PR #9.
+- Actual layout uses root `backend/` and `frontend/`, not `packages/backend` / `packages/frontend`.
+- Root scripts: `npm run setup`, `npm run dev`, `npm run seed`, `npm test`, `npm run build`, `npm run check`, `npm run migrate:state`.
+- Backend is Express/native MongoDB driver on port 8000; Vite is port 5173 and proxies both `/api` and `/ws` to port 8000.
+- Backend loads `backend/.env` directly. The actual Windows `.env` is not in Git and was not read from this tool session.
+
+### Read-only Atlas verification
+
+The MongoDB Atlas connector successfully connected to project `VeloSupply AI`, cluster `VeloSupplyCluster`, database `velosupply`.
+
+- Atlas DB user `velosupply_local_app` exists with `readWrite` on the `velosupply` database.
+- The cluster access list has the single local development PC `/32` entry; no open `0.0.0.0/0` entry was added.
+- Database contains the repository's named collections, including `users`, `invitations`, `products`, `warehouses`, `stock`, `movements`, `orders`, `orderItems`, `auditLogs`, `settings`, and `application_meta`.
+- Live read-only counts showed two user records: one Administrator and one Buyer. The single stored Administrator invitation is already used. Therefore the live database is not in the zero-Admin state; public bootstrap must remain closed and no second Administrator was created.
+- These connector checks establish Atlas reachability and Atlas account/network configuration. They do **not** establish that the user's local Node process read its Windows `backend/.env`, that the local MongoDB driver completed its own handshake, or that a browser registration/login was run.
+
+### V21 implementation
+
+- `backend/server.js`: validates `STORAGE_MODE` (`auto`, `mongodb`, `file`); fails startup when Mongo mode has no URI; fails rather than falling back to file mode when a Mongo URI exists; configures `serverSelectionTimeoutMS: 5000`, `socketTimeoutMS: 10000`, and `maxPoolSize: 10`. When MongoDB is configured, the URI must target the specified cluster hostname, the restricted `velosupply_local_app` principal, the `velosupply` path/database and `VeloSupplyCluster` app name. Startup logs a safe success line only after the driver connects; it does not log the URI or password.
+- Existing production Mongo behavior remains fail-closed. Outside production, absent `JWT_SECRET` and `CORS_ORIGIN` receive safe development defaults and only a redacted warning is printed.
+- `GET /api/auth/bootstrap-status` returns `{ hasAdmin }`; retained SRS alias `GET /api/auth/bootstrap` returns `{ adminExists }`. Registration is public for Buyers; the first Administrator may be created without a key only when no active Administrator exists; subsequent Administrator attempts return `409 ADMIN_EXISTS`; Operations registration requires `OPERATOR_REGISTRATION_KEY`. The active-Admin check is enforced again inside the repository transaction to protect against concurrent first-admin requests.
+- `GET /api/public/stats` returns stored PKR totals, order totals, hub/stock coverage and only allowlisted, sanitized production activity. It does not publish customer emails, addresses or arbitrary audit metadata. Unsupported dispatch-rate values remain `null`/not measured.
+- `POST /api/public/roi` validates input and calculates the SRS Section 11.7 estimate using workspace settings, with documented defaults when not configured. Seed settings now include the SRS ROI factors and Growth plan amount.
+- `GET /api/products?featured=true` is supported for the public featured catalog.
+- `frontend/src/pages/LoginPage.tsx`: role selection appears before email/password; a successful server authentication must match the selected role before a session is stored; manual credentials remain available; the old Fill Admin Demo shortcut is removed. The left canvas includes pointer attraction, orange signal edges, route packets, hub rings, DPR scaling, animation cleanup and reduced-motion handling.
+- `frontend/src/pages/RegisterPage.tsx`: checks bootstrap availability on mount; the Administrator option is shown only when the API confirms no active Admin; the initial Admin message is keyless; Buyer is open; Operations requires its invitation key; password validation enforces minimum length, uppercase and numeric character.
+- `frontend/src/pages/LandingPage.tsx`: five SRS content areas, live PKR aggregates/catalog/warehouse coverage, SRS ROI widget, public audit milestone allowlist and explicit loading/empty/error states. Counts that are unavailable remain unavailable instead of being invented. Showcase/category visual placeholders use local vector artwork, so missing user photos cannot produce broken images.
+- `frontend/src/pages/StorePage.tsx`: removes synthetic/demo wording from the public catalog and adds explicit loading, error, empty and no-filter-match states.
+- `frontend/src/components/VeloSupplyLogo/`, `frontend/public/favicon.svg`, `frontend/src/index.css`, and `frontend/src/components/storefront/EditorialNavbar.tsx`: bespoke token-coloured logo, floating responsive navbar, mobile drawer and Pakistan Edition layout styling. Landing image-drop directories and ratio guidance are under `frontend/public/images/landing/`.
+- `backend/test/bootstrap-route.test.mjs`: covers zero-Admin status, keyless first-Admin creation, second-Admin rejection, public Buyer registration, Operations key requirement, bootstrap payload privacy, SRS ROI calculations/validation and honest empty public stats.
+
+### Remaining gaps and verification boundaries
+
+- Hosted CI for the v21 branch must be checked after the final commit. No claim of a passing test/build is made in this audit entry until GitHub Actions completes successfully.
+- The local Windows `backend/.env` still needs its owner-saved password inserted locally; it must not be committed or pasted into chat. The repository example contains only a placeholder. The app's Atlas target checks are implemented, but the local process has not been started from this tool session.
+- Because Atlas currently contains one active Administrator and no active Admin invitation, it is not appropriate to test a fresh primary Admin creation against the production database. Existing-owner sign-in or owner recovery is a separate owner-controlled action.
+- A full browser acceptance run against the owner's live Atlas database was not performed.
+- The prior AUDIT findings remain: payment providers/carriers are simulated adapters; full product/warehouse/supplier CRUD and portions of Settings, messages, offline queue, Urdu/i18n, and broader SRE/backup acceptance remain incomplete. The public landing refresh does not mark those broader dashboard requirements as complete.
+- The local file adapter and demo seed remain available for development as required by the SRS; when a Mongo URI is present, the service must not silently fall back to file storage.
+
+
+### Final hosted verification — 17 November 2026
+
+- GitHub Actions run: [44176934321](https://github.com/haseebsoul/velosupply-ai/actions/runs/44176934321) — `success`, commit `2833183b89ca8ab653b0f432493f4307e7c30b72`.
+- Backend: syntax checks passed; 10 Vitest files and 74 tests passed, including 7 new bootstrap/public-storefront tests.
+- Frontend: palette guard passed; TypeScript `tsc -b` passed; Vite production build passed.
+- Root dev-script syntax passed.
+- This is CI verification, not a local Windows startup, live Node-to-Atlas handshake, or manual browser acceptance.

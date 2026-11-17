@@ -38,24 +38,27 @@ try {
 }
 
 const PORT = Number(process.env.PORT) || 8000;
-const generatedDefaults = {};
+const STORAGE_MODE = String(process.env.STORAGE_MODE || 'auto').trim().toLowerCase();
+if (!['auto', 'mongodb', 'file'].includes(STORAGE_MODE)) {
+  throw new Error('STORAGE_MODE must be auto, mongodb, or file');
+}
+let generatedDevelopmentDefault = false;
 if (!process.env.JWT_SECRET) {
   if (process.env.NODE_ENV === 'production') throw new Error('JWT_SECRET must be set in production');
   process.env.JWT_SECRET = randomBytes(32).toString('base64url');
-  generatedDefaults.JWT_SECRET = process.env.JWT_SECRET;
+  generatedDevelopmentDefault = true;
 }
 if (!process.env.CORS_ORIGIN) {
   if (process.env.NODE_ENV === 'production') throw new Error('CORS_ORIGIN must be set in production');
   process.env.CORS_ORIGIN = 'http://localhost:5173';
-  generatedDefaults.CORS_ORIGIN = process.env.CORS_ORIGIN;
+  generatedDevelopmentDefault = true;
 }
 const JWT_SECRET = process.env.JWT_SECRET;
-if (Object.keys(generatedDefaults).length) {
+if (generatedDevelopmentDefault) {
   process.stdout.write(JSON.stringify({
     ts: new Date().toISOString(),
     level: 'WARN',
-    msg: 'Generated development defaults. Save these values in backend/.env to keep sessions stable across restarts.',
-    defaults: generatedDefaults
+    msg: 'A development default was generated; secret values are omitted.'
   }) + '\n');
 }
 
@@ -116,6 +119,9 @@ async function loadDatabaseState() {
     if (process.env.NODE_ENV === 'production') {
       throw new Error('MONGODB_URI must be set in production');
     }
+    if (STORAGE_MODE === 'mongodb') {
+      throw new Error('MONGODB_URI must be set when STORAGE_MODE=mongodb');
+    }
     repository = createRepository({
       filePath: DB_PATH,
       loadInitial: () => seedDatabase()
@@ -125,14 +131,33 @@ async function loadDatabaseState() {
     return repository.readState();
   }
 
+  if (STORAGE_MODE === 'file') {
+    throw new Error('MONGODB_URI is configured; refusing to fall back to file storage');
+  }
+
+  const atlasUri = new URL(mongoUri);
+  const databaseName = process.env.MONGODB_DB_NAME || 'velosupply';
+  const expectedCluster = process.env.MONGODB_CLUSTER_NAME || 'VeloSupplyCluster';
+  const expectedHostname = 'velosupplycluster.pxxsryp.mongodb.net';
+  if (atlasUri.protocol !== 'mongodb+srv:' ||
+      atlasUri.hostname.toLowerCase() !== expectedHostname ||
+      atlasUri.username !== 'velosupply_local_app' ||
+      atlasUri.pathname.replace(/^\/+/, '') !== 'velosupply' ||
+      databaseName !== 'velosupply' ||
+      expectedCluster !== 'VeloSupplyCluster' ||
+      atlasUri.searchParams.get('appName') !== 'VeloSupplyCluster') {
+    throw new Error('MONGODB_URI must target the VeloSupplyCluster / velosupply database with the restricted velosupply_local_app user');
+  }
+
   const { MongoClient } = require('mongodb');
   mongoClient = new MongoClient(mongoUri, {
-    serverSelectionTimeoutMS: 10000,
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 10000,
     maxPoolSize: 10
   });
   await mongoClient.connect();
 
-  const databaseName = process.env.MONGODB_DB_NAME || 'velosupply';
+  console.log('Connected to MongoDB Atlas database velosupply on VeloSupplyCluster.');
   const collectionName = process.env.MONGODB_STATE_COLLECTION || 'application_state';
   const database = mongoClient.db(databaseName);
   stateCollection = database.collection(collectionName);
@@ -365,6 +390,13 @@ const loginSchema = z.object({
 const newsletterSchema = z.object({
   email: z.string().trim().email().max(254).transform((value) => value.toLowerCase())
 }).strict();
+const roiSchema = z.object({
+  orders: z.number().int().min(0).max(1000000),
+  avgOrderValuePkr: z.number().finite().min(0).max(100000000),
+  stockoutRatePct: z.number().finite().min(0).max(100),
+  hoursPerDay: z.number().finite().min(0).max(24),
+  hubs: z.number().int().min(1).max(6)
+}).strict();
 const registerSchema = z.object({
   name: z.string().trim().min(2).max(100),
   email: z.string().trim().email().transform((value) => value.toLowerCase()),
@@ -482,8 +514,10 @@ app.get('/api/products', asyncRoute(async (req, res) => {
     repository ? repository.find('stock', {}) : (db.stock || [])
   ]);
   const stockBySku = new Map(stockRows.map((row) => [row.sku, row]));
+  const featuredOnly = String(req.query.featured || '').toLowerCase() === 'true';
   const products = allProducts.filter((product) =>
     !product.archivedAt && product.status !== 'inactive' &&
+    (!featuredOnly || product.featured === true) &&
     (!category || category === 'all' || product.category.toLowerCase() === category) &&
     (!search || `${product.name} ${product.sku} ${product.description}`.toLowerCase().includes(search))
   ).map((product) => {
@@ -493,6 +527,134 @@ app.get('/api/products', asyncRoute(async (req, res) => {
     return { ...product, onHand, reserved, available: Math.max(0, onHand - reserved) };
   });
   res.json(products);
+}));
+app.get('/api/public/stats', asyncRoute(async (_req, res) => {
+  const [products, stockRows, orders, warehouses, auditRows] = await Promise.all([
+    repository ? repository.find('products', {}) : (db.products || []),
+    repository ? repository.find('stock', {}) : (db.stock || []),
+    repository ? repository.find('orders', {}) : (db.orders || []),
+    repository ? repository.find('warehouses', {}) : (db.warehouses || []),
+    repository ? repository.find('auditLogs', {}) : (db.auditLogs || [])
+  ]);
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const activeOrders = orders.filter((order) => !['DELIVERED', 'delivered', 'CANCELLED', 'cancelled', 'RETURNED', 'returned'].includes(String(order.status || '')));
+  const fulfilledThisMonth = orders.filter((order) => {
+    const status = String(order.status || '').toLowerCase();
+    const at = Date.parse(order.updatedAt || order.deliveredAt || order.createdAt || '');
+    return status === 'delivered' && Number.isFinite(at) && at >= monthStart;
+  }).length;
+  const unitsTracked = stockRows.length
+    ? stockRows.reduce((sum, row) => sum + Math.max(0, Number(row.onHand || 0)), 0)
+    : products.reduce((sum, product) => sum + Math.max(0, Number(product.stock || 0)), 0);
+  const gmv24hPkr = orders
+    .filter((order) => {
+      const created = Date.parse(order.createdAt || order.placedAt || '');
+      return Number.isFinite(created) && created >= now.getTime() - 24 * 60 * 60 * 1000;
+    })
+    .reduce((sum, order) => {
+      const totalPkr = Number(order.total ?? order.price?.totalPkr ??
+        (Number(order.totalMinor ?? order.price?.totalMinor ?? 0) / 100));
+      return sum + (Number.isFinite(totalPkr) && totalPkr > 0 ? totalPkr : 0);
+    }, 0);
+  const warehouseCodeById = new Map(warehouses.map((hub) => [hub.id, hub.code || hub.id]));
+  const publicActions = new Map([
+    ['warehouse.create', 'A warehouse hub was added to the network.'],
+    ['product.create', 'A hardware item was published to the catalog.'],
+    ['purchase_order.receive', 'A replenishment receipt was recorded.'],
+    ['order.delivered', 'An order reached its delivery milestone.']
+  ]);
+  const activity = db.dataMode === 'production'
+    ? auditRows
+      .filter((entry) => publicActions.has(entry.action))
+      .sort((a, b) => Date.parse(b.at || '') - Date.parse(a.at || ''))
+      .slice(0, 4)
+      .map((entry) => ({
+        id: String(entry.id || entry.targetId || entry.action),
+        message: publicActions.get(entry.action),
+        at: entry.at || null
+      }))
+    : [];
+  res.json({
+    currency: 'PKR',
+    dataMode: db.dataMode || 'unclassified',
+    unitsTracked,
+    activeOrders: activeOrders.length,
+    ordersFulfilledThisMonth: fulfilledThisMonth,
+    onTimeDispatchRate: null,
+    gmv24hPkr,
+    warehouses: warehouses.map((hub) => {
+      const hubCode = hub.code || hub.id;
+      const hubProducts = products.filter((product) => {
+        const productHub = product.warehouse_hub || warehouseCodeById.get(product.originWarehouseId) || product.originWarehouseId;
+        return productHub === hubCode;
+      });
+      const hubStock = hubProducts.map((product) => {
+        const stock = stockRows.find((row) => row.sku === product.sku && row.hubCode === hubCode);
+        const onHand = stock ? Number(stock.onHand || 0) : Number(product.stock || 0);
+        const reserved = stock ? Number(stock.reserved || 0) : Number(product.reserved || 0);
+        return { available: Math.max(0, onHand - reserved), demandPerDay: Math.max(0, Number(product.velocity_per_hr || 0)) * 24 };
+      });
+      const availableUnits = hubStock.reduce((sum, row) => sum + row.available, 0);
+      const dailyDemand = hubStock.reduce((sum, row) => sum + row.demandPerDay, 0);
+      return {
+        code: hubCode,
+        name: hub.name,
+        city: hub.city,
+        status: hub.status || 'unknown',
+        capacity: Number.isFinite(Number(hub.capacity)) ? Number(hub.capacity) : null,
+        availableUnits,
+        daysOfCover: dailyDemand > 0 ? availableUnits / dailyDemand : null,
+        lowStock: hubProducts.some((product) => ['critical', 'low_stock'].includes(String(product.status || '').toLowerCase()))
+      };
+    }),
+    activity
+  });
+}));
+app.post('/api/public/roi', validate(roiSchema), asyncRoute(async (req, res) => {
+  const settingsRows = repository
+    ? await repository.find('settings', {})
+    : (db.settings || []);
+  const setting = (key, fallback) => {
+    const row = settingsRows.find((entry) => entry.key === key || entry.id === key);
+    const value = row?.value;
+    return value === undefined || value === null ? fallback : value;
+  };
+  const stockoutRecoveryFactor = Number(setting('roiStockoutRecoveryFactor', 0.65));
+  const loadSheddingSavingsFactor = Number(setting('roiLoadSheddingSavingsFactor', 0.40));
+  const idleStaffCostPerHourPkr = Number(setting('roiIdleStaffCostPerHourPkr', 350));
+  const growthPlanPricePkr = Number(setting('growthPlanPricePkr', 39900));
+  if (!Number.isFinite(stockoutRecoveryFactor) || stockoutRecoveryFactor < 0 || stockoutRecoveryFactor > 1 ||
+      !Number.isFinite(loadSheddingSavingsFactor) || loadSheddingSavingsFactor < 0 || loadSheddingSavingsFactor > 1 ||
+      !Number.isSafeInteger(idleStaffCostPerHourPkr) || idleStaffCostPerHourPkr < 0 ||
+      !Number.isSafeInteger(growthPlanPricePkr) || growthPlanPricePkr < 0) {
+    throw new Error('ROI assumptions in workspace settings are invalid');
+  }
+  const { orders, avgOrderValuePkr, stockoutRatePct, hoursPerDay, hubs } = req.body;
+  const monthlyRevenuePkr = orders * avgOrderValuePkr;
+  const lostToStockoutsPkr = monthlyRevenuePkr * stockoutRatePct / 100;
+  const recoveredPkr = lostToStockoutsPkr * stockoutRecoveryFactor;
+  const loadSheddingLossPkr = hoursPerDay * 30 * idleStaffCostPerHourPkr * hubs;
+  const savedByQueuePkr = loadSheddingLossPkr * loadSheddingSavingsFactor;
+  const monthlyBenefitPkr = recoveredPkr + savedByQueuePkr;
+  const hoursSaved = hoursPerDay * 30 * hubs * loadSheddingSavingsFactor;
+  res.json({
+    currency: 'PKR',
+    monthlyRevenuePkr,
+    lostToStockoutsPkr,
+    recoveredPkr,
+    loadSheddingLossPkr,
+    savedByQueuePkr,
+    monthlyBenefitPkr,
+    hoursSaved,
+    paybackMonths: monthlyBenefitPkr > 0 ? growthPlanPricePkr / monthlyBenefitPkr : null,
+    assumptions: {
+      stockoutRecoveryFactor,
+      loadSheddingSavingsFactor,
+      idleStaffCostPerHourPkr,
+      growthPlanPricePkr
+    }
+  });
 }));
 app.post('/api/newsletter', validate(newsletterSchema), asyncRoute(async (req, res) => {
   const existing = db.newsletter.find((entry) => entry.email === req.body.email);
@@ -506,6 +668,22 @@ app.post('/api/newsletter', validate(newsletterSchema), asyncRoute(async (req, r
   await persist();
   res.status(201).json({ success: true, subscribed: true, alreadySubscribed: false });
 }));
+async function administratorExists() {
+  const users = repository
+    ? await repository.find('users', { role: 'admin' })
+    : (db.users || []).filter((user) => user.role === 'admin');
+  return users.some((user) => user.isActive !== false && !user.deletedAt && user.status !== 'suspended');
+}
+
+app.get('/api/auth/bootstrap-status', asyncRoute(async (_req, res) => {
+  const hasAdmin = await administratorExists();
+  res.json({ hasAdmin });
+}));
+app.get('/api/auth/bootstrap', asyncRoute(async (_req, res) => {
+  const adminExists = await administratorExists();
+  res.json({ adminExists });
+}));
+
 app.post('/api/auth/login', sre.rateLimit({ limit: 10, windowMs: 60_000, name: 'login' }), validate(loginSchema), asyncRoute(async (req, res) => {
   const now = Date.now();
   const attempts = repository ? await repository.find('loginAttempts', { email: req.body.email }) : (db.sre?.loginAttempts || []);
@@ -562,10 +740,15 @@ app.post('/api/auth/login', sre.rateLimit({ limit: 10, windowMs: 60_000, name: '
 }));
 
 async function register(req, res) {
-  if (req.body.role === 'admin' || req.body.role === 'operator') {
-    const roleName = req.body.role;
-    const keyName = roleName === 'admin' ? 'ADMIN_REGISTRATION_KEY' : 'OPERATOR_REGISTRATION_KEY';
-    const expectedCode = process.env[keyName] || '';
+  const requestedRole = req.body.role === 'user' ? 'buyer' : req.body.role;
+  if (requestedRole === 'admin') {
+    if (await administratorExists()) {
+      return res.status(409).json({ error: 'ADMIN_EXISTS' });
+    }
+    // The initial workspace owner may bootstrap the single Administrator without an invite.
+    // The domain repository enforces the same invariant transactionally for concurrent requests.
+  } else if (requestedRole === 'operator') {
+    const expectedCode = process.env.OPERATOR_REGISTRATION_KEY || '';
     const suppliedCode = req.body.registrationInviteCode || '';
     const expectedBuffer = Buffer.from(expectedCode);
     const suppliedBuffer = Buffer.from(suppliedCode);
@@ -573,15 +756,12 @@ async function register(req, res) {
       expectedBuffer.length === suppliedBuffer.length &&
       timingSafeEqual(expectedBuffer, suppliedBuffer);
     if (!validCode) {
-      return res.status(403).json({ error: roleName === 'admin'
-        ? 'Administrator registration requires a valid invitation key'
-        : 'Operations registration requires a valid invitation key' });
+      return res.status(403).json({ error: 'Operations registration requires a valid invitation key' });
     }
   }
 
   const passwordHash = await bcrypt.hash(req.body.password, 12);
   const userId = 'USER-' + randomUUID();
-  const requestedRole = req.body.role === 'user' ? 'buyer' : req.body.role;
   let user;
   try {
     user = await domainRepositories.users.create({

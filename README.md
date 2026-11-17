@@ -34,7 +34,7 @@ Open the Vite URL printed in the frontend terminal (normally `http://localhost:5
 
 ## Demo accounts
 
-All seeded local-development demo accounts use password `Velo@12345`. Production startup intentionally does not seed these demo users. Create Administrator and Operations team accounts using the private `ADMIN_REGISTRATION_KEY` and `OPERATOR_REGISTRATION_KEY` invitation keys. Public self-registration is limited to Buyers.
+All seeded **local file-mode demo accounts** use password `Velo@12345`. Production Atlas startup intentionally does not seed demo users. Buyer registration is public. Operations registration requires the `OPERATOR_REGISTRATION_KEY` configured in the backend environment. The first Administrator can register without an invitation key only when no active Administrator exists; once one exists, additional Administrator registration returns `409 ADMIN_EXISTS`. The live Atlas database currently contains an Administrator, so the public Admin registration option is hidden for that database.
 
 | Email | Role |
 | --- | --- |
@@ -42,14 +42,14 @@ All seeded local-development demo accounts use password `Velo@12345`. Production
 | `operator@velosupply.ai` | Operator |
 | `buyer@velosupply.ai` | Buyer |
 
-Copy `backend/.env.example` to `backend/.env` and set `MONGODB_URI`, `MONGODB_DB_NAME=velosupply`, and a long random `JWT_SECRET`. The Atlas database user must have `readWrite` access to the `velosupply` database. On startup, Atlas creates indexes for the named collections. If the legacy `application_state` document exists and the new collections are empty, the repository backs it up into `migrationBackups` before migrating its data. If neither old state nor new collection data exists, the adapter creates an empty production state. Existing populated new collections without `application_meta` cause startup to fail closed rather than being overwritten. Sample catalog, demo users and demo orders are only loaded into Atlas when `SEED_DEMO_DATA=true` is explicitly set in a non-production environment. Local JSON mode continues to seed demo data for development. Set `ADMIN_REGISTRATION_KEY` to a private invitation key before creating an Administrator account; never commit `.env` or real credentials. Production deployments must also set `CORS_ORIGIN` to the deployed frontend origin and terminate TLS at a trusted proxy. The `MONGODB_STATE_COLLECTION` variable identifies the legacy source collection to read during migration; new application writes do not go back into that collection.
+Copy `backend/.env.example` to `backend/.env` and set the owner-saved `MONGODB_URI`, `MONGODB_DB_NAME=velosupply`, `MONGODB_CLUSTER_NAME=VeloSupplyCluster`, and a long random `JWT_SECRET`. The URI must use the restricted `velosupply_local_app` user, target the `VeloSupplyCluster` hostname and `velosupply` database, and include `appName=VeloSupplyCluster`. The Atlas database user must have `readWrite` access to the `velosupply` database. On startup, Atlas creates indexes for the named collections. If the legacy `application_state` document exists and the new collections are empty, the repository backs it up into `migrationBackups` before migrating its data. If neither old state nor new collection data exists, the adapter creates an empty production state. Existing populated new collections without `application_meta` cause startup to fail closed rather than being overwritten. Sample catalog, demo users and demo orders are only loaded into Atlas when `SEED_DEMO_DATA=true` is explicitly set in a non-production environment. Local JSON mode continues to seed demo data for development. `STORAGE_MODE=mongodb` refuses to start without `MONGODB_URI`; if a Mongo URI is present, the service refuses to switch to file storage. MongoDB server selection uses a 5-second timeout and the startup log reports the selected database/cluster only after a successful driver connection. Set `OPERATOR_REGISTRATION_KEY` for Operations registration; the retained `ADMIN_REGISTRATION_KEY` variable is not used for the public first-Admin bootstrap. Never commit `.env` or real credentials. Production deployments must also set `CORS_ORIGIN` to the deployed frontend origin and terminate TLS at a trusted proxy. The `MONGODB_STATE_COLLECTION` variable identifies the legacy source collection to read during migration; new application writes do not go back into that collection.
 
 ## Routes
 
 - `/` — editorial landing page, network telemetry preview, ROI estimator, and pricing.
 - `/store` — searchable, filterable hardware catalog and checkout drawer.
-- `/login` — authenticated operations entry point; the demo admin button fills the seeded local-development admin credentials.
-- `/register` — stakeholder registration for Administrator (invitation key required), Operations team, or Buyer.
+- `/login` — choose Administrator, Operations team, or Buyer first, then sign in with email and password. The selected role is checked against the authenticated user's server-provided role.
+- `/register` — role-aware registration. Buyer is public; Operations needs its environment invitation key; the keyless first-Administrator option is shown only when the API confirms no active Administrator exists.
 - `/dashboard` — live metrics and orders.
 - `/dashboard/topology` — warehouse network and scenario simulations.
 - `/dashboard/threats` — stock-cover alerts with available units, days of cover, supplier reliability and recommended draft purchase orders.
@@ -63,7 +63,7 @@ Copy `backend/.env.example` to `backend/.env` and set `MONGODB_URI`, `MONGODB_DB
 
 ## API overview
 
-Public endpoints include `GET /api/health`, `GET /api/products`, `POST /api/auth/login`, and `POST /api/auth/register`. Authenticated routes provide profile, buyer-owned orders/invoices, checkout, metrics, warehouses, stock-cover threats, inventory updates, purchase orders and simulations. Purchase orders move through draft → approved → shipped → received; the receive transition alone increases stock. Admin user-management endpoints require an admin bearer token. Live telemetry is broadcast over `/ws/telemetry`.
+Public endpoints include `GET /api/health`, `GET /api/products`, `GET /api/public/stats`, `POST /api/public/roi`, `GET /api/auth/bootstrap-status`, `GET /api/auth/bootstrap`, `POST /api/auth/login`, and `POST /api/auth/register`. Authenticated routes provide profile, buyer-owned orders/invoices, checkout, metrics, warehouses, stock-cover threats, inventory updates, purchase orders and simulations. Purchase orders move through draft → approved → shipped → received; the receive transition alone increases stock. Admin user-management endpoints require an admin bearer token. Live telemetry is broadcast over `/ws/telemetry`.
 
 
 ## Design notes
@@ -137,3 +137,12 @@ The API also exposes `/livez` and `/readyz`. `GET /api/health` retains its origi
 - Checkout, inventory adjustment, hub transfer, cancellation, dispatch, return receipt and purchase-order receipt are connected to the append-only `movements` ledger. The opening balance is a current snapshot and cannot reconstruct older history. The Messages page remains static despite synthetic message records in the demo seed. No external payment gateway exists yet.
 - SRE telemetry keeps a 3,600-sample in-process one-second ring and persistent five-minute aggregate buckets. The one-second ring resets when the process restarts.
 - Run backend tests with `cd backend; npm test`. The CI workflow runs the backend syntax checks and SRE tests before the frontend build.
+
+
+## Pakistan Edition entry and storefront
+
+The public landing page is arranged into five sections: hardware logistics, Pakistan hub network and workspace activity, a PKR ROI estimator, featured hardware, and plans/access. The storefront and landing catalog read the API rather than generating a public heartbeat or invented inventory. Empty and unavailable data is displayed as such. The ROI endpoint follows the Section 11.7 formula in the Pakistan Edition SRS and reads its assumptions from workspace settings.
+
+The login page asks users to select their role before entering credentials. The registration page checks the bootstrap endpoint before showing the one-time initial Administrator option. The actual Atlas dataset already has one Administrator, so the primary-Admin registration card is expected to be hidden for that database. A remote Atlas connector check is not a substitute for starting the local backend with the owner's Windows environment file and confirming its driver handshake.
+
+For the exact owner setup, the local file is `backend/.env` (not `packages/backend/.env` in this repository). Do not commit the file or share its password. Once configured, run `npm run dev` from the repository root and confirm the safe startup line reports a successful connection to `velosupply` on `VeloSupplyCluster` before testing login or registration.
