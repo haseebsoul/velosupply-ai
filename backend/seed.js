@@ -546,7 +546,11 @@ async function createSeedData() {
     { key: 'deliveryFeeByCityPkr', value: CITY_DELIVERY_FEES },
     { key: 'freeDeliveryThresholdPkr', value: 150000 },
     { key: 'lowDataModeDefault', value: true },
-    { key: 'safetyStockDefault', value: 2 }
+    { key: 'safetyStockDefault', value: 2 },
+    { key: 'roiStockoutRecoveryFactor', value: 0.65 },
+    { key: 'roiLoadSheddingSavingsFactor', value: 0.40 },
+    { key: 'roiIdleStaffCostPerHourPkr', value: 350 },
+    { key: 'growthPlanPricePkr', value: 39900 }
   ].map((setting) => ({ ...setting, id: setting.key, demoRecord: true, updatedAt: at }));
 
   const orderStatusesActive = orders.filter((order) => !['DELIVERED', 'CANCELLED', 'RETURNED'].includes(order.status));
