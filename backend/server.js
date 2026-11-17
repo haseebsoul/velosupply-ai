@@ -675,12 +675,14 @@ async function administratorExists() {
   return users.some((user) => user.isActive !== false && !user.deletedAt && user.status !== 'suspended');
 }
 
-const bootstrapStatusHandler = asyncRoute(async (_req, res) => {
+app.get('/api/auth/bootstrap-status', asyncRoute(async (_req, res) => {
   const hasAdmin = await administratorExists();
-  res.json({ hasAdmin, adminExists: hasAdmin });
-});
-app.get('/api/auth/bootstrap-status', bootstrapStatusHandler);
-app.get('/api/auth/bootstrap', bootstrapStatusHandler);
+  res.json({ hasAdmin });
+}));
+app.get('/api/auth/bootstrap', asyncRoute(async (_req, res) => {
+  const adminExists = await administratorExists();
+  res.json({ adminExists });
+}));
 
 app.post('/api/auth/login', sre.rateLimit({ limit: 10, windowMs: 60_000, name: 'login' }), validate(loginSchema), asyncRoute(async (req, res) => {
   const now = Date.now();
