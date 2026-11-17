@@ -379,6 +379,13 @@ const loginSchema = z.object({
 const newsletterSchema = z.object({
   email: z.string().trim().email().max(254).transform((value) => value.toLowerCase())
 }).strict();
+const roiSchema = z.object({
+  orders: z.number().int().min(0).max(1000000),
+  avgOrderValuePkr: z.number().finite().min(0).max(100000000),
+  stockoutRatePct: z.number().finite().min(0).max(100),
+  hoursPerDay: z.number().finite().min(0).max(24),
+  hubs: z.number().int().min(1).max(6)
+}).strict();
 const registerSchema = z.object({
   name: z.string().trim().min(2).max(100),
   email: z.string().trim().email().transform((value) => value.toLowerCase()),
@@ -561,6 +568,51 @@ app.get('/api/public/stats', asyncRoute(async (_req, res) => {
       capacity: Number.isFinite(Number(hub.capacity)) ? Number(hub.capacity) : null
     })),
     activity
+  });
+}));
+app.post('/api/public/roi', validate(roiSchema), asyncRoute(async (req, res) => {
+  const settingsRows = repository
+    ? await repository.find('settings', {})
+    : (db.settings || []);
+  const setting = (key, fallback) => {
+    const row = settingsRows.find((entry) => entry.key === key || entry.id === key);
+    const value = row?.value;
+    return value === undefined || value === null ? fallback : value;
+  };
+  const stockoutRecoveryFactor = Number(setting('roiStockoutRecoveryFactor', 0.65));
+  const loadSheddingSavingsFactor = Number(setting('roiLoadSheddingSavingsFactor', 0.40));
+  const idleStaffCostPerHourPkr = Number(setting('roiIdleStaffCostPerHourPkr', 350));
+  const growthPlanPricePkr = Number(setting('growthPlanPricePkr', 39900));
+  if (!Number.isFinite(stockoutRecoveryFactor) || stockoutRecoveryFactor < 0 || stockoutRecoveryFactor > 1 ||
+      !Number.isFinite(loadSheddingSavingsFactor) || loadSheddingSavingsFactor < 0 || loadSheddingSavingsFactor > 1 ||
+      !Number.isSafeInteger(idleStaffCostPerHourPkr) || idleStaffCostPerHourPkr < 0 ||
+      !Number.isSafeInteger(growthPlanPricePkr) || growthPlanPricePkr < 0) {
+    throw new Error('ROI assumptions in workspace settings are invalid');
+  }
+  const { orders, avgOrderValuePkr, stockoutRatePct, hoursPerDay, hubs } = req.body;
+  const monthlyRevenuePkr = orders * avgOrderValuePkr;
+  const lostToStockoutsPkr = monthlyRevenuePkr * stockoutRatePct / 100;
+  const recoveredPkr = lostToStockoutsPkr * stockoutRecoveryFactor;
+  const loadSheddingLossPkr = hoursPerDay * 30 * idleStaffCostPerHourPkr * hubs;
+  const savedByQueuePkr = loadSheddingLossPkr * loadSheddingSavingsFactor;
+  const monthlyBenefitPkr = recoveredPkr + savedByQueuePkr;
+  const hoursSaved = hoursPerDay * 30 * hubs * loadSheddingSavingsFactor;
+  res.json({
+    currency: 'PKR',
+    monthlyRevenuePkr,
+    lostToStockoutsPkr,
+    recoveredPkr,
+    loadSheddingLossPkr,
+    savedByQueuePkr,
+    monthlyBenefitPkr,
+    hoursSaved,
+    paybackMonths: monthlyBenefitPkr > 0 ? growthPlanPricePkr / monthlyBenefitPkr : null,
+    assumptions: {
+      stockoutRecoveryFactor,
+      loadSheddingSavingsFactor,
+      idleStaffCostPerHourPkr,
+      growthPlanPricePkr
+    }
   });
 }));
 app.post('/api/newsletter', validate(newsletterSchema), asyncRoute(async (req, res) => {
