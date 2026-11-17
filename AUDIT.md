@@ -646,3 +646,13 @@ The MongoDB Atlas connector successfully connected to project `VeloSupply AI`, c
 - Frontend: palette guard passed; TypeScript `tsc -b` passed; Vite production build passed.
 - Root dev-script syntax passed.
 - This is CI verification, not a local Windows startup, live Node-to-Atlas handshake, or manual browser acceptance.
+
+
+## 22. V22 local landing image pipeline — 17 November 2026
+
+- Created and committed all 16 replaceable JPEG slots under `frontend/public/images/landing/`: eight showcase panels, four category tiles and four featured-product illustrations. These are lightweight generated placeholders in the formal SRS navy/orange/sand palette, not third-party stock photos.
+- Updated `LandingPage.tsx` to render the eight local showcase images and four category images rather than icon-only placeholders. Existing live catalog, public stats and activity data requests remain unchanged.
+- Updated `ProductCard.tsx` to prefer a catalog `imageUrl` when present and otherwise select a local category-appropriate featured image. Added the optional imageUrl property to the shared Product type.
+- The empty featured catalog state now offers both workspace sign-in and invitation redemption.
+- Updated local image README instructions and the root README with file locations and aspect ratios. All image files remain replaceable without changing component code.
+- This source/asset update has not yet been verified by a new hosted CI run. No local Windows build, local Node-to-Atlas handshake, browser acceptance, or live Atlas write was performed. The owner's ignored `backend/.env` was not read or changed.
