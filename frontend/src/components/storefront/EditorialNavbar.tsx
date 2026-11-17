@@ -11,12 +11,12 @@ export function EditorialNavbar() {
       <div className="wrap nav-inner">
         <VeloSupplyLogo />
         <nav className="nav-links" aria-label="Main navigation">
-          <a href="/#platform">Platform</a><a href="/#catalog">Live Catalog</a><a href="/#telemetry">Telemetry</a><a href="/#pricing">ROI &amp; Pricing</a>
+          <a href="/#platform">Home</a><a href="/#network">Network</a><a href="/#roi">ROI</a><a href="/#catalog">Hardware</a><a href="/#access">Access</a>
         </nav>
         <div className="nav-actions">
           <button className="cart-pill" onClick={() => setOpen(true)} aria-label={`Open cart, ${count} items`}><ShoppingBag size={15} /> Cart <span className="mono">{count}</span></button>
           <Link className="login-link" to="/login">Sign in</Link>
-          <Link className="button button-dark nav-cta" to="/dashboard">Command Center <ArrowUpRight size={15} /></Link>
+          <Link className="button button-dark nav-cta" to="/register">Get full access <ArrowUpRight size={15} /></Link>
         </div>
       </div>
     </header>
