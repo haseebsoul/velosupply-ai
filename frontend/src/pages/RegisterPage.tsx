@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Boxes, Eye, EyeOff, ShieldCheck, ShoppingBag, Truck } from 'lucide-react'
+import { Eye, EyeOff, ShieldCheck, ShoppingBag, Truck } from 'lucide-react'
+import { VeloSupplyLogo } from '../components/VeloSupplyLogo'
 import type { LucideIcon } from 'lucide-react'
 import { z } from 'zod'
 import { useForm } from 'react-hook-form'
@@ -99,7 +100,7 @@ export function RegisterPage() {
 
   return <main className="registration-screen">
     <section className="registration-aside">
-      <Link className="brand registration-brand" to="/"><span className="brand-mark"><Boxes size={16} /></span> VeloSupply AI</Link>
+      <VeloSupplyLogo size="lg" className="registration-brand" />
       <div className="registration-aside-copy">
         <span className="mono-label">SUPPLY CHAIN INTELLIGENCE · PAKISTAN</span>
         <h1>Every unit has a place. Every order has a path.</h1>
