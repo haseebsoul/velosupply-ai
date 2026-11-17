@@ -142,7 +142,7 @@ async function loadDatabaseState() {
   if (atlasUri.protocol !== 'mongodb+srv:' ||
       atlasUri.hostname.toLowerCase() !== expectedHostname ||
       atlasUri.username !== 'velosupply_local_app' ||
-      atlasUri.pathname.replace(/^\\/+/, '') !== 'velosupply' ||
+      atlasUri.pathname.replace(/^\/+/, '') !== 'velosupply' ||
       databaseName !== 'velosupply' ||
       expectedCluster !== 'VeloSupplyCluster' ||
       atlasUri.searchParams.get('appName') !== 'VeloSupplyCluster') {
