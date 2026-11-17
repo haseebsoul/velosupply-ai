@@ -536,6 +536,17 @@ app.get('/api/public/stats', asyncRoute(async (_req, res) => {
   const unitsTracked = stockRows.length
     ? stockRows.reduce((sum, row) => sum + Math.max(0, Number(row.onHand || 0)), 0)
     : products.reduce((sum, product) => sum + Math.max(0, Number(product.stock || 0)), 0);
+  const gmv24hPkr = orders
+    .filter((order) => {
+      const created = Date.parse(order.createdAt || order.placedAt || '');
+      return Number.isFinite(created) && created >= now.getTime() - 24 * 60 * 60 * 1000;
+    })
+    .reduce((sum, order) => {
+      const totalPkr = Number(order.total ?? order.price?.totalPkr ??
+        (Number(order.totalMinor ?? order.price?.totalMinor ?? 0) / 100));
+      return sum + (Number.isFinite(totalPkr) && totalPkr > 0 ? totalPkr : 0);
+    }, 0);
+  const warehouseCodeById = new Map(warehouses.map((hub) => [hub.id, hub.code || hub.id]));
   const publicActions = new Map([
     ['warehouse.create', 'A warehouse hub was added to the network.'],
     ['product.create', 'A hardware item was published to the catalog.'],
@@ -560,13 +571,32 @@ app.get('/api/public/stats', asyncRoute(async (_req, res) => {
     activeOrders: activeOrders.length,
     ordersFulfilledThisMonth: fulfilledThisMonth,
     onTimeDispatchRate: null,
-    warehouses: warehouses.map((hub) => ({
-      code: hub.code || hub.id,
-      name: hub.name,
-      city: hub.city,
-      status: hub.status || 'unknown',
-      capacity: Number.isFinite(Number(hub.capacity)) ? Number(hub.capacity) : null
-    })),
+    gmv24hPkr,
+    warehouses: warehouses.map((hub) => {
+      const hubCode = hub.code || hub.id;
+      const hubProducts = products.filter((product) => {
+        const productHub = product.warehouse_hub || warehouseCodeById.get(product.originWarehouseId) || product.originWarehouseId;
+        return productHub === hubCode;
+      });
+      const hubStock = hubProducts.map((product) => {
+        const stock = stockRows.find((row) => row.sku === product.sku && (row.hubCode || row.hubCode) === hubCode);
+        const onHand = stock ? Number(stock.onHand || 0) : Number(product.stock || 0);
+        const reserved = stock ? Number(stock.reserved || 0) : Number(product.reserved || 0);
+        return { available: Math.max(0, onHand - reserved), demandPerDay: Math.max(0, Number(product.velocity_per_hr || 0)) * 24 };
+      });
+      const availableUnits = hubStock.reduce((sum, row) => sum + row.available, 0);
+      const dailyDemand = hubStock.reduce((sum, row) => sum + row.demandPerDay, 0);
+      return {
+        code: hubCode,
+        name: hub.name,
+        city: hub.city,
+        status: hub.status || 'unknown',
+        capacity: Number.isFinite(Number(hub.capacity)) ? Number(hub.capacity) : null,
+        availableUnits,
+        daysOfCover: dailyDemand > 0 ? availableUnits / dailyDemand : null,
+        lowStock: hubProducts.some((product) => ['critical', 'low_stock'].includes(String(product.status || '').toLowerCase()))
+      };
+    }),
     activity
   });
 }));
