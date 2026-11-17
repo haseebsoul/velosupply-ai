@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
-import { ArrowUpRight, Boxes, ShoppingBag } from 'lucide-react'
+import { ArrowUpRight, ShoppingBag } from 'lucide-react'
+import { VeloSupplyLogo } from '../VeloSupplyLogo'
 import { useCartStore } from '../../store/useCartStore'
 
 export function EditorialNavbar() {
@@ -8,9 +9,7 @@ export function EditorialNavbar() {
   return (
     <header className="editorial-nav">
       <div className="wrap nav-inner">
-        <Link className="brand" to="/">
-          <span className="brand-mark"><Boxes size={16} /></span> VeloSupply AI
-        </Link>
+        <VeloSupplyLogo />
         <nav className="nav-links" aria-label="Main navigation">
           <a href="/#platform">Platform</a><a href="/#catalog">Live Catalog</a><a href="/#telemetry">Telemetry</a><a href="/#pricing">ROI &amp; Pricing</a>
         </nav>
