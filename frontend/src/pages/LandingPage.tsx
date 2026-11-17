@@ -1,8 +1,9 @@
 import { FormEvent, useEffect, useState } from 'react'
 import {
-  ArrowRight, ArrowUpRight, Boxes, Building2, CircleDot, Clock3, MapPin,
-  Network, Package, ShieldCheck, ShoppingBag, Truck, Warehouse
+  ArrowRight, ArrowUpRight, Boxes, CircleDot, Network, Package, ShieldCheck,
+  ShoppingBag, Truck, Warehouse, Router, Zap, Cpu
 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { z } from 'zod'
 import { EditorialNavbar } from '../components/storefront/EditorialNavbar'
@@ -24,21 +25,21 @@ type PublicStats = {
 }
 
 const newsletterSchema = z.string().email('Enter a valid email address')
-const stripItems = [
-  { src: '/images/landing/showcase/strip-01.svg', label: 'Solar energy', className: 'strip-a' },
-  { src: '/images/landing/showcase/strip-02.svg', label: 'Power systems', className: 'strip-b' },
-  { src: '/images/landing/showcase/strip-03.svg', label: 'Network hardware', className: 'strip-c' },
-  { src: '/images/landing/showcase/strip-04.svg', label: 'Warehouse systems', className: 'strip-d' },
-  { src: '/images/landing/showcase/strip-05.svg', label: 'Industrial equipment', className: 'strip-e' },
-  { src: '/images/landing/showcase/strip-06.svg', label: 'Secure logistics', className: 'strip-f' },
-  { src: '/images/landing/showcase/strip-07.svg', label: 'Connected commerce', className: 'strip-g' },
-  { src: '/images/landing/showcase/strip-08.svg', label: 'Last-mile delivery', className: 'strip-h' }
+const stripItems: Array<{ label: string; className: string; icon: LucideIcon }> = [
+  { label: 'Solar energy', className: 'strip-a', icon: Zap },
+  { label: 'Power systems', className: 'strip-b', icon: Cpu },
+  { label: 'Network hardware', className: 'strip-c', icon: Router },
+  { label: 'Warehouse systems', className: 'strip-d', icon: Warehouse },
+  { label: 'Industrial equipment', className: 'strip-e', icon: Boxes },
+  { label: 'Secure logistics', className: 'strip-f', icon: ShieldCheck },
+  { label: 'Connected commerce', className: 'strip-g', icon: Package },
+  { label: 'Last-mile delivery', className: 'strip-h', icon: Truck }
 ]
-const categoryItems = [
-  { name: 'Industrial', detail: 'Power and infrastructure', image: '/images/landing/categories/cat-industrial.svg' },
-  { name: 'Electronics', detail: 'Networking and computing', image: '/images/landing/categories/cat-electronics.svg' },
-  { name: 'Packaging', detail: 'Retail and fulfilment', image: '/images/landing/categories/cat-packaging.svg' },
-  { name: 'Logistics', detail: 'Warehouse and tracking', image: '/images/landing/categories/cat-logistics.svg' }
+const categoryItems: Array<{ name: string; detail: string; icon: LucideIcon }> = [
+  { name: 'Industrial', detail: 'Power and infrastructure', icon: Warehouse },
+  { name: 'Electronics', detail: 'Networking and computing', icon: Router },
+  { name: 'Packaging', detail: 'Retail and fulfilment', icon: Package },
+  { name: 'Logistics', detail: 'Warehouse and tracking', icon: Truck }
 ]
 const cityHubs = [
   { code: 'HUB-KHI', city: 'Karachi', x: 232, y: 292 },
@@ -149,7 +150,7 @@ export function LandingPage() {
         <div className="wrap showcase-wrap">
           <div className="showcase-strip" aria-label="VeloSupply logistics and hardware showcase">
             {stripItems.map((item) => <div className={`showcase-panel ${item.className}`} key={item.src}>
-              <img src={item.src} alt="" loading="lazy" />
+              <div className="showcase-art"><item.icon size={29} strokeWidth={1.35} /></div>
               <span>{item.label}</span>
             </div>)}
           </div>
@@ -209,7 +210,7 @@ export function LandingPage() {
           </div>
           <div className="category-strip">
             {categoryItems.map((item) => <article className="category-tile" key={item.name}>
-              <img src={item.image} alt="" loading="lazy" />
+              <div className="category-art"><item.icon size={25} strokeWidth={1.4} /></div>
               <div><strong>{item.name}</strong><span>{item.detail}</span></div>
             </article>)}
           </div>
