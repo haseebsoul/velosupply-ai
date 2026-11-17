@@ -29,9 +29,9 @@ function NetworkCanvas() {
     if (!canvas || !context) return
 
     const styles = getComputedStyle(document.documentElement)
-    const lineColor = styles.getPropertyValue('--ink-muted').trim() || '#8493AB'
-    const nodeColor = styles.getPropertyValue('--navy-700').trim() || '#14305E'
-    const signalColor = styles.getPropertyValue('--orange-500').trim() || '#E4631F'
+    const lineColor = styles.getPropertyValue('--ink-muted').trim()
+    const nodeColor = styles.getPropertyValue('--navy-700').trim()
+    const signalColor = styles.getPropertyValue('--orange-500').trim()
     const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
     const points = Array.from({ length: 64 }, (_, index) => ({
       x: Math.random(), y: Math.random(),
